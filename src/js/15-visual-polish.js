@@ -1,6 +1,6 @@
     /* ============================================================================
      * 15. PULSEPLANSECURE: VISUAL POLISH & CONTENT ENHANCEMENTS
-     *     - Header Security Shield Status Badge
+     *     - Header Security Shield Status Badge (desktop/tablet to prevent mobile overlap)
      *     - Interactive Critical Path SVG Diagram
      *     - iCalendar (.ics) Milestone Export
      *     - In-App Changelog ("What's New") in User Manual
@@ -138,8 +138,8 @@
       if (!badge) return;
       const active = typeof ppSyncPassphrase !== 'undefined' && Boolean(ppSyncPassphrase);
       badge.className = active
-        ? 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold transition cursor-pointer'
-        : 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-semibold hover:bg-slate-200 transition cursor-pointer';
+        ? 'hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold transition cursor-pointer shrink-0'
+        : 'hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-semibold hover:bg-slate-200 transition cursor-pointer shrink-0';
       badge.title = active
         ? 'Sync JSON Encryption: AES-256-GCM Active (click to configure)'
         : 'Sync JSON Encryption: Plaintext (click to enable AES-256-GCM)';
@@ -150,7 +150,7 @@
     function initVisualPolishUI() {
       if (typeof document === 'undefined' || !document.body) return;
 
-      // 1. Header Security Shield Badge next to <h1>
+      // 1. Header Security Shield Badge next to <h1> (hidden on tiny mobile screens to avoid overlapping Install button)
       const h1 = typeof document.querySelector === 'function' ? document.querySelector('header h1') : null;
       if (h1 && h1.parentElement && !document.getElementById('ppHeaderShieldBtn')) {
         const btn = document.createElement('button');
