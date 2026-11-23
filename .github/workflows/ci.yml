@@ -1,10 +1,20 @@
-name: CI
+name: Build, Test & Deploy Pages
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build-and-test:
@@ -18,10 +28,41 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Apply verified SRI hashes and HTML5 head fixes
+        run: node scripts/verify-sri.mjs --apply
+
       - name: Build single-file index.html
-        if: hashFiles('build.mjs') != '' && hashFiles('src/html/body.html') != ''
         run: node build.mjs
 
+      - name: Verify SRI hashes are present in built index.html
+        run: |
+          grep -q 'integrity="sha384-' index.html
+          ! grep -q 'rel="shortcut icon"' index.html
+          echo "Verified: SRI hashes present and obsolete shortcut icon removed."
+
       - name: Run test suite
-        if: hashFiles('test.mjs') != ''
         run: node test.mjs
+
+      - name: Stage GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p _site
+          cp index.html sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png icon-maskable-512.png _site/
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
