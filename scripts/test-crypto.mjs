@@ -6,21 +6,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 
 const src = fs.readFileSync(path.join(process.cwd(), 'src', 'js', '13-security-licence.js'), 'utf8');
-const sandbox = {
-  crypto: globalThis.crypto,
-  TextEncoder,
-  TextDecoder,
-  btoa: globalThis.btoa,
-  atob: globalThis.atob,
-  console,
-  setTimeout,
-  clearTimeout,
-};
-vm.createContext(sandbox);
-vm.runInContext(src, sandbox);
+const loadModule = new Function(`
+  ${src}
+  return { encryptPulsePlanData, decryptPulsePlanData };
+`);
+const { encryptPulsePlanData, decryptPulsePlanData } = loadModule();
 
 const sampleDb = {
   meta: { version: 3, revision: 42 },
@@ -30,18 +22,18 @@ const sampleDb = {
 };
 
 // 1. Round-trip encrypt & decrypt
-const envelope = await sandbox.encryptPulsePlanData(sampleDb, 'CorrectHorseBatteryStaple!');
+const envelope = await encryptPulsePlanData(sampleDb, 'CorrectHorseBatteryStaple!');
 assert.equal(envelope.format, 'pulseplan-encrypted-v1');
 assert.equal(envelope.cipher, 'AES-256-GCM');
 assert.equal(envelope.iterations, 250000);
 assert.ok(!envelope.ciphertext.includes('Engineering'), 'Plaintext must not leak into ciphertext');
 
-const plainJson = await sandbox.decryptPulsePlanData(envelope, 'CorrectHorseBatteryStaple!');
+const plainJson = await decryptPulsePlanData(envelope, 'CorrectHorseBatteryStaple!');
 assert.deepEqual(JSON.parse(plainJson), sampleDb, 'Decrypted DB must match original');
 
 // 2. Wrong passphrase must reject
 await assert.rejects(
-  () => sandbox.decryptPulsePlanData(envelope, 'WrongPassphrase123!'),
+  () => decryptPulsePlanData(envelope, 'WrongPassphrase123!'),
   /Decryption failed/,
   'Wrong passphrase must fail AES-GCM authentication'
 );
@@ -49,14 +41,14 @@ await assert.rejects(
 // 3. Tampered ciphertext must reject
 const tampered = { ...envelope, ciphertext: 'AAAA' + envelope.ciphertext.slice(4) };
 await assert.rejects(
-  () => sandbox.decryptPulsePlanData(tampered, 'CorrectHorseBatteryStaple!'),
+  () => decryptPulsePlanData(tampered, 'CorrectHorseBatteryStaple!'),
   /Decryption failed/,
   'Tampered ciphertext must fail AES-GCM authentication'
 );
 
 // 4. Short passphrase must reject
 await assert.rejects(
-  () => sandbox.encryptPulsePlanData(sampleDb, 'short'),
+  () => encryptPulsePlanData(sampleDb, 'short'),
   /at least 8 characters/,
   'Passphrases under 8 characters must be rejected'
 );
