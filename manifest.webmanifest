@@ -1,39 +1,17 @@
 {
-  "id": "./",
   "name": "PulsePlanSecure: Company Roadmap & Utilisation Planner",
   "short_name": "PulsePlanSecure",
-  "description": "Zero-dependency, offline-ready company roadmap, capacity, and utilisation planner.",
+  "description": "Local-first company roadmap, utilisation & portfolio planning tool with AES-256-GCM encryption",
   "start_url": "./",
-  "scope": "./",
   "display": "standalone",
-  "orientation": "any",
-  "background_color": "#f8fafc",
-  "theme_color": "#ffffff",
-  "categories": ["business", "productivity"],
+  "background_color": "#f1f5f9",
+  "theme_color": "#059669",
   "icons": [
     {
-      "src": "./icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "./icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "./icon-maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "./icon.svg",
+      "src": "./icon.svg?v=2",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ]
 }
