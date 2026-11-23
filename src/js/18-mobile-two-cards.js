@@ -1,6 +1,6 @@
 /* Independent paired-period mobile layout; existing renderers remain available. */
 (function ppTwoCards() {
-  if (typeof document === 'undefined' || typeof syncMobileControlsUI !== 'function' || typeof renderMobileMatrixCards !== 'function') return;
+  if (typeof document === 'undefined' || !document.head || typeof document.head.appendChild !== 'function' || typeof document.createElement !== 'function' || typeof syncMobileControlsUI !== 'function' || typeof renderMobileMatrixCards !== 'function') return;
   const key = 'pulseplan_secure_mobile_layout_v1';
   const modes = ['grid', 'cards', 'cards2'];
   let restored = false;
