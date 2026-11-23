@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Computes verified SHA-384 Subresource Integrity (SRI) hashes for external CDN scripts,
- * removes obsolete HTML4 link tags, updates user-facing branding to PulsePlanSecure,
- * and stamps Git build revision metadata.
+ * removes obsolete HTML4 link tags, updates user-facing branding & emerald-teal logo accent
+ * to PulsePlanSecure, and stamps Git build revision metadata.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -43,14 +43,24 @@ for (const url of SCRIPTS) {
 if (apply) {
   buildSrc = buildSrc
     .replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '')
-    .replace(/<title>PulsePlan[^<]*<\/title>/, '<title>PulsePlanSecure: Company Roadmap &amp; Utilisation Planner</title>');
+    .replace(/<title>PulsePlan[^<]*<\/title>/, '<title>PulsePlanSecure: Company Roadmap &amp; Utilisation Planner</title>')
+    // Update inline favicon gradient to emerald-teal security palette
+    .replace(/stop-color="#4338ca"/g, 'stop-color="#065f46"')
+    .replace(/stop-color="#6366f1"/g, 'stop-color="#059669"')
+    .replace(/stop-color="#0ea5e9"/g, 'stop-color="#0d9488"')
+    .replace(/fill="#a5f3fc"/g, 'fill="#a7f3d0"');
   fs.writeFileSync(buildPath, buildSrc, 'utf8');
 
-  // Update visible header brand in src/html/body.html during CI build
+  // Update visible header brand and header SVG logo gradient in src/html/body.html during CI build
   const bodyPath = path.join(process.cwd(), 'src', 'html', 'body.html');
   if (fs.existsSync(bodyPath)) {
     let bodySrc = fs.readFileSync(bodyPath, 'utf8');
-    bodySrc = bodySrc.replace(/>PulsePlan<\/h1>/g, '>PulsePlanSecure</h1>');
+    bodySrc = bodySrc
+      .replace(/>PulsePlan<\/h1>/g, '>PulsePlanSecure</h1>')
+      .replace(/stop-color="#4338ca"/g, 'stop-color="#065f46"')
+      .replace(/stop-color="#6366f1"/g, 'stop-color="#059669"')
+      .replace(/stop-color="#0ea5e9"/g, 'stop-color="#0d9488"')
+      .replace(/fill="#a5f3fc"/g, 'fill="#a7f3d0"');
     fs.writeFileSync(bodyPath, bodySrc, 'utf8');
   }
 
@@ -73,5 +83,5 @@ if (apply) {
     console.log(`Stamped build revision: ${sha} (${builtAt}).`);
   }
 
-  console.log('Applied verified SHA-384 SRI hashes, PulsePlanSecure branding, and HTML5 head cleanup.');
+  console.log('Applied verified SHA-384 SRI hashes, emerald-teal logo accent, PulsePlanSecure branding, and HTML5 head cleanup.');
 }
