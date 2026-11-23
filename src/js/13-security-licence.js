@@ -1,5 +1,5 @@
     /* ============================================================================
-     * 13. PULSEPLANSECURE: TRANSPARENT SYNC JSON ENCRYPTION (AES-256-GCM),
+     * 13. PULSEPLANSECURE: TRANSPARENT SYNC & SHARE JSON ENCRYPTION (AES-256-GCM),
      *     INACTIVITY LOCK, DARK-MODE DIALOGS, LANDMARK FIX & USER LICENCE
      * ============================================================================ */
 
@@ -8,7 +8,7 @@
         id: 'security',
         title: 'Security, Sync JSON Encryption & User Licence',
         badge: 'Security',
-        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase timeout lock json sync licence license privacy cors referrer pwa cache ci',
+        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase timeout lock json sync share licence license privacy cors referrer pwa cache ci',
         bodyHtml: `
           <div class="space-y-3">
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
@@ -21,11 +21,11 @@
               </ul>
             </div>
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div class="font-bold text-slate-900">Transparent Sync JSON Encryption (AES-256-GCM) &amp; Auto-Lock</div>
+              <div class="font-bold text-slate-900">Transparent Sync &amp; Share JSON Encryption (AES-256-GCM)</div>
               <p class="text-slate-600 leading-relaxed">
-                Enable <strong>Sync JSON Encryption</strong> in <strong>Sync &amp; Snapshots</strong> or <strong>Appearance &amp; Help</strong> and set a passphrase (stored in memory for the current session only, with an automatic 30-minute inactivity lock).
-                Every write to your linked shared <code class="px-1 rounded bg-white font-mono">.json</code> file is automatically encrypted using the browser's native <strong>Web Crypto API</strong> (<strong>PBKDF2-SHA-256</strong> with 250,000 iterations, random 128-bit salt, random 96-bit IV, and <strong>AES-256-GCM</strong>).
-                When opening or reloading an encrypted <code class="px-1 rounded bg-white font-mono">.json</code> file, PulsePlanSecure detects the encrypted envelope automatically and decrypts it in memory. If the passphrase is lost, encrypted files cannot be recovered.
+                Enable <strong>Shared JSON Encryption</strong> inside the <strong>Sync, Share &amp; Portable Files</strong> card (or <strong>Appearance &amp; Help</strong>) and set a passphrase (stored in memory for the current session only, with an automatic 30-minute inactivity lock).
+                Every write to your linked shared <code class="px-1 rounded bg-white font-mono">.json</code> file and every <strong>Share / Save JSON</strong> export is automatically encrypted using the browser's native <strong>Web Crypto API</strong> (<strong>PBKDF2-SHA-256</strong> with 250,000 iterations, random 128-bit salt, random 96-bit IV, and <strong>AES-256-GCM</strong>).
+                When opening, importing, or reloading an encrypted <code class="px-1 rounded bg-white font-mono">.json</code> file, PulsePlanSecure detects the encrypted envelope automatically and decrypts it in memory. If the passphrase is lost, encrypted files cannot be recovered.
               </p>
             </div>
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
@@ -116,6 +116,14 @@
       }
     }
 
+    function ppGetCurrentDbRef() {
+      if (typeof getActiveDB === 'function') return getActiveDB();
+      if (typeof ui !== 'undefined' && ui.whatIfMode && typeof whatIfDB !== 'undefined' && whatIfDB) return whatIfDB;
+      if (typeof ui !== 'undefined' && ui.demoMode && typeof demoDB !== 'undefined' && demoDB) return demoDB;
+      if (typeof liveDB !== 'undefined' && liveDB) return liveDB;
+      return null;
+    }
+
     function resetPassphraseAutoLock() {
       if (ppAutoLockTimer) {
         clearTimeout(ppAutoLockTimer);
@@ -162,7 +170,7 @@
       if (!dlg) return;
       const reasonEl = document.getElementById('ppEncryptReason');
       if (reasonEl) {
-        reasonEl.textContent = promptReason || 'Set a session passphrase to automatically encrypt all synced .json file saves with AES-256-GCM.';
+        reasonEl.textContent = promptReason || 'Set a session passphrase to automatically encrypt synced .json saves and Share / Save JSON exports with AES-256-GCM.';
       }
       const statusEl = document.getElementById('ppEncryptStatus');
       if (statusEl) {
@@ -190,6 +198,46 @@
       if (!dlg) return;
       if (typeof dlg.showModal === 'function') dlg.showModal();
       else dlg.setAttribute('open', 'open');
+    }
+
+    async function handleEncryptedShareSaveJson() {
+      const dbObj = ppGetCurrentDbRef();
+      if (!dbObj) return;
+      const payload = JSON.parse(JSON.stringify(dbObj));
+      const incSnap = document.getElementById('exportIncludeSnapshots');
+      if (incSnap && !incSnap.checked) {
+        payload.snapshots = [];
+      }
+      resetPassphraseAutoLock();
+      const envelope = await encryptPulsePlanData(payload, ppSyncPassphrase);
+      const jsonText = JSON.stringify(envelope, null, 2);
+      const filename = `pulseplan_encrypted_${new Date().toISOString().slice(0, 10)}.json`;
+
+      if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare) {
+        try {
+          const shareFile = new File([jsonText], filename, { type: 'application/json' });
+          if (navigator.canShare({ files: [shareFile] })) {
+            await navigator.share({ files: [shareFile], title: 'PulsePlan Encrypted JSON' });
+            if (typeof showToast === 'function') showToast('Encrypted JSON shared (AES-256-GCM).', 'success');
+            return;
+          }
+        } catch (_err) {
+          // Fall back to direct download if share sheet dismissed or unsupported
+        }
+      }
+
+      const blob = new Blob([jsonText], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      if (typeof showToast === 'function') {
+        showToast('Encrypted JSON saved (AES-256-GCM).', 'success');
+      }
     }
 
     function installTransparentJsonCryptoHooks() {
@@ -250,6 +298,24 @@
         };
         File.prototype.__ppCryptoWrapped = true;
       }
+
+      // Intercept "Share / Save JSON" button clicks when encryption passphrase is active
+      if (typeof document !== 'undefined' && typeof document.addEventListener === 'function' && !document.__ppShareSaveHooked) {
+        document.addEventListener('click', (e) => {
+          if (!ppSyncPassphrase) return;
+          const btn = e.target && typeof e.target.closest === 'function' ? e.target.closest('button') : null;
+          if (!btn) return;
+          const txt = (btn.textContent || '').trim();
+          if (txt === 'Share / Save JSON') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            handleEncryptedShareSaveJson().catch((err) => {
+              if (typeof showToast === 'function') showToast(err.message || 'Encrypted export failed.', 'error');
+            });
+          }
+        }, true);
+        document.__ppShareSaveHooked = true;
+      }
     }
 
     function fixNavTablistLandmark() {
@@ -285,7 +351,7 @@
           background-color: #1e293b; color: #cbd5e1; border-color: #334155;
         }
         html.dark #ppSyncTabEncBar, body.dark #ppSyncTabEncBar {
-          background-color: #0f172a; border-color: #334155; color: #f1f5f9;
+          background-color: #1e293b; border-color: #334155; color: #f1f5f9;
         }
       `;
       document.head.appendChild(style);
@@ -345,19 +411,34 @@
         manualBtn.parentElement.appendChild(licBtn);
       }
 
+      // Mount Shared JSON Encryption inside the "Sync, Share & Portable Files" card (not as a separate grid frame)
       const syncTab = document.getElementById('tab-sync');
       if (syncTab && !document.getElementById('ppSyncTabEncBar')) {
+        let targetCard = null;
+        if (typeof syncTab.querySelectorAll === 'function') {
+          const headings = syncTab.querySelectorAll('h2, h3, div');
+          for (const el of headings) {
+            if (el.textContent && el.textContent.trim().startsWith('Sync, Share & Portable Files')) {
+              targetCard = el.closest('section, article, div.rounded-2xl') || el.parentElement;
+              break;
+            }
+          }
+        }
         const bar = document.createElement('div');
         bar.id = 'ppSyncTabEncBar';
-        bar.className = 'bg-white rounded-2xl border border-slate-200 p-3.5 shadow-xs flex flex-wrap items-center justify-between gap-2 text-xs';
+        bar.className = 'mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 flex flex-wrap items-center justify-between gap-2 text-xs';
         bar.innerHTML = `
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-bold text-slate-900">Shared JSON Encryption</span>
             <span id="ppSyncTabEncBadge" class="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase">Plaintext JSON</span>
-            <span class="text-slate-500">Automatically encrypts linked <code class="px-1 rounded bg-slate-100 font-mono">.json</code> saves with AES-256-GCM.</span>
+            <span class="text-slate-500">Encrypts linked <code class="px-1 rounded bg-white font-mono">.json</code> saves &amp; Share / Save JSON with AES-256-GCM.</span>
           </div>
           <button type="button" id="ppSyncTabEncBtn" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Configure Passphrase</button>`;
-        syncTab.prepend(bar);
+        if (targetCard && typeof targetCard.appendChild === 'function') {
+          targetCard.appendChild(bar);
+        } else {
+          syncTab.prepend(bar);
+        }
         document.getElementById('ppSyncTabEncBtn')?.addEventListener('click', () => openSyncEncryptionDialog());
       }
 
@@ -371,7 +452,7 @@
             <header class="flex items-start justify-between gap-3">
               <div>
                 <h2 id="ppEncryptDialogTitle" class="text-base font-extrabold text-slate-900">Sync JSON Encryption (AES-256-GCM)</h2>
-                <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5">Set a session passphrase to automatically encrypt all synced .json file saves with AES-256-GCM.</p>
+                <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5">Set a session passphrase to automatically encrypt synced .json saves and Share / Save JSON exports with AES-256-GCM.</p>
               </div>
               <button type="button" id="ppEncryptCloseBtn" aria-label="Close encryption dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
             </header>
@@ -421,7 +502,7 @@
           if (ppPassphraseResolver) {
             closeAndResolve(val);
           } else {
-            setEncryptStatus('Sync JSON Encryption enabled for this session. Next save will write AES-256-GCM ciphertext.', false);
+            setEncryptStatus('Sync JSON Encryption enabled for this session. Synced saves and Share / Save JSON will write AES-256-GCM ciphertext.', false);
           }
         });
 
