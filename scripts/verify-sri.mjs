@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Computes verified SHA-384 Subresource Integrity (SRI) hashes for external CDN scripts,
- * removes obsolete HTML4 link tags, and stamps Git build revision metadata.
+ * removes obsolete HTML4 link tags, updates user-facing branding to PulsePlanSecure,
+ * and stamps Git build revision metadata.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -40,8 +41,26 @@ for (const url of SCRIPTS) {
 }
 
 if (apply) {
-  buildSrc = buildSrc.replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '');
+  buildSrc = buildSrc
+    .replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '')
+    .replace(/<title>PulsePlan[^<]*<\/title>/, '<title>PulsePlanSecure: Company Roadmap &amp; Utilisation Planner</title>');
   fs.writeFileSync(buildPath, buildSrc, 'utf8');
+
+  // Update visible header brand in src/html/body.html during CI build
+  const bodyPath = path.join(process.cwd(), 'src', 'html', 'body.html');
+  if (fs.existsSync(bodyPath)) {
+    let bodySrc = fs.readFileSync(bodyPath, 'utf8');
+    bodySrc = bodySrc.replace(/>PulsePlan<\/h1>/g, '>PulsePlanSecure</h1>');
+    fs.writeFileSync(bodyPath, bodySrc, 'utf8');
+  }
+
+  // Update visible User Manual title in src/js/11-manual.js during CI build
+  const manualPath = path.join(process.cwd(), 'src', 'js', '11-manual.js');
+  if (fs.existsSync(manualPath)) {
+    let manualSrc = fs.readFileSync(manualPath, 'utf8');
+    manualSrc = manualSrc.replace(/PulsePlan User Manual/g, 'PulsePlanSecure User Manual');
+    fs.writeFileSync(manualPath, manualSrc, 'utf8');
+  }
 
   // Stamp short Git SHA and UTC date into src/js/13-security-licence.js
   const secPath = path.join(process.cwd(), 'src', 'js', '13-security-licence.js');
@@ -54,5 +73,5 @@ if (apply) {
     console.log(`Stamped build revision: ${sha} (${builtAt}).`);
   }
 
-  console.log('Applied verified SHA-384 SRI hashes and removed obsolete shortcut icon from build.mjs.');
+  console.log('Applied verified SHA-384 SRI hashes, PulsePlanSecure branding, and HTML5 head cleanup.');
 }

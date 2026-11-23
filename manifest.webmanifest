@@ -1,7 +1,7 @@
 {
   "id": "./",
   "name": "PulsePlanSecure: Company Roadmap & Utilisation Planner",
-  "short_name": "PulsePlan",
+  "short_name": "PulsePlanSecure",
   "description": "Zero-dependency, offline-ready company roadmap, capacity, and utilisation planner.",
   "start_url": "./",
   "scope": "./",
