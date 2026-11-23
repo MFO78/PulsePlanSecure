@@ -1,117 +1,122 @@
-/* Independent paired-period mobile layout; existing renderers remain available. */
+/* Paired layout reuses the native card renderer and its event handlers. */
 (function ppTwoCards() {
   if (typeof document === 'undefined' || !document.head || typeof document.head.appendChild !== 'function' || typeof document.createElement !== 'function' || typeof syncMobileControlsUI !== 'function' || typeof renderMobileMatrixCards !== 'function') return;
   const key = 'pulseplan_secure_mobile_layout_v1';
   const modes = ['grid', 'cards', 'cards2'];
+  const nativeSync = syncMobileControlsUI;
+  const nativeCards = renderMobileMatrixCards;
   let restored = false;
-  const originalSync = syncMobileControlsUI;
-  const originalCards = renderMobileMatrixCards;
   const css = document.createElement('style');
   css.textContent = `
-#pp-mobile-layout { max-width: 100%; min-height: 44px; padding: .25rem .4rem; border: 1px solid currentColor; border-radius: .6rem; background: transparent; font-size: .75rem; }
-#pp-mobile-layout option { color: #0f172a; background: #fff; }
-.pp-pair-root { --pair-bg: #fff; --pair-ink: #0f172a; --pair-border: #cbd5e1; color: var(--pair-ink); min-width: 0; }
-.pp-pair-root[data-dark=true] { --pair-bg: #172334; --pair-ink: #f1f5f9; --pair-border: #475569; }
-.pp-pair-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .75rem; }
-.pp-pair-nav h2 { flex: 1 1 8rem; font-weight: 700; }
-.pp-pair-nav button, .pp-period-card button { min-height: 44px; padding: .4rem .5rem; border: 1px solid var(--pair-border); border-radius: .6rem; background: var(--pair-bg); color: inherit; }
-.pp-pair-row { margin-bottom: 1rem; min-width: 0; }
-.pp-pair-row > h3 { font-weight: 700; margin-bottom: .4rem; overflow-wrap: anywhere; }
-.pp-period-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; min-width: 0; }
-.pp-period-card { min-width: 0; padding: .65rem; border: 1px solid var(--pair-border); border-radius: .8rem; background: var(--pair-bg); overflow-wrap: anywhere; }
-.pp-period-card h4 { font-weight: 700; margin-bottom: .5rem; }
-.pp-period-card p { font-size: .8rem; margin-bottom: .4rem; }
-.pp-period-card button { width: 100%; white-space: normal; font-size: .75rem; }
-.pp-pair-root button:focus-visible, #pp-mobile-layout:focus-visible { outline: 3px solid #0d9488; outline-offset: 2px; }
+#pp-mobile-layout { display: inline-flex; align-items: center; padding: 2px; gap: 2px; border: 1px solid rgba(100,116,139,.3); border-radius: .6rem; max-width: 100%; }
+#pp-mobile-layout[hidden] { display: none; }
+#pp-mobile-layout button { min-height: 32px; padding: .2rem .45rem; border-radius: .4rem; font-size: 11px; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+#pp-mobile-layout button[aria-pressed=true] { background: #065f46; color: #fff; }
+#pp-mobile-layout button:focus-visible, .pp-native-pair-nav button:focus-visible { outline: 2px solid #0d9488; outline-offset: 2px; }
+.pp-native-pair-nav { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .35rem; margin-bottom: .5rem; }
+.pp-native-pair-nav button { min-height: 36px; padding: .3rem .6rem; border: 1px solid rgba(100,116,139,.3); border-radius: .6rem; font-size: .75rem; }
+.pp-native-pair { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); align-items: start; gap: .5rem; min-width: 0; }
+.pp-native-column { min-width: 0; max-width: 100%; }
+.pp-native-column > h2 { font-size: .75rem; font-weight: 800; margin-bottom: .5rem; overflow-wrap: anywhere; }
+.pp-native-column :where(div, section, article, details, summary) { min-width: 0; max-width: 100%; }
+.pp-native-column :where(p, span, h2, h3, h4) { overflow-wrap: anywhere; }
+.pp-native-column .flex { flex-wrap: wrap; }
+.pp-native-column .shrink-0 { max-width: 100%; }
+.pp-native-column :where(button, input, select, textarea) { max-width: 100%; box-sizing: border-box; }
+.pp-native-column button { white-space: normal; overflow-wrap: anywhere; }
+.pp-native-column :where(.p-3, .p-3\\.5, .p-4) { padding: .5rem; }
 @media (min-width: 768px) { #pp-mobile-layout { display: none; } }
 `;
   document.head.appendChild(css);
-  function nextPeriod(pk, delta) {
-    return ui.timeUnit === 'month' ? addMonthsToMonthKey(pk, delta) : addWeeksToWeekKey(pk, delta);
-  }
+  const advance = (pk, delta) => ui.timeUnit === 'month' ? addMonthsToMonthKey(pk, delta) : addWeeksToWeekKey(pk, delta);
   syncMobileControlsUI = function(db) {
     if (!restored) {
       const saved = safeGetStorage(key);
       if (modes.includes(saved)) ui.mobileLayoutMode = saved;
       restored = true;
     }
-    originalSync(db);
+    nativeSync(db);
     const toggle = document.getElementById('mobileLayoutToggleBtn');
     if (!toggle) return;
-    let select = document.getElementById('pp-mobile-layout');
-    if (!select) {
-      select = document.createElement('select');
-      select.id = 'pp-mobile-layout';
-      select.setAttribute('aria-label', 'Mobile roadmap layout');
-      [['grid', 'Grid'], ['cards', 'Card'], ['cards2', '2 cards']].forEach(([value, text]) => {
-        const option = document.createElement('option');
-        option.value = value; option.textContent = text; select.appendChild(option);
+    let group = document.getElementById('pp-mobile-layout');
+    if (!group) {
+      group = document.createElement('div');
+      group.id = 'pp-mobile-layout';
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', 'Mobile roadmap layout');
+      [['grid','Grid'],['cards','Card'],['cards2','2 cards']].forEach(([mode, label]) => {
+        const button = document.createElement('button');
+        button.type = 'button'; button.textContent = label; button.dataset.layout = mode;
+        button.addEventListener('click', () => {
+          ui.mobileLayoutMode = mode;
+          safeSetStorage(key, mode); persistUIPrefs(); renderAll();
+        });
+        group.appendChild(button);
       });
-      select.addEventListener('change', () => {
-        ui.mobileLayoutMode = select.value;
-        safeSetStorage(key, select.value);
-        persistUIPrefs();
-        renderAll();
-      });
-      toggle.insertAdjacentElement('afterend', select);
+      toggle.insertAdjacentElement('afterend', group);
     }
-    toggle.hidden = true;
-    toggle.style.display = 'none';
-    select.hidden = ui.activeTab !== 'matrix';
-    select.value = modes.includes(ui.mobileLayoutMode) ? ui.mobileLayoutMode : 'cards';
+    toggle.hidden = true; toggle.style.display = 'none';
+    group.hidden = ui.activeTab !== 'matrix';
+    group.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.layout === ui.mobileLayoutMode)));
   };
+  function namespaceIds(root, prefix) {
+    const ids = new Map();
+    root.querySelectorAll('[id]').forEach(el => { const old = el.id; el.id = prefix + old; ids.set(old, el.id); });
+    root.querySelectorAll('*').forEach(el => {
+      ['for','aria-controls','aria-labelledby','aria-describedby','aria-owns'].forEach(attr => {
+        if (el.hasAttribute(attr)) el.setAttribute(attr, el.getAttribute(attr).split(/\s+/).map(id => ids.get(id) || id).join(' '));
+      });
+      const href = el.getAttribute('href');
+      if (href && href[0] === '#' && ids.has(href.slice(1))) el.setAttribute('href', '#' + ids.get(href.slice(1)));
+    });
+  }
   renderMobileMatrixCards = function() {
-    if (!isMobileViewport() || ui.mobileLayoutMode !== 'cards2') return originalCards();
+    if (!isMobileViewport() || ui.mobileLayoutMode !== 'cards2') return nativeCards();
     const deck = document.getElementById('mobileMatrixDeck');
     if (!deck) return;
-    const db = getActiveDB();
     const anchor = getMobileSelectedPeriod();
-    const pair = [anchor, nextPeriod(anchor, 1)];
-    const originalPeriod = ui.mobileSelectedPeriod;
-    const rows = new Map();
+    const field = ui.timeUnit === 'month' ? 'startMonth' : 'startWeek';
+    const saved = { start: ui[field], horizon: ui.horizon, selected: ui.mobileSelectedPeriod };
+    if (ui.axis === 'timeline') {
+      try { ui[field] = anchor; ui.horizon = 2; return nativeCards(); }
+      finally { ui[field] = saved.start; ui.horizon = saved.horizon; ui.mobileSelectedPeriod = saved.selected; }
+    }
+    const oldNodes = document.createDocumentFragment();
+    while (deck.firstChild) oldNodes.appendChild(deck.firstChild);
+    const pair = document.createElement('div'); pair.className = 'pp-native-pair';
     try {
-      pair.forEach(pk => {
-        ui.mobileSelectedPeriod = pk;
-        if (getVisiblePeriods().includes(pk)) {
-          getMobileVisibleRows(db).forEach(row => rows.set(row.id, row));
-        } else {
-          const field = ui.timeUnit === 'month' ? 'startMonth' : 'startWeek';
-          const oldStart = ui[field];
-          try { ui[field] = pk; getMobileVisibleRows(db).forEach(row => rows.set(row.id, row)); }
-          finally { ui[field] = oldStart; }
-        }
+      [anchor, advance(anchor, 1)].forEach((pk, index) => {
+        ui[field] = pk; ui.horizon = 1; ui.mobileSelectedPeriod = pk;
+        nativeCards();
+        const column = document.createElement('section'); column.className = 'pp-native-column space-y-3';
+        const title = document.createElement('h2'); title.textContent = formatPeriodHeader(pk, ui.timeUnit).title;
+        column.setAttribute('aria-label', title.textContent); column.appendChild(title);
+        while (deck.firstChild) column.appendChild(deck.firstChild);
+        column.querySelectorAll('[data-mobile-period-pill]').forEach(pill => {
+          const strip = pill.closest('.snap-x');
+          if (strip && column.contains(strip)) strip.remove(); else pill.remove();
+        });
+        column.querySelectorAll('button[onclick]').forEach(button => {
+          if (/shiftMobileSelectedPeriod|shiftStartByInterval|shiftStartPeriod/.test(button.getAttribute('onclick'))) button.remove();
+        });
+        if (index === 1) namespaceIds(column, 'pp-second-');
+        pair.appendChild(column);
       });
-    } finally { ui.mobileSelectedPeriod = originalPeriod; }
-    const deptAxis = ui.axis === 'department';
-    const html = Array.from(rows.values()).map(row => {
-      const cards = pair.map(pk => {
-        const header = formatPeriodHeader(pk, ui.timeUnit);
-        const fte = deptAxis ? getDeptTotalAllocatedFte(row.id, pk, ui.timeUnit, db) : getProjTotalAllocatedFte(row.id, pk, ui.timeUnit, db);
-        const amount = formatValue(fteToDisplayValue(fte, pk, ui.timeUnit));
-        const unit = ui.manpowerUnit === 'days' ? 'days' : ui.manpowerUnit === 'hours' ? 'hours' : 'FTE';
-        const notes = getCellTotalCommentCount(row.id, pk, deptAxis ? 'department' : 'project', ui.timeUnit, db);
-        let capacity = '';
-        if (deptAxis) {
-          const cap = getDeptCapacityForPeriod(row.id, pk, ui.timeUnit, db).avgFte;
-          const pct = cap > 0 ? Math.round(fte / cap * 100) + '%' : fte > 0 ? 'Over capacity' : 'No capacity';
-          capacity = '<p>' + escapeHtml(pct) + ' utilisation</p>';
-        }
-        return '<article class="pp-period-card"><h4>' + escapeHtml(header.title) + '</h4><p>' + escapeHtml(amount + ' ' + unit) + '</p>' + capacity + '<p>' + notes + ' notes</p><button type="button" data-pair-row="' + escapeHtml(row.id) + '" data-pair-period="' + escapeHtml(pk) + '" aria-label="' + escapeHtml('Details and edit: ' + row.name + ', ' + header.title) + '">Details / edit</button></article>';
-      }).join('');
-      return '<section class="pp-pair-row" aria-label="' + escapeHtml(row.name) + '"><h3>' + escapeHtml('[' + row.code + '] ' + row.name) + '</h3><div class="pp-period-pair">' + cards + '</div></section>';
-    }).join('');
-    deck.innerHTML = '<div class="pp-pair-root" data-dark="' + Boolean(ui.darkMode) + '"><div class="pp-pair-nav"><h2>Two-period cards</h2><button type="button" data-pair-step="-2" aria-label="Previous two periods">Previous</button><button type="button" data-pair-step="2" aria-label="Next two periods">Next</button></div>' + (html || '<p>No rows match your filters. Adjust filters in View or add departments and projects in Setup.</p>') + '</div>';
-    const status = document.getElementById('matrixStatusStrip');
-    if (status) { status.classList.add('hidden'); status.innerHTML = ''; }
-    deck.querySelectorAll('[data-pair-step]').forEach(button => button.addEventListener('click', () => {
-      const pk = nextPeriod(anchor, Number(button.dataset.pairStep));
-      ui[ui.timeUnit === 'month' ? 'startMonth' : 'startWeek'] = pk;
-      ui.mobileSelectedPeriod = pk;
-      persistUIPrefs();
-      renderAll();
-    }));
-    deck.querySelectorAll('[data-pair-row]').forEach(button => button.addEventListener('click', () => {
-      openCellDetailModal(button.dataset.pairRow, button.dataset.pairPeriod);
-    }));
+    } catch (error) {
+      deck.replaceChildren(oldNodes); throw error;
+    } finally {
+      ui[field] = saved.start; ui.horizon = saved.horizon; ui.mobileSelectedPeriod = saved.selected;
+    }
+    const nav = document.createElement('div'); nav.className = 'pp-native-pair-nav';
+    [[-2,'Previous'],[2,'Next']].forEach(([delta, label]) => {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+      button.setAttribute('aria-label', label + ' two periods');
+      button.addEventListener('click', () => {
+        const pk = advance(anchor, delta); ui[field] = pk; ui.mobileSelectedPeriod = pk;
+        persistUIPrefs(); renderAll();
+      });
+      nav.appendChild(button);
+    });
+    deck.replaceChildren(nav, pair);
   };
 })();
