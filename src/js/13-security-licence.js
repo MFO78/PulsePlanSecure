@@ -1,6 +1,6 @@
     /* ============================================================================
      * 13. PULSEPLANSECURE: TRANSPARENT SYNC JSON ENCRYPTION (AES-256-GCM),
-     *     MANUAL SECURITY SECTION & USER LICENCE MODAL
+     *     INACTIVITY LOCK, DARK-MODE DIALOGS, LANDMARK FIX & USER LICENCE
      * ============================================================================ */
 
     if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
@@ -8,7 +8,7 @@
         id: 'security',
         title: 'Security, Sync JSON Encryption & User Licence',
         badge: 'Security',
-        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase json sync licence license privacy cors referrer pwa cache ci',
+        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase timeout lock json sync licence license privacy cors referrer pwa cache ci',
         bodyHtml: `
           <div class="space-y-3">
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
@@ -16,14 +16,14 @@
               <ul class="space-y-1 text-slate-600 leading-relaxed">
                 <li>&bull; <strong>Tamper-Proof CDN Scripts (SRI):</strong> External PDF libraries (<code class="px-1 rounded bg-white font-mono">jsPDF</code> and <code class="px-1 rounded bg-white font-mono">jsPDF-AutoTable</code>) are cryptographically verified by the browser against SHA-384 Subresource Integrity hashes before execution, blocking compromised CDN code from accessing roadmap data or local files.</li>
                 <li>&bull; <strong>Privacy &amp; CORS Isolation:</strong> External scripts load with <code class="px-1 rounded bg-white font-mono">crossorigin="anonymous"</code> and <code class="px-1 rounded bg-white font-mono">referrerpolicy="no-referrer"</code> so no credentials or page URLs leak to third-party servers.</li>
-                <li>&bull; <strong>Halved PWA Cache &amp; HTML5 Cleanup:</strong> The Service Worker caches a single canonical <code class="px-1 rounded bg-white font-mono">./index.html</code> app shell instead of two duplicate 1.1 MB copies, aligns <code class="px-1 rounded bg-white font-mono">manifest.webmanifest</code> theme colour, and removes obsolete HTML4 link tags.</li>
-                <li>&bull; <strong>Automated CI/CD Verification:</strong> GitHub Actions automatically verifies SRI hashes, rebuilds <code class="px-1 rounded bg-white font-mono">index.html</code>, runs the full test suite, and deploys to GitHub Pages on every push.</li>
+                <li>&bull; <strong>Halved PWA Cache &amp; HTML5 Cleanup:</strong> The Service Worker caches a single canonical <code class="px-1 rounded bg-white font-mono">./index.html</code> app shell instead of two duplicate 1.1 MB copies, aligns <code class="px-1 rounded bg-white font-mono">manifest.webmanifest</code> theme colour, preserves the <code class="px-1 rounded bg-white font-mono">&lt;nav&gt;</code> landmark, and removes obsolete HTML4 link tags.</li>
+                <li>&bull; <strong>Automated CI/CD Verification:</strong> GitHub Actions automatically verifies SRI hashes, runs cryptography and app test suites, rebuilds <code class="px-1 rounded bg-white font-mono">index.html</code>, and deploys to GitHub Pages on every push.</li>
               </ul>
             </div>
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div class="font-bold text-slate-900">Transparent Sync JSON Encryption (AES-256-GCM)</div>
+              <div class="font-bold text-slate-900">Transparent Sync JSON Encryption (AES-256-GCM) &amp; Auto-Lock</div>
               <p class="text-slate-600 leading-relaxed">
-                Enable <strong>Sync JSON Encryption</strong> in <strong>Sync &amp; Snapshots</strong> or <strong>Appearance &amp; Help</strong> and set a passphrase (stored in memory for the current session only).
+                Enable <strong>Sync JSON Encryption</strong> in <strong>Sync &amp; Snapshots</strong> or <strong>Appearance &amp; Help</strong> and set a passphrase (stored in memory for the current session only, with an automatic 30-minute inactivity lock).
                 Every write to your linked shared <code class="px-1 rounded bg-white font-mono">.json</code> file is automatically encrypted using the browser's native <strong>Web Crypto API</strong> (<strong>PBKDF2-SHA-256</strong> with 250,000 iterations, random 128-bit salt, random 96-bit IV, and <strong>AES-256-GCM</strong>).
                 When opening or reloading an encrypted <code class="px-1 rounded bg-white font-mono">.json</code> file, PulsePlanSecure detects the encrypted envelope automatically and decrypts it in memory. If the passphrase is lost, encrypted files cannot be recovered.
               </p>
@@ -42,6 +42,8 @@
     const PP_PBKDF2_ITERATIONS = 250000;
     let ppSyncPassphrase = '';
     let ppPassphraseResolver = null;
+    let ppAutoLockMinutes = 30;
+    let ppAutoLockTimer = null;
 
     function ppBytesToBase64(bytes) {
       let binary = '';
@@ -114,6 +116,22 @@
       }
     }
 
+    function resetPassphraseAutoLock() {
+      if (ppAutoLockTimer) {
+        clearTimeout(ppAutoLockTimer);
+        ppAutoLockTimer = null;
+      }
+      if (ppSyncPassphrase && ppAutoLockMinutes > 0) {
+        ppAutoLockTimer = setTimeout(() => {
+          ppSyncPassphrase = '';
+          updateSyncEncryptionBadges();
+          if (typeof showToast === 'function') {
+            showToast('Sync JSON encryption passphrase locked after inactivity.', 'info');
+          }
+        }, ppAutoLockMinutes * 60 * 1000);
+      }
+    }
+
     function updateSyncEncryptionBadges() {
       const active = Boolean(ppSyncPassphrase);
       const chip = document.getElementById('ppSyncEncChip');
@@ -153,6 +171,8 @@
       }
       const passEl = document.getElementById('ppEncryptPassphrase');
       if (passEl) passEl.value = '';
+      const timeoutSel = document.getElementById('ppEncryptAutoLock');
+      if (timeoutSel) timeoutSel.value = String(ppAutoLockMinutes);
       if (typeof dlg.showModal === 'function') dlg.showModal();
       else dlg.setAttribute('open', 'open');
       if (passEl) passEl.focus();
@@ -175,7 +195,6 @@
     function installTransparentJsonCryptoHooks() {
       if (typeof window === 'undefined') return;
 
-      // 1. Intercept FileSystemFileHandle.createWritable to transparently encrypt PulsePlan JSON writes
       if (typeof FileSystemFileHandle !== 'undefined' && FileSystemFileHandle.prototype && FileSystemFileHandle.prototype.createWritable && !FileSystemFileHandle.prototype.__ppCryptoWrapped) {
         const origCreateWritable = FileSystemFileHandle.prototype.createWritable;
         FileSystemFileHandle.prototype.createWritable = async function (...args) {
@@ -186,6 +205,7 @@
               try {
                 const parsed = JSON.parse(data);
                 if (parsed && parsed.format !== PP_ENC_FORMAT && (parsed.departments || parsed.projects)) {
+                  resetPassphraseAutoLock();
                   const envelope = await encryptPulsePlanData(parsed, ppSyncPassphrase);
                   return origWrite(JSON.stringify(envelope, null, 2));
                 }
@@ -200,7 +220,6 @@
         FileSystemFileHandle.prototype.__ppCryptoWrapped = true;
       }
 
-      // 2. Intercept File.prototype.text to transparently decrypt encrypted PulsePlan JSON reads
       if (typeof File !== 'undefined' && File.prototype && File.prototype.text && !File.prototype.__ppCryptoWrapped) {
         const origText = File.prototype.text;
         File.prototype.text = async function (...args) {
@@ -222,6 +241,7 @@
               }
               const plainJson = await decryptPulsePlanData(parsed, pass);
               ppSyncPassphrase = pass;
+              resetPassphraseAutoLock();
               updateSyncEncryptionBadges();
               return plainJson;
             }
@@ -232,9 +252,54 @@
       }
     }
 
+    function fixNavTablistLandmark() {
+      const nav = document.querySelector('header nav[role="tablist"]');
+      if (!nav) return;
+      nav.removeAttribute('role');
+      const inner = document.createElement('div');
+      inner.setAttribute('role', 'tablist');
+      inner.className = 'flex items-center gap-1';
+      while (nav.firstChild) inner.appendChild(nav.firstChild);
+      nav.appendChild(inner);
+    }
+
+    function injectDarkModeDialogStyles() {
+      if (document.getElementById('ppSecurityDialogStyles')) return;
+      const style = document.createElement('style');
+      style.id = 'ppSecurityDialogStyles';
+      style.textContent = `
+        dialog#ppEncryptDialog::backdrop, dialog#ppLicenceDialog::backdrop { background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(2px); }
+        html.dark dialog#ppEncryptDialog, html.dark dialog#ppLicenceDialog,
+        body.dark dialog#ppEncryptDialog, body.dark dialog#ppLicenceDialog {
+          background-color: #0f172a; color: #f1f5f9; border-color: #334155;
+        }
+        html.dark dialog#ppEncryptDialog h2, html.dark dialog#ppLicenceDialog h2,
+        body.dark dialog#ppEncryptDialog h2, body.dark dialog#ppLicenceDialog h2 { color: #f8fafc; }
+        html.dark dialog#ppEncryptDialog input, html.dark dialog#ppEncryptDialog select,
+        body.dark dialog#ppEncryptDialog input, body.dark dialog#ppEncryptDialog select {
+          background-color: #1e293b; color: #f1f5f9; border-color: #334155;
+        }
+        html.dark dialog#ppLicenceDialog section, body.dark dialog#ppLicenceDialog section {
+          background-color: #1e293b; color: #cbd5e1; border-color: #334155;
+        }
+        html.dark #ppSyncTabEncBar, body.dark #ppSyncTabEncBar {
+          background-color: #0f172a; border-color: #334155; color: #f1f5f9;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     function initSecurityAndLicenceUI() {
       if (typeof document === 'undefined') return;
       installTransparentJsonCryptoHooks();
+      fixNavTablistLandmark();
+      injectDarkModeDialogStyles();
+
+      ['click', 'keydown'].forEach((evt) => {
+        window.addEventListener(evt, () => {
+          if (ppSyncPassphrase) resetPassphraseAutoLock();
+        }, { passive: true });
+      });
 
       const manualBtn = document.getElementById('manualBtn');
       if (manualBtn && manualBtn.parentElement && !document.getElementById('ppSyncEncMenuBtn')) {
@@ -276,7 +341,6 @@
         manualBtn.parentElement.appendChild(licBtn);
       }
 
-      // Add a compact Sync JSON Encryption control bar inside the Sync & Snapshots tab
       const syncTab = document.getElementById('tab-sync');
       if (syncTab && !document.getElementById('ppSyncTabEncBar')) {
         const bar = document.createElement('div');
@@ -297,7 +361,7 @@
         const encDialog = document.createElement('dialog');
         encDialog.id = 'ppEncryptDialog';
         encDialog.setAttribute('aria-labelledby', 'ppEncryptDialogTitle');
-        encDialog.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-full max-w-md backdrop:bg-slate-900/50';
+        encDialog.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-full max-w-md';
         encDialog.innerHTML = `
           <div class="p-5 space-y-4 text-xs">
             <header class="flex items-start justify-between gap-3">
@@ -310,6 +374,14 @@
             <div class="space-y-2">
               <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Passphrase (minimum 8 characters)</label>
               <input id="ppEncryptPassphrase" type="password" autocomplete="new-password" placeholder="Enter passphrase..." class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+            </div>
+            <div class="space-y-1.5">
+              <label for="ppEncryptAutoLock" class="block font-semibold text-slate-700">Auto-lock passphrase after inactivity</label>
+              <select id="ppEncryptAutoLock" class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900">
+                <option value="15">15 minutes</option>
+                <option value="30" selected>30 minutes (default)</option>
+                <option value="0">Never (until tab closed)</option>
+              </select>
             </div>
             <div class="flex flex-wrap gap-2">
               <button type="button" id="ppEncryptSaveBtn" class="flex-1 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Enable / Unlock</button>
@@ -333,11 +405,14 @@
 
         document.getElementById('ppEncryptSaveBtn')?.addEventListener('click', () => {
           const val = (document.getElementById('ppEncryptPassphrase')?.value || '').trim();
+          const timeoutVal = parseInt(document.getElementById('ppEncryptAutoLock')?.value || '30', 10);
+          ppAutoLockMinutes = isNaN(timeoutVal) ? 30 : timeoutVal;
           if (val.length < 8) {
             setEncryptStatus('Passphrase must be at least 8 characters long.', true);
             return;
           }
           ppSyncPassphrase = val;
+          resetPassphraseAutoLock();
           updateSyncEncryptionBadges();
           if (ppPassphraseResolver) {
             closeAndResolve(val);
@@ -348,6 +423,7 @@
 
         document.getElementById('ppEncryptDisableBtn')?.addEventListener('click', () => {
           ppSyncPassphrase = '';
+          resetPassphraseAutoLock();
           updateSyncEncryptionBadges();
           setEncryptStatus('Sync JSON Encryption disabled. New saves will write standard JSON.', false);
         });
@@ -357,7 +433,7 @@
         const licDialog = document.createElement('dialog');
         licDialog.id = 'ppLicenceDialog';
         licDialog.setAttribute('aria-labelledby', 'ppLicenceDialogTitle');
-        licDialog.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-full max-w-lg backdrop:bg-slate-900/50';
+        licDialog.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-full max-w-lg';
         licDialog.innerHTML = `
           <div class="p-5 space-y-4 text-xs">
             <header class="flex items-start justify-between gap-3">

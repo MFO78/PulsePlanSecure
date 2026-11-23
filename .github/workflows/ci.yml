@@ -40,7 +40,10 @@ jobs:
           ! grep -q 'rel="shortcut icon"' index.html
           echo "Verified: SRI hashes present and obsolete shortcut icon removed."
 
-      - name: Run test suite
+      - name: Run AES-256-GCM cryptography tests
+        run: node scripts/test-crypto.mjs
+
+      - name: Run main test suite
         run: node test.mjs
 
       - name: Stage GitHub Pages artifact
