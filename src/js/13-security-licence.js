@@ -253,6 +253,7 @@
     }
 
     function fixNavTablistLandmark() {
+      if (typeof document.querySelector !== 'function') return;
       const nav = document.querySelector('header nav[role="tablist"]');
       if (!nav) return;
       nav.removeAttribute('role');
@@ -264,6 +265,7 @@
     }
 
     function injectDarkModeDialogStyles() {
+      if (!document.head || typeof document.head.appendChild !== 'function') return;
       if (document.getElementById('ppSecurityDialogStyles')) return;
       const style = document.createElement('style');
       style.id = 'ppSecurityDialogStyles';
@@ -290,16 +292,18 @@
     }
 
     function initSecurityAndLicenceUI() {
-      if (typeof document === 'undefined') return;
+      if (typeof document === 'undefined' || !document.body) return;
       installTransparentJsonCryptoHooks();
       fixNavTablistLandmark();
       injectDarkModeDialogStyles();
 
-      ['click', 'keydown'].forEach((evt) => {
-        window.addEventListener(evt, () => {
-          if (ppSyncPassphrase) resetPassphraseAutoLock();
-        }, { passive: true });
-      });
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        ['click', 'keydown'].forEach((evt) => {
+          window.addEventListener(evt, () => {
+            if (ppSyncPassphrase) resetPassphraseAutoLock();
+          }, { passive: true });
+        });
+      }
 
       const manualBtn = document.getElementById('manualBtn');
       if (manualBtn && manualBtn.parentElement && !document.getElementById('ppSyncEncMenuBtn')) {
