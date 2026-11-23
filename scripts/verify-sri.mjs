@@ -31,10 +31,9 @@ for (const url of SCRIPTS) {
 
   if (apply) {
     const escapedUrl = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`<script[^>]*src=\\\\"${escapedUrl}\\\\"[^>]*><\\/script>`);
-    const escapedTag = tag.replace(/"/g, '\\"');
+    const re = new RegExp(`<script[^>]*src="${escapedUrl}"[^>]*><\\/script>`);
     if (re.test(buildSrc)) {
-      buildSrc = buildSrc.replace(re, escapedTag);
+      buildSrc = buildSrc.replace(re, tag);
     } else {
       console.error(`Could not locate script tag for ${url} in build.mjs`);
       process.exit(1);
@@ -44,7 +43,7 @@ for (const url of SCRIPTS) {
 
 if (apply) {
   // Remove obsolete HTML5 shortcut icon link
-  buildSrc = buildSrc.replace(/\n\s*<link rel=\\"shortcut icon\\"[^>]*\/>/, '');
+  buildSrc = buildSrc.replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '');
   fs.writeFileSync(buildPath, buildSrc, 'utf8');
   console.log('Applied verified SHA-384 SRI hashes and removed obsolete shortcut icon from build.mjs.');
 }
