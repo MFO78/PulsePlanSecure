@@ -35,17 +35,21 @@ function chunk(type,data) {
   out.writeUInt32BE((c^0xffffffff)>>>0,out.length-4);
   return out;
 }
-function render(size,scale) {
+function render(size,scale,rounded=false) {
   const stride=size*4+1, raw=Buffer.alloc(stride*size);
   for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
     const rgb=[0,0,0];
+    let coverage=0;
     for(const oy of [0.25,0.75]) for(const ox of [0.25,0.75]) {
-      const sample=pixel((x+ox)*40/size,(y+oy)*40/size,scale);
-      for(let c=0;c<3;c++) rgb[c]+=sample[c]/4;
+      const px=(x+ox)*40/size, py=(y+oy)*40/size;
+      if (rounded && Math.hypot(px-Math.max(11,Math.min(29,px)),py-Math.max(11,Math.min(29,py)))>10) continue;
+      const sample=pixel(px,py,scale);
+      coverage++;
+      for(let c=0;c<3;c++) rgb[c]+=sample[c];
     }
     const p=y*stride+1+x*4;
-    for(let c=0;c<3;c++) raw[p+c]=Math.round(rgb[c]);
-    raw[p+3]=255;
+    for(let c=0;c<3;c++) raw[p+c]=coverage ? Math.round(rgb[c]/coverage) : 0;
+    raw[p+3]=Math.round(255*coverage/4);
   }
   const header=Buffer.alloc(13);
   header.writeUInt32BE(size,0);
@@ -53,7 +57,7 @@ function render(size,scale) {
   header[8]=8; header[9]=6;
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]);
 }
-fs.writeFileSync('icon-192.png',render(192,1));
-fs.writeFileSync('icon-512.png',render(512,1));
+fs.writeFileSync('icon-192.png',render(192,1,true));
+fs.writeFileSync('icon-512.png',render(512,1,true));
 fs.writeFileSync('icon-maskable-512.png',render(512,0.92));
-console.log('Rendered full-bleed green standard and maskable PNGs with rounded bars, pulse and endpoint dot.');
+console.log('Rendered rounded standard PNGs and full-bleed maskable PNG with green artwork.');
