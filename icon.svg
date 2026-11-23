@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="ppIconGrad" x1="24" y1="24" x2="488" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4338ca"/>
+      <stop offset="55%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="488" height="488" rx="120" fill="url(#ppIconGrad)"/>
+  <rect x="88" y="114" width="180" height="44" rx="22" fill="#ffffff" fill-opacity="0.38"/>
+  <rect x="292" y="114" width="132" height="44" rx="22" fill="#a5f3fc" fill-opacity="0.58"/>
+  <rect x="88" y="354" width="116" height="44" rx="22" fill="#a5f3fc" fill-opacity="0.58"/>
+  <rect x="230" y="354" width="194" height="44" rx="22" fill="#ffffff" fill-opacity="0.38"/>
+  <path d="M82 262H166L208 172L262 340L305 224L340 262H430" stroke="#ffffff" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="430" cy="262" r="30" fill="#34d399"/>
+</svg>
