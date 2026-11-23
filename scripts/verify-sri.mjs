@@ -151,7 +151,6 @@ if (apply) {
   buildSrc = buildSrc
     .replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '')
     .replace(/<title>PulsePlan[^<]*<\/title>/, '<title>PulsePlanSecure: Company Roadmap &amp; Utilisation Planner</title>')
-    .replace(/href="\.\/icon-192\.png"/g, 'href="./icon-192.png?v=3"')
     // Update inline favicon gradient to emerald-teal security palette
     .replace(/stop-color="#4338ca"/g, 'stop-color="#065f46"')
     .replace(/stop-color="#6366f1"/g, 'stop-color="#059669"')
