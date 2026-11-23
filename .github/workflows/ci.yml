@@ -31,6 +31,9 @@ jobs:
       - name: Apply verified SRI hashes, build revision & HTML5 head fixes
         run: node scripts/verify-sri.mjs --apply
 
+      - name: Generate green maskable PNG with safe padding
+        run: node scripts/generate-maskable.mjs
+
       - name: Build single-file index.html
         run: node build.mjs
 
