@@ -28,11 +28,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Apply verified SRI hashes and HTML5 head fixes
+      - name: Apply verified SRI hashes, build revision & HTML5 head fixes
         run: node scripts/verify-sri.mjs --apply
 
       - name: Build single-file index.html
         run: node build.mjs
+
+      - name: Optimise index.html payload
+        run: node scripts/minify-html.mjs
 
       - name: Verify SRI hashes are present in built index.html
         run: |

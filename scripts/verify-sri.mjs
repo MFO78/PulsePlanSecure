@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
- * Computes verified SHA-384 Subresource Integrity (SRI) hashes for external CDN scripts.
- * Usage:
- *   node scripts/verify-sri.mjs          # print verified <script> tags
- *   node scripts/verify-sri.mjs --apply  # patch build.mjs in-place with SRI + remove obsolete shortcut icon
+ * Computes verified SHA-384 Subresource Integrity (SRI) hashes for external CDN scripts,
+ * removes obsolete HTML4 link tags, and stamps Git build revision metadata.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -42,8 +40,19 @@ for (const url of SCRIPTS) {
 }
 
 if (apply) {
-  // Remove obsolete HTML5 shortcut icon link
   buildSrc = buildSrc.replace(/\n\s*<link rel="shortcut icon"[^>]*\/>/, '');
   fs.writeFileSync(buildPath, buildSrc, 'utf8');
+
+  // Stamp short Git SHA and UTC date into src/js/13-security-licence.js
+  const secPath = path.join(process.cwd(), 'src', 'js', '13-security-licence.js');
+  if (fs.existsSync(secPath)) {
+    const sha = (process.env.GITHUB_SHA || 'local').slice(0, 7);
+    const builtAt = new Date().toISOString().slice(0, 10);
+    let secSrc = fs.readFileSync(secPath, 'utf8');
+    secSrc = secSrc.replace(/__PP_BUILD_SHA__/g, sha).replace(/__PP_BUILD_DATE__/g, builtAt);
+    fs.writeFileSync(secPath, secSrc, 'utf8');
+    console.log(`Stamped build revision: ${sha} (${builtAt}).`);
+  }
+
   console.log('Applied verified SHA-384 SRI hashes and removed obsolete shortcut icon from build.mjs.');
 }

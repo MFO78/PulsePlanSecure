@@ -1,30 +1,36 @@
     /* ============================================================================
      * 13. PULSEPLANSECURE: TRANSPARENT SYNC & SHARE JSON ENCRYPTION (AES-256-GCM),
-     *     INACTIVITY LOCK, DARK-MODE DIALOGS, LANDMARK FIX & USER LICENCE
+     *     PASS-STRENGTH METER, INACTIVITY LOCK, BUILD REVISION TRACKER & LICENCE
      * ============================================================================ */
+
+    const PP_BUILD_INFO = {
+      version: 'v8.4-secure',
+      sha: '__PP_BUILD_SHA__',
+      builtAt: '__PP_BUILD_DATE__',
+    };
 
     if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
       MANUAL_SECTIONS.push({
         id: 'security',
         title: 'Security, Sync JSON Encryption & User Licence',
         badge: 'Security',
-        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase timeout lock json sync share licence license privacy cors referrer pwa cache ci',
+        keywords: 'security sri sha384 encryption aes gcm pbkdf2 password passphrase timeout lock json sync share backup revision version licence license privacy cors referrer pwa cache ci',
         bodyHtml: `
           <div class="space-y-3">
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div class="font-bold text-slate-900">Hardened Architecture (PulsePlanSecure vs. Standard)</div>
+              <div class="font-bold text-slate-900">Hardened Architecture (PulsePlanSecure ${PP_BUILD_INFO.version})</div>
               <ul class="space-y-1 text-slate-600 leading-relaxed">
                 <li>&bull; <strong>Tamper-Proof CDN Scripts (SRI):</strong> External PDF libraries (<code class="px-1 rounded bg-white font-mono">jsPDF</code> and <code class="px-1 rounded bg-white font-mono">jsPDF-AutoTable</code>) are cryptographically verified by the browser against SHA-384 Subresource Integrity hashes before execution, blocking compromised CDN code from accessing roadmap data or local files.</li>
                 <li>&bull; <strong>Privacy &amp; CORS Isolation:</strong> External scripts load with <code class="px-1 rounded bg-white font-mono">crossorigin="anonymous"</code> and <code class="px-1 rounded bg-white font-mono">referrerpolicy="no-referrer"</code> so no credentials or page URLs leak to third-party servers.</li>
                 <li>&bull; <strong>Halved PWA Cache &amp; HTML5 Cleanup:</strong> The Service Worker caches a single canonical <code class="px-1 rounded bg-white font-mono">./index.html</code> app shell instead of two duplicate 1.1 MB copies, aligns <code class="px-1 rounded bg-white font-mono">manifest.webmanifest</code> theme colour, preserves the <code class="px-1 rounded bg-white font-mono">&lt;nav&gt;</code> landmark, and removes obsolete HTML4 link tags.</li>
-                <li>&bull; <strong>Automated CI/CD Verification:</strong> GitHub Actions automatically verifies SRI hashes, runs cryptography and app test suites, rebuilds <code class="px-1 rounded bg-white font-mono">index.html</code>, and deploys to GitHub Pages on every push.</li>
+                <li>&bull; <strong>Automated CI/CD &amp; Revision Tracking:</strong> GitHub Actions automatically verifies SRI hashes, stamps the build revision in <strong>Appearance &amp; Help</strong>, runs cryptography and app test suites, optimises <code class="px-1 rounded bg-white font-mono">index.html</code>, and deploys to GitHub Pages on every push.</li>
               </ul>
             </div>
             <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-              <div class="font-bold text-slate-900">Transparent Sync &amp; Share JSON Encryption (AES-256-GCM)</div>
+              <div class="font-bold text-slate-900">Transparent Sync, Backup &amp; Share JSON Encryption (AES-256-GCM)</div>
               <p class="text-slate-600 leading-relaxed">
                 Enable <strong>Shared JSON Encryption</strong> inside the <strong>Sync, Share &amp; Portable Files</strong> card (or <strong>Appearance &amp; Help</strong>) and set a passphrase (stored in memory for the current session only, with an automatic 30-minute inactivity lock).
-                Every write to your linked shared <code class="px-1 rounded bg-white font-mono">.json</code> file and every <strong>Share / Save JSON</strong> export is automatically encrypted using the browser's native <strong>Web Crypto API</strong> (<strong>PBKDF2-SHA-256</strong> with 250,000 iterations, random 128-bit salt, random 96-bit IV, and <strong>AES-256-GCM</strong>).
+                Every write to your linked shared <code class="px-1 rounded bg-white font-mono">.json</code> file, every <strong>Backup to Folder</strong> write, and every <strong>Share / Save JSON</strong> export is automatically encrypted using the browser's native <strong>Web Crypto API</strong> (<strong>PBKDF2-SHA-256</strong> with 250,000 iterations, random 128-bit salt, random 96-bit IV, and <strong>AES-256-GCM</strong>).
                 When opening, importing, or reloading an encrypted <code class="px-1 rounded bg-white font-mono">.json</code> file, PulsePlanSecure detects the encrypted envelope automatically and decrypts it in memory. If the passphrase is lost, encrypted files cannot be recovered.
               </p>
             </div>
@@ -116,6 +122,30 @@
       }
     }
 
+    function ppEvaluatePassphraseStrength(pass) {
+      if (!pass) return { label: '', pct: 0, color: 'bg-slate-200', text: 'text-slate-400' };
+      let score = 0;
+      if (pass.length >= 8) score++;
+      if (pass.length >= 12) score++;
+      if (/[a-z]/.test(pass) && /[A-Z]/.test(pass)) score++;
+      if (/\d/.test(pass)) score++;
+      if (/[^A-Za-z0-9]/.test(pass)) score++;
+      if (score <= 2) return { label: 'Weak', pct: 33, color: 'bg-rose-500', text: 'text-rose-600' };
+      if (score <= 3) return { label: 'Fair', pct: 66, color: 'bg-amber-500', text: 'text-amber-600' };
+      return { label: 'Strong', pct: 100, color: 'bg-emerald-500', text: 'text-emerald-600' };
+    }
+
+    function updatePassphraseStrengthUI(pass) {
+      const bar = document.getElementById('ppStrengthBar');
+      const lbl = document.getElementById('ppStrengthLabel');
+      if (!bar || !lbl) return;
+      const st = ppEvaluatePassphraseStrength(pass);
+      bar.style.width = st.pct + '%';
+      bar.className = 'h-full rounded-full transition-all ' + st.color;
+      lbl.textContent = st.label;
+      lbl.className = 'text-[10px] font-bold ' + st.text;
+    }
+
     function ppGetCurrentDbRef() {
       if (typeof getActiveDB === 'function') return getActiveDB();
       if (typeof ui !== 'undefined' && ui.whatIfMode && typeof whatIfDB !== 'undefined' && whatIfDB) return whatIfDB;
@@ -170,7 +200,7 @@
       if (!dlg) return;
       const reasonEl = document.getElementById('ppEncryptReason');
       if (reasonEl) {
-        reasonEl.textContent = promptReason || 'Set a session passphrase to automatically encrypt synced .json saves and Share / Save JSON exports with AES-256-GCM.';
+        reasonEl.textContent = promptReason || 'Set a session passphrase to automatically encrypt synced .json saves, folder backups, and Share / Save JSON exports with AES-256-GCM.';
       }
       const statusEl = document.getElementById('ppEncryptStatus');
       if (statusEl) {
@@ -179,6 +209,7 @@
       }
       const passEl = document.getElementById('ppEncryptPassphrase');
       if (passEl) passEl.value = '';
+      updatePassphraseStrengthUI('');
       const timeoutSel = document.getElementById('ppEncryptAutoLock');
       if (timeoutSel) timeoutSel.value = String(ppAutoLockMinutes);
       if (typeof dlg.showModal === 'function') dlg.showModal();
@@ -198,6 +229,21 @@
       if (!dlg) return;
       if (typeof dlg.showModal === 'function') dlg.showModal();
       else dlg.setAttribute('open', 'open');
+    }
+
+    async function checkAppUpdate() {
+      try {
+        if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (reg) await reg.update();
+        }
+        if (typeof showToast === 'function') {
+          showToast(`Checked for updates (${PP_BUILD_INFO.version} · ${PP_BUILD_INFO.sha}). Reloading...`, 'info');
+        }
+        setTimeout(() => window.location.reload(), 600);
+      } catch (_err) {
+        window.location.reload();
+      }
     }
 
     async function handleEncryptedShareSaveJson() {
@@ -222,7 +268,7 @@
             return;
           }
         } catch (_err) {
-          // Fall back to direct download if share sheet dismissed or unsupported
+          // Fall back to direct download
         }
       }
 
@@ -299,7 +345,6 @@
         File.prototype.__ppCryptoWrapped = true;
       }
 
-      // Intercept "Share / Save JSON" button clicks when encryption passphrase is active
       if (typeof document !== 'undefined' && typeof document.addEventListener === 'function' && !document.__ppShareSaveHooked) {
         document.addEventListener('click', (e) => {
           if (!ppSyncPassphrase) return;
@@ -407,11 +452,24 @@
           openLicenceDialog();
         });
 
+        const revBtn = document.createElement('button');
+        revBtn.id = 'ppRevisionBtn';
+        revBtn.type = 'button';
+        revBtn.title = 'Click to check for updates and refresh Service Worker cache';
+        revBtn.className = 'w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200/80 bg-slate-100/70 hover:bg-indigo-50 text-[10px] text-slate-500 hover:text-indigo-700 font-mono transition cursor-pointer';
+        revBtn.innerHTML = `
+          <span>${PP_BUILD_INFO.version} &middot; ${PP_BUILD_INFO.sha}</span>
+          <span>${PP_BUILD_INFO.builtAt}</span>`;
+        revBtn.addEventListener('click', () => {
+          if (typeof closeHeaderWorkspaceMenu === 'function') closeHeaderWorkspaceMenu();
+          checkAppUpdate();
+        });
+
         manualBtn.parentElement.appendChild(encBtn);
         manualBtn.parentElement.appendChild(licBtn);
+        manualBtn.parentElement.appendChild(revBtn);
       }
 
-      // Mount Shared JSON Encryption inside the "Sync, Share & Portable Files" card (not as a separate grid frame)
       const syncTab = document.getElementById('tab-sync');
       if (syncTab && !document.getElementById('ppSyncTabEncBar')) {
         let targetCard = null;
@@ -431,7 +489,7 @@
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-bold text-slate-900">Shared JSON Encryption</span>
             <span id="ppSyncTabEncBadge" class="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase">Plaintext JSON</span>
-            <span class="text-slate-500">Encrypts linked <code class="px-1 rounded bg-white font-mono">.json</code> saves &amp; Share / Save JSON with AES-256-GCM.</span>
+            <span class="text-slate-500">Encrypts linked <code class="px-1 rounded bg-white font-mono">.json</code> saves, folder backups &amp; Share / Save JSON with AES-256-GCM.</span>
           </div>
           <button type="button" id="ppSyncTabEncBtn" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Configure Passphrase</button>`;
         if (targetCard && typeof targetCard.appendChild === 'function') {
@@ -452,13 +510,19 @@
             <header class="flex items-start justify-between gap-3">
               <div>
                 <h2 id="ppEncryptDialogTitle" class="text-base font-extrabold text-slate-900">Sync JSON Encryption (AES-256-GCM)</h2>
-                <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5">Set a session passphrase to automatically encrypt synced .json saves and Share / Save JSON exports with AES-256-GCM.</p>
+                <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5">Set a session passphrase to automatically encrypt synced .json saves, folder backups, and Share / Save JSON exports with AES-256-GCM.</p>
               </div>
               <button type="button" id="ppEncryptCloseBtn" aria-label="Close encryption dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
             </header>
-            <div class="space-y-2">
-              <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Passphrase (minimum 8 characters)</label>
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between">
+                <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Passphrase (minimum 8 characters)</label>
+                <span id="ppStrengthLabel" class="text-[10px] font-bold text-slate-400"></span>
+              </div>
               <input id="ppEncryptPassphrase" type="password" autocomplete="new-password" placeholder="Enter passphrase..." class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+              <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+                <div id="ppStrengthBar" class="h-full rounded-full bg-slate-200 transition-all" style="width:0%"></div>
+              </div>
             </div>
             <div class="space-y-1.5">
               <label for="ppEncryptAutoLock" class="block font-semibold text-slate-700">Auto-lock passphrase after inactivity</label>
@@ -485,6 +549,10 @@
           }
         };
 
+        document.getElementById('ppEncryptPassphrase')?.addEventListener('input', (e) => {
+          updatePassphraseStrengthUI(e.target.value || '');
+        });
+
         document.getElementById('ppEncryptCloseBtn')?.addEventListener('click', () => closeAndResolve(''));
         encDialog.addEventListener('cancel', () => closeAndResolve(''));
 
@@ -502,7 +570,7 @@
           if (ppPassphraseResolver) {
             closeAndResolve(val);
           } else {
-            setEncryptStatus('Sync JSON Encryption enabled for this session. Synced saves and Share / Save JSON will write AES-256-GCM ciphertext.', false);
+            setEncryptStatus('Sync JSON Encryption enabled for this session. Synced saves, backups, and Share / Save JSON will write AES-256-GCM ciphertext.', false);
           }
         });
 
@@ -524,7 +592,7 @@
             <header class="flex items-start justify-between gap-3">
               <div>
                 <h2 id="ppLicenceDialogTitle" class="text-base font-extrabold text-slate-900">PulsePlanSecure User Licence</h2>
-                <p class="text-[11px] text-slate-500 mt-0.5">MIT Licence &amp; Local-First Privacy Notice</p>
+                <p class="text-[11px] text-slate-500 mt-0.5">MIT Licence &amp; Local-First Privacy Notice (${PP_BUILD_INFO.version} &middot; ${PP_BUILD_INFO.sha})</p>
               </div>
               <button type="button" id="ppLicenceCloseBtn" aria-label="Close user licence dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
             </header>
