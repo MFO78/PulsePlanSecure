@@ -515,7 +515,7 @@
     }
   }
 
-  /* ---------- Tree Helpers & Vector PDF Export ---------- */
+  /* ---------- Tree Helpers & Department-Coloured Vector PDF Export ---------- */
   function getChildren(parentId) {
     if (!activeDoc) return [];
     return activeDoc.items.filter(item => (item.parentId || null) === (parentId || null));
@@ -530,6 +530,27 @@
     return list;
   }
 
+  function hexToRgb(hex, fallback) {
+    const clean = String(hex || '').replace('#', '').trim();
+    if (/^[0-9a-fA-F]{6}$/.test(clean)) {
+      return [parseInt(clean.slice(0, 2), 16), parseInt(clean.slice(2, 4), 16), parseInt(clean.slice(4, 6), 16)];
+    }
+    return fallback || [79, 70, 229];
+  }
+
+  function tintRgb(rgb, ratio) {
+    return rgb.map(c => Math.round(255 - (255 - c) * ratio));
+  }
+
+  function pdfSafe(str) {
+    return String(str ?? '')
+      .replace(/[\u2013\u2014]/g, '-')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/\u2026/g, '...')
+      .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  }
+
   function exportActivePbsPdf() {
     if (!activeProjectId || !activeDoc) return;
     const project = getProject(activeProjectId);
@@ -538,15 +559,19 @@
     const msMap = new Map((db.milestones || []).map(m => [m.id, m]));
     const rows = flattenTreeRows(null, 0, []);
     const dateStr = new Date().toISOString().slice(0, 10);
-    const title = `Product Breakdown Structure — [${project ? project.code : ''}] ${project ? project.name : 'Project'}`;
-    const subtitle = `Revision ${activeDoc.meta.revision}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${getUserName()}`;
+    const projRgb = hexToRgb(project && project.color, [79, 70, 229]);
+    const title = pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`);
+    const subtitle = pdfSafe(`Revision ${activeDoc.meta.revision}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${getUserName()}`);
 
     const jsPdfLib = typeof window !== 'undefined' && window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : null;
     if (jsPdfLib) {
       try {
         const pdf = new jsPdfLib({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+        const pageW = pdf.internal.pageSize.getWidth();
         pdf.setFillColor(15, 23, 42);
-        pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 62, 'F');
+        pdf.rect(0, 0, pageW, 64, 'F');
+        pdf.setFillColor(projRgb[0], projRgb[1], projRgb[2]);
+        pdf.rect(0, 60, pageW, 4, 'F');
         pdf.setTextColor(255, 255, 255);
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
@@ -556,18 +581,26 @@
         pdf.setTextColor(203, 213, 225);
         pdf.text(subtitle, 36, 46);
 
-        const body = rows.map(({ item, depth }) => {
+        const rowMeta = rows.map(({ item, depth }) => {
+          const dept = item.deptId ? deptMap.get(item.deptId) : null;
+          return {
+            depth,
+            deptRgb: dept && dept.color ? hexToRgb(dept.color) : null,
+            maturity: item.maturity,
+          };
+        });
+
+        const body = rows.map(({ item }) => {
           const dept = item.deptId ? deptMap.get(item.deptId) : null;
           const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
-          const indent = depth > 0 ? `${'  '.repeat(depth)}↳ ` : '';
           return [
-            item.code,
-            `${indent}${item.name}`,
-            item.maturity,
-            dept ? `[${dept.code}] ${dept.name}` : '—',
-            item.owner || '—',
-            ms ? `${ms.title}${ms.date ? ` (${ms.date})` : ''}` : '—',
-            item.notes || '',
+            pdfSafe(item.code),
+            pdfSafe(item.name),
+            pdfSafe(item.maturity),
+            dept ? pdfSafe(`[${dept.code}] ${dept.name}`) : '-',
+            item.owner ? pdfSafe(item.owner) : '-',
+            ms ? pdfSafe(`${ms.title}${ms.date ? ` (${ms.date})` : ''}`) : '-',
+            pdfSafe(item.notes || ''),
           ];
         });
 
@@ -575,18 +608,53 @@
           pdf.autoTable({
             startY: 78,
             head: [['Code', 'Deliverable / Subsystem', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes']],
-            body: body.length ? body : [['—', 'No PBS items recorded', '—', '—', '—', '—', '']],
-            styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
-            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
+            body: body.length ? body : [['-', 'No PBS items recorded', '-', '-', '-', '-', '']],
+            styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 6, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
+            headStyles: { fillColor: projRgb, textColor: [255, 255, 255], fontStyle: 'bold' },
             alternateRowStyles: { fillColor: [248, 250, 252] },
             columnStyles: {
-              0: { cellWidth: 52, fontStyle: 'bold' },
+              0: { cellWidth: 54, fontStyle: 'bold' },
               1: { cellWidth: 195 },
-              2: { cellWidth: 64 },
-              3: { cellWidth: 110 },
+              2: { cellWidth: 66, fontStyle: 'bold' },
+              3: { cellWidth: 115 },
               4: { cellWidth: 85 },
               5: { cellWidth: 120 },
               6: { cellWidth: 'auto' },
+            },
+            didParseCell(data) {
+              if (data.section !== 'body') return;
+              const meta = rowMeta[data.row.index];
+              if (!meta) return;
+              if (meta.deptRgb) {
+                data.cell.styles.fillColor = tintRgb(meta.deptRgb, 0.11);
+                if (data.column.index === 3) {
+                  data.cell.styles.textColor = meta.deptRgb;
+                  data.cell.styles.fontStyle = 'bold';
+                }
+              }
+              if (data.column.index === 1) {
+                if (meta.depth === 0) data.cell.styles.fontStyle = 'bold';
+                data.cell.styles.cellPadding = { top: 6, right: 6, bottom: 6, left: 8 + meta.depth * 14 };
+              }
+              if (data.column.index === 2) {
+                if (meta.maturity === 'Qualified' || meta.maturity === 'Delivered') {
+                  data.cell.styles.textColor = [4, 120, 87];
+                } else if (meta.maturity === 'CDR') {
+                  data.cell.styles.textColor = [67, 56, 202];
+                } else if (meta.maturity === 'PDR') {
+                  data.cell.styles.textColor = [180, 83, 9];
+                } else {
+                  data.cell.styles.textColor = [100, 116, 139];
+                }
+              }
+            },
+            didDrawCell(data) {
+              if (data.section !== 'body' || data.column.index !== 0) return;
+              const meta = rowMeta[data.row.index];
+              if (meta && meta.deptRgb) {
+                pdf.setFillColor(meta.deptRgb[0], meta.deptRgb[1], meta.deptRgb[2]);
+                pdf.rect(data.cell.x, data.cell.y, 4, data.cell.height, 'F');
+              }
             },
             margin: { left: 36, right: 36, bottom: 36 },
           });
@@ -600,7 +668,7 @@
       }
     }
 
-    // Offline fallback: clean light-mode print window
+    // Offline fallback: clean light-mode print window with department colors
     if (typeof window !== 'undefined' && typeof window.open === 'function') {
       const win = window.open('', '_blank');
       if (!win) {
@@ -610,13 +678,14 @@
       const tableRows = rows.map(({ item, depth }) => {
         const dept = item.deptId ? deptMap.get(item.deptId) : null;
         const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
+        const accent = dept && dept.color ? dept.color : '#cbd5e1';
         return `<tr>
-          <td style="font-family:monospace;font-weight:700">${esc(item.code)}</td>
+          <td style="font-family:monospace;font-weight:700;border-left:4px solid ${esc(accent)}">${esc(item.code)}</td>
           <td style="padding-left:${8 + depth * 16}px;font-weight:${depth === 0 ? 700 : 500}">${esc(item.name)}</td>
           <td>${esc(item.maturity)}</td>
-          <td>${dept ? esc(`[${dept.code}] ${dept.name}`) : '—'}</td>
-          <td>${esc(item.owner || '—')}</td>
-          <td>${ms ? esc(ms.title) : '—'}</td>
+          <td style="color:${dept && dept.color ? esc(dept.color) : '#475569'};font-weight:600">${dept ? esc(`[${dept.code}] ${dept.name}`) : '-'}</td>
+          <td>${esc(item.owner || '-')}</td>
+          <td>${ms ? esc(ms.title) : '-'}</td>
           <td>${esc(item.notes || '')}</td>
         </tr>`;
       }).join('');
@@ -791,15 +860,16 @@
       const tone = item.maturity === 'Qualified' || item.maturity === 'Delivered'
         ? 'ok'
         : (item.maturity === 'CDR' || item.maturity === 'PDR' ? 'warn' : 'idle');
+      const borderStyle = dept && dept.color ? ` style="border-left:4px solid ${esc(dept.color)}"` : '';
       return `
         <li>
-          <details class="pp-pbs-node" open>
+          <details class="pp-pbs-node" open${borderStyle}>
             <summary>
               <div class="pp-pbs-node-main">
                 <span class="pp-pbs-code">${esc(item.code)}</span>
                 <span class="pp-pbs-name">${esc(item.name)}</span>
                 <span class="pp-pbs-badge pp-pbs-badge-${tone}">${esc(item.maturity)}</span>
-                ${dept ? `<span class="pp-pbs-meta">[${esc(dept.code)}] ${esc(dept.name)}</span>` : ''}
+                ${dept ? `<span class="pp-pbs-meta" style="color:${esc(dept.color || '')};font-weight:700">[${esc(dept.code)}] ${esc(dept.name)}</span>` : ''}
                 ${item.owner ? `<span class="pp-pbs-meta">Owner: ${esc(item.owner)}</span>` : ''}
                 ${ms ? `<span class="pp-pbs-meta">◆ ${esc(ms.title)}</span>` : ''}
               </div>
@@ -1143,6 +1213,17 @@
 
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('focus', () => { pollActivePbsFile(); }, { passive: true });
+  }
+
+  if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
+    const wn = MANUAL_SECTIONS.find(s => s && s.id === 'whatsnew');
+    if (wn && typeof wn.bodyHtml === 'string' && !wn.bodyHtml.includes('Product Breakdown Structure (PBS)')) {
+      wn.keywords = `${wn.keywords || ''} pbs product breakdown structure pdf folder sync`;
+      wn.bodyHtml = wn.bodyHtml.replace(
+        '</ul>',
+        `<li>&bull; <strong>Per-Project Product Breakdown Structure (PBS):</strong> Open <strong>PBS</strong> on any project row in <strong>Setup &amp; Data &rarr; Projects</strong> to build a hierarchical deliverable tree saved in separate <code class="px-1 rounded bg-white font-mono">pbs_&lt;CODE&gt;.json</code> files, reusing your single AES-256-GCM session passphrase, with Chrome/Edge folder auto-sync, Firefox portable Load/Save, and department-coloured <strong>Export PDF</strong>.</li></ul>`
+      );
+    }
   }
 
   if (typeof globalThis !== 'undefined') {
