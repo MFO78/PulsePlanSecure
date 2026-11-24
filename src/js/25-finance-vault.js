@@ -1,19 +1,39 @@
-/* Isolated Dual-File Finance Vault: Separate AES-256-GCM encrypted file (Password B) for Day Rates & Project Costs. */
+/* Isolated Dual-File Finance Vault: Separate AES-256-GCM encrypted file (Password B) for Day Rates & Project Costs with auto-sync & strict main-DB stripping. */
 (function ppFinanceVaultModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
   const VAULT_VERSION = 1;
   const PBKDF2_ITERS = 250000;
   const FINANCE_PROJECT_KEYS = ['budget', 'cost', 'fixedCost', 'actualCost', 'targetCost', 'capex', 'opex'];
+  const SPLIT_FLAG_KEY = 'pulseplan_finance_split_enabled_v1';
 
   const state = {
     unlocked: false,
-    splitMode: false,
+    splitMode: loadSplitFlag(),
     fileHandle: null,
     fileName: 'pulseplan-finance.enc.json',
     password: '',
     lastPayload: null,
+    autoSaveTimer: null,
   };
+
+  function loadSplitFlag() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(SPLIT_FLAG_KEY) : localStorage.getItem(SPLIT_FLAG_KEY);
+      return raw === '1';
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function saveSplitFlag(val) {
+    state.splitMode = !!val;
+    try {
+      const s = state.splitMode ? '1' : '0';
+      if (typeof safeSetStorage === 'function') safeSetStorage(SPLIT_FLAG_KEY, s);
+      else localStorage.setItem(SPLIT_FLAG_KEY, s);
+    } catch (_e) {}
+  }
 
   function getDb() {
     if (typeof getActiveDB === 'function') return getActiveDB();
@@ -33,6 +53,19 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function persistMainDbClean() {
+    const db = getDb();
+    const backup = state.unlocked ? extractFinancialsFromDb(db) : null;
+    stripFinancialsFromDb(db);
+    if (typeof persistActiveDB === 'function') persistActiveDB();
+    else if (typeof saveLocalState === 'function') saveLocalState();
+    if (typeof nativeScheduleAutoSave === 'function') nativeScheduleAutoSave();
+    else if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    if (backup && state.unlocked) {
+      mergeFinancialsIntoDb(db, backup);
+    }
   }
 
   /* ---------- Web Crypto (PBKDF2-SHA256 + AES-256-GCM) ---------- */
@@ -124,9 +157,7 @@
       if (d && d.id && deptRates[d.id]) d.dayRate = deptRates[d.id].dayRate;
     });
     (db.projects || []).forEach(p => {
-      if (p && p.id && projectCosts[p.id]) {
-        Object.assign(p, projectCosts[p.id]);
-      }
+      if (p && p.id && projectCosts[p.id]) Object.assign(p, projectCosts[p.id]);
     });
   }
 
@@ -142,7 +173,7 @@
     });
   }
 
-  /* ---------- File I/O (File System Access API + Download Fallback) ---------- */
+  /* ---------- File I/O + Auto-Sync to Linked Finance File ---------- */
   async function saveEncryptedFinanceFile(encryptedText, pickNewFile) {
     if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
       if (pickNewFile || !state.fileHandle) {
@@ -167,6 +198,27 @@
     return a.download;
   }
 
+  async function autoSyncFinanceFile() {
+    if (!state.unlocked || !state.password || !state.fileHandle) return;
+    try {
+      const db = getDb();
+      const payload = extractFinancialsFromDb(db);
+      const encText = await encryptFinancePayload(payload, state.password);
+      const writable = await state.fileHandle.createWritable();
+      await writable.write(encText);
+      await writable.close();
+      state.lastPayload = payload;
+    } catch (_e) {
+      // Silent fallback if browser requires user gesture for file handle write
+    }
+  }
+
+  function scheduleFinanceAutoSync() {
+    if (!state.unlocked || !state.fileHandle) return;
+    clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = setTimeout(autoSyncFinanceFile, 800);
+  }
+
   async function pickAndReadFinanceFile() {
     if (typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function') {
       const [handle] = await window.showOpenFilePicker({
@@ -189,6 +241,25 @@
       };
       inp.click();
     });
+  }
+
+  /* ---------- Intercept Main DB Auto-Save so Financials NEVER Leak to Main File ---------- */
+  const nativeScheduleAutoSave = typeof scheduleAutoSave === 'function' ? scheduleAutoSave : null;
+  if (nativeScheduleAutoSave) {
+    scheduleAutoSave = function (...args) {
+      if (state.splitMode) {
+        scheduleFinanceAutoSync();
+        const db = getDb();
+        const backup = state.unlocked ? extractFinancialsFromDb(db) : null;
+        stripFinancialsFromDb(db);
+        const res = nativeScheduleAutoSave.apply(this, args);
+        if (backup && state.unlocked) {
+          setTimeout(() => mergeFinancialsIntoDb(db, backup), 50);
+        }
+        return res;
+      }
+      return nativeScheduleAutoSave.apply(this, args);
+    };
   }
 
   /* ---------- UI: Header Pill + Finance Vault Modal ---------- */
@@ -224,9 +295,9 @@
       header.appendChild(btn);
     }
     btn.className = `pp-fin-pill ${state.unlocked ? 'pp-fin-unlocked' : ''}`;
-    btn.textContent = state.unlocked ? '🔓 Finance Unlocked' : '🔒 Finance Vault';
+    btn.textContent = state.unlocked ? '🔓 Finance Unlocked (Auto-Sync)' : '🔒 Finance Vault';
     btn.title = state.unlocked
-      ? `Unlocked (${state.fileName}) — click to save or lock`
+      ? `Unlocked & auto-syncing to ${state.fileName} — click to save or lock`
       : 'Unlock or create a separate encrypted Finance Vault file (Password B)';
   }
 
@@ -242,9 +313,9 @@
     bg.className = 'pp-fin-modal-bg';
     bg.innerHTML = `
       <div class="pp-fin-modal" role="dialog" aria-modal="true" aria-label="Finance Vault">
-        <h3>${state.unlocked ? '🔓 Finance Vault (Unlocked)' : '🔒 Dual-File Finance Vault'}</h3>
+        <h3>${state.unlocked ? '🔓 Finance Vault (Unlocked & Auto-Syncing)' : '🔒 Dual-File Finance Vault'}</h3>
         <div style="font-size:12px;color:var(--text-muted,#64748b);line-height:1.45">
-          Store <strong>Department Day Rates</strong> and <strong>Project Costs/Budgets</strong> in a separate AES-256-GCM encrypted file (<code>${esc(state.fileName)}</code>) protected by <strong>Finance Password B</strong>.
+          Stores <strong>Department Day Rates</strong> and <strong>Project Costs/Budgets</strong> in <code>${esc(state.fileName)}</code> (AES-256-GCM, <strong>Password B</strong>) and strips them from the main synced database (<strong>Password A</strong>).
         </div>
         <div style="margin-top:.8rem">
           <label style="font-size:11.5px;font-weight:700" for="ppFinPasswordInput">Finance Password (Password B)</label>
@@ -253,9 +324,9 @@
         <div class="pp-fin-row">
           ${!state.unlocked
             ? `<button type="button" id="ppFinUnlockBtn" class="pp-fin-btn pp-fin-btn-emerald">Open &amp; Unlock Finance File</button>
-               <button type="button" id="ppFinSplitBtn" class="pp-fin-btn pp-fin-btn-primary">Create &amp; Split Finance File</button>`
-            : `<button type="button" id="ppFinSaveBtn" class="pp-fin-btn pp-fin-btn-primary">Save Finance File</button>
-               <button type="button" id="ppFinLockBtn" class="pp-fin-btn pp-fin-btn-rose">Lock Financials Now</button>`}
+               <button type="button" id="ppFinSplitBtn" class="pp-fin-btn pp-fin-btn-primary">Create, Split &amp; Strip Main DB</button>`
+            : `<button type="button" id="ppFinSaveBtn" class="pp-fin-btn pp-fin-btn-primary">Save Finance File Now</button>
+               <button type="button" id="ppFinLockBtn" class="pp-fin-btn pp-fin-btn-rose">Lock &amp; Strip Financials Now</button>`}
           <button type="button" id="ppFinCloseBtn" class="pp-fin-btn">Close</button>
         </div>
       </div>`;
@@ -273,13 +344,14 @@
         const payload = extractFinancialsFromDb(db);
         const encText = await encryptFinancePayload(payload, pw);
         const savedName = await saveEncryptedFinanceFile(encText, true);
+        saveSplitFlag(true);
         state.unlocked = true;
-        state.splitMode = true;
         state.password = pw;
         state.lastPayload = payload;
+        persistMainDbClean();
         updateHeaderPill();
         closeFinanceVaultModal();
-        toast(`Saved encrypted Finance Vault (${savedName}). Strip rates/costs from main file before syncing with Password A.`, 'success');
+        toast(`Saved ${savedName} & stripped financials from the main synced database.`, 'success');
       } catch (err) {
         toast(`Could not create Finance Vault: ${err.message || err}`, 'error');
       }
@@ -293,14 +365,14 @@
         const payload = await decryptFinancePayload(raw, pw);
         const db = getDb();
         mergeFinancialsIntoDb(db, payload);
+        saveSplitFlag(true);
         state.unlocked = true;
-        state.splitMode = true;
         state.password = pw;
         state.lastPayload = payload;
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         closeFinanceVaultModal();
-        toast(`Finance Vault unlocked (${state.fileName}).`, 'success');
+        toast(`Finance Vault unlocked & linked for auto-sync (${state.fileName}).`, 'success');
       } catch (_err) {
         toast('Decryption failed. Check Finance Password B and file.', 'error');
       }
@@ -324,15 +396,14 @@
     });
 
     bg.querySelector('#ppFinLockBtn')?.addEventListener('click', () => {
-      const db = getDb();
-      stripFinancialsFromDb(db);
       state.unlocked = false;
       state.password = '';
       state.lastPayload = null;
+      persistMainDbClean();
       if (typeof renderAll === 'function') renderAll();
       updateHeaderPill();
       closeFinanceVaultModal();
-      toast('Financials locked and cleared from memory.', 'info');
+      toast('Financials locked, cleared from memory, and stripped from main synced DB.', 'info');
     });
   }
 
