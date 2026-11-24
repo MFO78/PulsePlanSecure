@@ -5,6 +5,7 @@
   const VAULT_VERSION = 2;
   const PBKDF2_ITERS = 250000;
   const SPLIT_FLAG_KEY = 'pulseplan_finance_split_enabled_v1';
+  const FIN_LOG_RE = /(€|\$|£|day\s*rate|dayrate|budget\s*cost|budgetcost|cost\s*budget|\brate\b|\bcost\b|\bbudget\b)/i;
 
   const state = {
     unlocked: false,
@@ -109,7 +110,7 @@
     return JSON.parse(new TextDecoder().decode(plainBuf));
   }
 
-  /* ---------- Exact Financial Schema (dayRate & budgetCost) ---------- */
+  /* ---------- Exact Financial Schema (dayRate & budgetCost) + ChangeLog Redaction ---------- */
   function extractFinancialsFromDb(db) {
     const deptRates = {};
     (db.departments || []).forEach(d => {
@@ -151,6 +152,15 @@
     (db.projects || []).forEach(p => {
       if (p) p.budgetCost = 0;
     });
+    if (Array.isArray(db.changeLog)) {
+      db.changeLog.forEach(entry => {
+        if (!entry) return;
+        const txt = `${entry.type || ''} ${entry.summary || ''}`;
+        if (FIN_LOG_RE.test(txt)) {
+          entry.summary = '[Financial change redacted — Finance Vault]';
+        }
+      });
+    }
   }
 
   /* ---------- Hard Cryptographic Gate: Strip Before Main Password-A Encryption ---------- */
@@ -303,7 +313,7 @@
       <div class="pp-fin-modal" role="dialog" aria-modal="true" aria-label="Finance Vault">
         <h3>${state.unlocked ? '🔓 Finance Vault (Unlocked)' : '🔒 Dual-File Finance Vault'}</h3>
         <div style="font-size:12px;color:var(--text-muted,#64748b);line-height:1.45">
-          Stores <strong>Department Day Rates</strong> (<code>dayRate</code>) and <strong>Project Cost Budgets</strong> (<code>budgetCost</code>) in <code>${esc(state.fileName)}</code> (AES-256-GCM, <strong>Password B</strong>) and strips them from the main synced database (<strong>Password A</strong>).
+          Stores <strong>Department Day Rates</strong> (<code>dayRate</code>) and <strong>Project Cost Budgets</strong> (<code>budgetCost</code>) in <code>${esc(state.fileName)}</code> (AES-256-GCM, <strong>Password B</strong>) and strips them (plus financial ChangeLog entries) from the main synced database (<strong>Password A</strong>).
         </div>
         <div style="margin-top:.8rem">
           <label style="font-size:11.5px;font-weight:700" for="ppFinPasswordInput">Finance Password (Password B)</label>
@@ -363,7 +373,7 @@
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         closeFinanceVaultModal();
-        toast(`Saved ${savedName} & directly wrote stripped main database (0 day rates / 0 cost budgets).`, 'success');
+        toast(`Saved ${savedName} & stripped financials + financial log entries from main DB.`, 'success');
       } catch (err) {
         toast(`Could not create Finance Vault: ${err.message || err}`, 'error');
       }
@@ -416,7 +426,7 @@
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         closeFinanceVaultModal();
-        toast('Financials locked and stripped directly from the main synced file.', 'info');
+        toast('Financials locked and stripped (including financial log entries) from main synced file.', 'info');
       } catch (err) {
         toast(`Lock/strip error: ${err.message || err}`, 'error');
       }
