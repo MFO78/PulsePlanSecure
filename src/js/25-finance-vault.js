@@ -1,11 +1,12 @@
-/* Isolated Dual-File Finance Vault: Separate AES-256-GCM encrypted file (Password B) for Day Rates & Project Costs with auto-sync & strict main-DB stripping. */
+/* Isolated Dual-File Finance Vault: Separate AES-256-GCM encrypted file (Password B) for Day Rates & Project Costs with strict stripping & password confirmation. */
 (function ppFinanceVaultModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
-  const VAULT_VERSION = 1;
+  const VAULT_VERSION = 2;
   const PBKDF2_ITERS = 250000;
-  const FINANCE_PROJECT_KEYS = ['budget', 'cost', 'fixedCost', 'actualCost', 'targetCost', 'capex', 'opex'];
   const SPLIT_FLAG_KEY = 'pulseplan_finance_split_enabled_v1';
+  const FIN_KEY_RE = /(dayrate|dailyrate|hourlyrate|costrate|rate|budget|cost|capex|opex|spend|price|fee)/i;
+  const FIN_KEY_EXCLUDE_RE = /(separate|generate|operate|migrate|collaborate|decorate|priority|duration|color|colour|code|name|id|date|status|owner|lead|note|desc)/i;
 
   const state = {
     unlocked: false,
@@ -16,6 +17,10 @@
     lastPayload: null,
     autoSaveTimer: null,
   };
+
+  function isFinancialKey(k) {
+    return FIN_KEY_RE.test(k) && !FIN_KEY_EXCLUDE_RE.test(k);
+  }
 
   function loadSplitFlag() {
     try {
@@ -38,7 +43,7 @@
   function getDb() {
     if (typeof getActiveDB === 'function') return getActiveDB();
     if (typeof liveDB !== 'undefined' && liveDB) return liveDB;
-    return { departments: [], projects: [] };
+    return { departments: [], projects: [], settings: {} };
   }
 
   function toast(msg, type) {
@@ -55,16 +60,13 @@
       .replace(/'/g, '&#39;');
   }
 
-  function persistMainDbClean() {
-    const db = getDb();
-    const backup = state.unlocked ? extractFinancialsFromDb(db) : null;
-    stripFinancialsFromDb(db);
+  function persistMainDbNow() {
     if (typeof persistActiveDB === 'function') persistActiveDB();
     else if (typeof saveLocalState === 'function') saveLocalState();
     if (typeof nativeScheduleAutoSave === 'function') nativeScheduleAutoSave();
     else if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
-    if (backup && state.unlocked) {
-      mergeFinancialsIntoDb(db, backup);
+    if (typeof syncSaveNow === 'function') {
+      try { syncSaveNow(); } catch (_e) {}
     }
   }
 
@@ -126,51 +128,78 @@
     return JSON.parse(new TextDecoder().decode(plainBuf));
   }
 
-  /* ---------- Extract / Merge / Strip Financial Fields ---------- */
+  /* ---------- Extract / Merge / Strip ALL Financial Fields ---------- */
   function extractFinancialsFromDb(db) {
     const deptRates = {};
     (db.departments || []).forEach(d => {
       if (!d || !d.id) return;
-      if (d.dayRate !== undefined && d.dayRate !== null && d.dayRate !== '') {
-        deptRates[d.id] = { dayRate: Number(d.dayRate) || 0 };
-      }
+      const entry = {};
+      Object.keys(d).forEach(k => {
+        if (isFinancialKey(k) && d[k] !== undefined && d[k] !== null && d[k] !== '') {
+          entry[k] = d[k];
+        }
+      });
+      if (Object.keys(entry).length > 0) deptRates[d.id] = entry;
     });
 
     const projectCosts = {};
     (db.projects || []).forEach(p => {
       if (!p || !p.id) return;
       const entry = {};
-      FINANCE_PROJECT_KEYS.forEach(k => {
-        if (p[k] !== undefined && p[k] !== null && p[k] !== '') entry[k] = p[k];
+      Object.keys(p).forEach(k => {
+        if (isFinancialKey(k) && p[k] !== undefined && p[k] !== null && p[k] !== '') {
+          entry[k] = p[k];
+        }
       });
       if (Object.keys(entry).length > 0) projectCosts[p.id] = entry;
     });
 
-    return { deptRates, projectCosts, exportedAt: new Date().toISOString() };
+    const settingsFin = {};
+    if (db.settings && typeof db.settings === 'object') {
+      Object.keys(db.settings).forEach(k => {
+        if (isFinancialKey(k) && db.settings[k] !== undefined && db.settings[k] !== null && db.settings[k] !== '') {
+          settingsFin[k] = db.settings[k];
+        }
+      });
+    }
+
+    return { deptRates, projectCosts, settingsFin, exportedAt: new Date().toISOString() };
   }
 
   function mergeFinancialsIntoDb(db, payload) {
     if (!payload || typeof payload !== 'object') return;
     const deptRates = payload.deptRates || {};
     const projectCosts = payload.projectCosts || {};
+    const settingsFin = payload.settingsFin || {};
     (db.departments || []).forEach(d => {
-      if (d && d.id && deptRates[d.id]) d.dayRate = deptRates[d.id].dayRate;
+      if (d && d.id && deptRates[d.id]) Object.assign(d, deptRates[d.id]);
     });
     (db.projects || []).forEach(p => {
       if (p && p.id && projectCosts[p.id]) Object.assign(p, projectCosts[p.id]);
     });
+    if (db.settings && typeof db.settings === 'object') {
+      Object.assign(db.settings, settingsFin);
+    }
   }
 
   function stripFinancialsFromDb(db) {
     (db.departments || []).forEach(d => {
-      if (d) d.dayRate = 0;
+      if (!d) return;
+      Object.keys(d).forEach(k => {
+        if (isFinancialKey(k)) d[k] = 0;
+      });
     });
     (db.projects || []).forEach(p => {
       if (!p) return;
-      FINANCE_PROJECT_KEYS.forEach(k => {
-        if (k in p) p[k] = 0;
+      Object.keys(p).forEach(k => {
+        if (isFinancialKey(k)) p[k] = 0;
       });
     });
+    if (db.settings && typeof db.settings === 'object') {
+      Object.keys(db.settings).forEach(k => {
+        if (isFinancialKey(k)) db.settings[k] = 0;
+      });
+    }
   }
 
   /* ---------- File I/O + Auto-Sync to Linked Finance File ---------- */
@@ -208,9 +237,7 @@
       await writable.write(encText);
       await writable.close();
       state.lastPayload = payload;
-    } catch (_e) {
-      // Silent fallback if browser requires user gesture for file handle write
-    }
+    } catch (_e) {}
   }
 
   function scheduleFinanceAutoSync() {
@@ -243,26 +270,17 @@
     });
   }
 
-  /* ---------- Intercept Main DB Auto-Save so Financials NEVER Leak to Main File ---------- */
   const nativeScheduleAutoSave = typeof scheduleAutoSave === 'function' ? scheduleAutoSave : null;
   if (nativeScheduleAutoSave) {
     scheduleAutoSave = function (...args) {
-      if (state.splitMode) {
+      if (state.splitMode && state.unlocked) {
         scheduleFinanceAutoSync();
-        const db = getDb();
-        const backup = state.unlocked ? extractFinancialsFromDb(db) : null;
-        stripFinancialsFromDb(db);
-        const res = nativeScheduleAutoSave.apply(this, args);
-        if (backup && state.unlocked) {
-          setTimeout(() => mergeFinancialsIntoDb(db, backup), 50);
-        }
-        return res;
       }
       return nativeScheduleAutoSave.apply(this, args);
     };
   }
 
-  /* ---------- UI: Header Pill + Finance Vault Modal ---------- */
+  /* ---------- UI: Header Pill + Finance Vault Modal (with Repeat Password & Show/Hide) ---------- */
   function injectStyles() {
     if (document.getElementById('ppFinVaultStyles')) return;
     const style = document.createElement('style');
@@ -271,10 +289,12 @@
       .pp-fin-pill { display: inline-flex; align-items: center; gap: .35rem; padding: .32rem .68rem; border-radius: 999px; font-size: 11px; font-weight: 700; cursor: pointer; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; }
       .pp-fin-pill.pp-fin-unlocked { border-color: #6ee7b7; background: #ecfdf5; color: #047857; }
       .pp-fin-modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 1rem; }
-      .pp-fin-modal { width: 100%; max-width: 480px; border-radius: 1rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); border: 1px solid var(--border-subtle, #e2e8f0); padding: 1.25rem; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+      .pp-fin-modal { width: 100%; max-width: 500px; border-radius: 1rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); border: 1px solid var(--border-subtle, #e2e8f0); padding: 1.25rem; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
       .pp-fin-modal h3 { margin: 0 0 .35rem; font-size: 15px; font-weight: 800; }
-      .pp-fin-field { width: 100%; padding: .48rem .7rem; border-radius: .6rem; border: 1px solid #cbd5e1; background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 12.5px; margin-top: .35rem; }
-      .pp-fin-row { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .85rem; }
+      .pp-fin-pw-wrap { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; }
+      .pp-fin-field { flex: 1; padding: .48rem .7rem; border-radius: .6rem; border: 1px solid #cbd5e1; background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 12.5px; }
+      .pp-fin-eye { padding: .45rem .65rem; border-radius: .6rem; border: 1px solid #cbd5e1; background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+      .pp-fin-row { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .95rem; }
       .pp-fin-btn { padding: .45rem .8rem; border-radius: .6rem; border: 1px solid #cbd5e1; background: #ffffff; color: #334155; font-size: 12px; font-weight: 700; cursor: pointer; }
       .pp-fin-btn-primary { border-color: #4f46e5; background: #4f46e5; color: #ffffff; }
       .pp-fin-btn-emerald { border-color: #059669; background: #059669; color: #ffffff; }
@@ -295,7 +315,7 @@
       header.appendChild(btn);
     }
     btn.className = `pp-fin-pill ${state.unlocked ? 'pp-fin-unlocked' : ''}`;
-    btn.textContent = state.unlocked ? '🔓 Finance Unlocked (Auto-Sync)' : '🔒 Finance Vault';
+    btn.textContent = state.unlocked ? '🔓 Finance Unlocked' : '🔒 Finance Vault';
     btn.title = state.unlocked
       ? `Unlocked & auto-syncing to ${state.fileName} — click to save or lock`
       : 'Unlock or create a separate encrypted Finance Vault file (Password B)';
@@ -313,14 +333,24 @@
     bg.className = 'pp-fin-modal-bg';
     bg.innerHTML = `
       <div class="pp-fin-modal" role="dialog" aria-modal="true" aria-label="Finance Vault">
-        <h3>${state.unlocked ? '🔓 Finance Vault (Unlocked & Auto-Syncing)' : '🔒 Dual-File Finance Vault'}</h3>
+        <h3>${state.unlocked ? '🔓 Finance Vault (Unlocked)' : '🔒 Dual-File Finance Vault'}</h3>
         <div style="font-size:12px;color:var(--text-muted,#64748b);line-height:1.45">
-          Stores <strong>Department Day Rates</strong> and <strong>Project Costs/Budgets</strong> in <code>${esc(state.fileName)}</code> (AES-256-GCM, <strong>Password B</strong>) and strips them from the main synced database (<strong>Password A</strong>).
+          Stores all <strong>Day Rates</strong> and <strong>Project Costs/Budgets</strong> in <code>${esc(state.fileName)}</code> (AES-256-GCM, <strong>Password B</strong>) and strips them from the main synced database (<strong>Password A</strong>).
         </div>
         <div style="margin-top:.8rem">
           <label style="font-size:11.5px;font-weight:700" for="ppFinPasswordInput">Finance Password (Password B)</label>
-          <input id="ppFinPasswordInput" type="password" class="pp-fin-field" placeholder="Enter Finance Password B..." autocomplete="off" />
+          <div class="pp-fin-pw-wrap">
+            <input id="ppFinPasswordInput" type="password" class="pp-fin-field" placeholder="Enter Finance Password B..." autocomplete="off" />
+            <button type="button" id="ppFinTogglePwBtn" class="pp-fin-eye" aria-label="Show or hide password">Show</button>
+          </div>
         </div>
+        ${!state.unlocked ? `
+        <div style="margin-top:.65rem">
+          <label style="font-size:11.5px;font-weight:700" for="ppFinPasswordConfirm">Repeat Password B (required when creating a new Finance File)</label>
+          <div class="pp-fin-pw-wrap">
+            <input id="ppFinPasswordConfirm" type="password" class="pp-fin-field" placeholder="Repeat Finance Password B..." autocomplete="off" />
+          </div>
+        </div>` : ''}
         <div class="pp-fin-row">
           ${!state.unlocked
             ? `<button type="button" id="ppFinUnlockBtn" class="pp-fin-btn pp-fin-btn-emerald">Open &amp; Unlock Finance File</button>
@@ -334,31 +364,47 @@
     bg.addEventListener('click', (ev) => { if (ev.target === bg) closeFinanceVaultModal(); });
     document.body.appendChild(bg);
 
+    const pwInput = bg.querySelector('#ppFinPasswordInput');
+    const pwConfirm = bg.querySelector('#ppFinPasswordConfirm');
+    const toggleBtn = bg.querySelector('#ppFinTogglePwBtn');
+
+    toggleBtn?.addEventListener('click', () => {
+      const showing = pwInput.type === 'text';
+      pwInput.type = showing ? 'password' : 'text';
+      if (pwConfirm) pwConfirm.type = showing ? 'password' : 'text';
+      toggleBtn.textContent = showing ? 'Show' : 'Hide';
+    });
+
     bg.querySelector('#ppFinCloseBtn')?.addEventListener('click', closeFinanceVaultModal);
 
     bg.querySelector('#ppFinSplitBtn')?.addEventListener('click', async () => {
-      const pw = (bg.querySelector('#ppFinPasswordInput')?.value || '').trim();
+      const pw = (pwInput?.value || '').trim();
+      const pw2 = (pwConfirm?.value || '').trim();
       if (pw.length < 6) return toast('Enter a Finance Password of at least 6 characters.', 'error');
+      if (pw !== pw2) return toast('Passwords do not match. Please repeat Password B carefully.', 'error');
       try {
         const db = getDb();
         const payload = extractFinancialsFromDb(db);
         const encText = await encryptFinancePayload(payload, pw);
         const savedName = await saveEncryptedFinanceFile(encText, true);
         saveSplitFlag(true);
-        state.unlocked = true;
-        state.password = pw;
-        state.lastPayload = payload;
-        persistMainDbClean();
+        // Strip and lock immediately so the main DB auto-save writes ZERO financial data
+        stripFinancialsFromDb(db);
+        state.unlocked = false;
+        state.password = '';
+        state.lastPayload = null;
+        persistMainDbNow();
+        if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         closeFinanceVaultModal();
-        toast(`Saved ${savedName} & stripped financials from the main synced database.`, 'success');
+        toast(`Saved ${savedName}, stripped all financials from main DB, and locked. Wait for main sync to finish before refreshing.`, 'success');
       } catch (err) {
         toast(`Could not create Finance Vault: ${err.message || err}`, 'error');
       }
     });
 
     bg.querySelector('#ppFinUnlockBtn')?.addEventListener('click', async () => {
-      const pw = (bg.querySelector('#ppFinPasswordInput')?.value || '').trim();
+      const pw = (pwInput?.value || '').trim();
       if (!pw) return toast('Enter Finance Password B.', 'error');
       try {
         const raw = await pickAndReadFinanceFile();
@@ -379,7 +425,7 @@
     });
 
     bg.querySelector('#ppFinSaveBtn')?.addEventListener('click', async () => {
-      const pw = (bg.querySelector('#ppFinPasswordInput')?.value || '').trim() || state.password;
+      const pw = (pwInput?.value || '').trim() || state.password;
       if (!pw) return toast('Enter Finance Password B to save.', 'error');
       try {
         const db = getDb();
@@ -396,14 +442,16 @@
     });
 
     bg.querySelector('#ppFinLockBtn')?.addEventListener('click', () => {
+      const db = getDb();
+      stripFinancialsFromDb(db);
       state.unlocked = false;
       state.password = '';
       state.lastPayload = null;
-      persistMainDbClean();
+      persistMainDbNow();
       if (typeof renderAll === 'function') renderAll();
       updateHeaderPill();
       closeFinanceVaultModal();
-      toast('Financials locked, cleared from memory, and stripped from main synced DB.', 'info');
+      toast('Financials locked, stripped from main DB, and queued for main sync.', 'info');
     });
   }
 
@@ -418,6 +466,7 @@
 
   if (typeof globalThis !== 'undefined') {
     globalThis.__ppFinanceVaultTestApi = {
+      isFinancialKey,
       encryptFinancePayload,
       decryptFinancePayload,
       extractFinancialsFromDb,
