@@ -3,11 +3,8 @@
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
   const PEOPLE_KEY = 'pulseplan_people_dir_v1';
-  const PROJ_PEOPLE_KEY = 'pulseplan_proj_people_v1';
   const ROLES = ['Both', 'Project Owner', 'Technical Lead'];
   let peopleList = loadPeople();
-  let projPeopleMap = loadProjPeopleMap();
-  let currentEditingProjectId = '';
 
   function esc(str) {
     if (typeof escapeHtml === 'function') return escapeHtml(String(str ?? ''));
@@ -60,46 +57,6 @@
     } catch (_e) {}
   }
 
-  function loadProjPeopleMap() {
-    try {
-      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PROJ_PEOPLE_KEY) : localStorage.getItem(PROJ_PEOPLE_KEY);
-      const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_e) {
-      return {};
-    }
-  }
-
-  function saveProjPeopleMap() {
-    try {
-      const raw = JSON.stringify(projPeopleMap);
-      if (typeof safeSetStorage === 'function') safeSetStorage(PROJ_PEOPLE_KEY, raw);
-      else localStorage.setItem(PROJ_PEOPLE_KEY, raw);
-    } catch (_e) {}
-  }
-
-  function getProjectPeople(projectId) {
-    const db = getDb();
-    const proj = (db.projects || []).find(p => p.id === projectId) || null;
-    const saved = projPeopleMap[projectId] || {};
-    return {
-      owner: String((proj && proj.owner) || saved.owner || '').trim(),
-      techLead: String((proj && proj.techLead) || saved.techLead || '').trim(),
-    };
-  }
-
-  function setProjectPeople(projectId, owner, techLead) {
-    if (!projectId) return;
-    projPeopleMap[projectId] = { owner: String(owner || '').trim(), techLead: String(techLead || '').trim() };
-    saveProjPeopleMap();
-    const db = getDb();
-    const proj = (db.projects || []).find(p => p.id === projectId);
-    if (proj) {
-      proj.owner = projPeopleMap[projectId].owner;
-      proj.techLead = projPeopleMap[projectId].techLead;
-    }
-  }
-
   function seedPeopleFromProjects() {
     const db = getDb();
     if (db && Array.isArray(db.peopleDirectory) && db.peopleDirectory.length > 0 && peopleList.length === 0) {
@@ -110,9 +67,8 @@
     const existingNames = new Map(peopleList.map(p => [p.name.trim().toLowerCase(), p]));
     let changed = false;
     (db.projects || []).forEach(p => {
-      const assigned = getProjectPeople(p.id);
-      const owner = assigned.owner;
-      const lead = assigned.techLead;
+      const owner = String(p.owner || p.projectOwner || '').trim();
+      const lead = String(p.techLead || p.technicalLead || p.lead || '').trim();
       if (owner) {
         const key = owner.toLowerCase();
         if (!existingNames.has(key)) {
@@ -165,14 +121,7 @@
       .pp-people-table { width: 100%; border-collapse: collapse; font-size: 12px; }
       .pp-people-table th, .pp-people-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; }
       .pp-people-table th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); }
-      .pp-proj-people-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .65rem; margin: .65rem 0; padding: .65rem .75rem; border-radius: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
-      .pp-proj-people-field { display: flex; flex-direction: column; gap: .25rem; }
-      .pp-proj-people-field label { font-size: 11px; font-weight: 700; color: var(--text-muted, #475569); }
-      .pp-proj-people-field select { width: 100%; padding: .4rem .55rem; border-radius: .6rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); font-size: 12px; }
-      .pp-proj-people-badges { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .2rem; }
-      .pp-proj-people-pill { display: inline-flex; align-items: center; padding: .1rem .4rem; border-radius: .35rem; font-size: 10px; font-weight: 600; background: #eef2ff; color: #4338ca; }
       html.dark .pp-bulk-bar, body.dark .pp-bulk-bar { background: rgba(79,70,229,.22); border-color: rgba(129,140,248,.4); color: #e0e7ff; }
-      html.dark .pp-proj-people-pill, body.dark .pp-proj-people-pill { background: rgba(99,102,241,.22); color: #c7d2fe; }
     `;
     document.head.appendChild(style);
   }
@@ -289,83 +238,65 @@
     });
   }
 
-  /* ---------- Guaranteed Project Owner & Technical Lead Dropdowns in Project Modal ---------- */
-  function buildOptionsHtml(roleFilter, selectedVal) {
+  /* ---------- Replace Project Owner & Technical Lead Inputs with Native Dropdowns ---------- */
+  function findInputByLabelText(labelText) {
+    const target = labelText.toLowerCase();
+    const labels = Array.from(document.querySelectorAll('label'));
+    for (let i = 0; i < labels.length; i++) {
+      const lbl = labels[i];
+      if (String(lbl.textContent || '').trim().toLowerCase() === target) {
+        const forId = lbl.getAttribute('for');
+        if (forId) {
+          const el = document.getElementById(forId);
+          if (el && el.tagName === 'INPUT') return el;
+        }
+        const siblingInput = lbl.parentElement ? lbl.parentElement.querySelector('input') : null;
+        if (siblingInput) return siblingInput;
+      }
+    }
+    return null;
+  }
+
+  function convertInputToDirectoryDropdown(inputEl, roleFilter, selectId) {
+    if (!inputEl || !inputEl.parentElement) return;
+    seedPeopleFromProjects();
+    let sel = inputEl.parentElement.querySelector(`select[data-pp-dir-for="${selectId}"]`);
+    if (!sel) {
+      sel = document.createElement('select');
+      sel.setAttribute('data-pp-dir-for', selectId);
+      sel.className = inputEl.className || 'w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm';
+      sel.setAttribute('aria-label', roleFilter);
+      sel.addEventListener('change', () => {
+        inputEl.value = sel.value;
+        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      inputEl.style.display = 'none';
+      inputEl.parentElement.insertBefore(sel, inputEl.nextSibling);
+    }
+    const currentVal = String(inputEl.value || '').trim();
     const matching = peopleList.filter(p => p.role === 'Both' || p.role === roleFilter);
-    const hasCurrent = selectedVal && !matching.some(p => p.name === selectedVal);
-    return [
-      `<option value="">— Unassigned —</option>`,
-      ...matching.map(p => `<option value="${esc(p.name)}" ${p.name === selectedVal ? 'selected' : ''}>${esc(p.name)}</option>`),
-      hasCurrent ? `<option value="${esc(selectedVal)}" selected>${esc(selectedVal)}</option>` : '',
+    const hasCurrent = currentVal && !matching.some(p => p.name === currentVal);
+    sel.innerHTML = [
+      `<option value="">Optional — Select ${esc(roleFilter)}</option>`,
+      ...matching.map(p => `<option value="${esc(p.name)}" ${p.name === currentVal ? 'selected' : ''}>${esc(p.name)}</option>`),
+      hasCurrent ? `<option value="${esc(currentVal)}" selected>${esc(currentVal)}</option>` : '',
     ].join('');
   }
 
-  function injectProjectModalDropdowns(projectId) {
-    injectStyles();
-    seedPeopleFromProjects();
-    currentEditingProjectId = projectId || '';
-
-    const modal = document.getElementById('projectModal')
-      || document.querySelector('dialog#projectModal, dialog[open]');
-    if (!modal) return;
-    const form = modal.querySelector('form') || modal;
-
-    let row = document.getElementById('ppProjectPeopleRow');
-    if (!row) {
-      row = document.createElement('div');
-      row.id = 'ppProjectPeopleRow';
-      row.className = 'pp-proj-people-row';
-      row.innerHTML = `
-        <div class="pp-proj-people-field">
-          <label for="ppProjOwnerSelect">Project Owner</label>
-          <select id="ppProjOwnerSelect" name="ppProjOwner"></select>
-        </div>
-        <div class="pp-proj-people-field">
-          <label for="ppProjLeadSelect">Technical Lead</label>
-          <select id="ppProjLeadSelect" name="ppProjLead"></select>
-        </div>`;
-      const submitBtn = form.querySelector('button[type="submit"]');
-      const footer = submitBtn ? submitBtn.closest('div') : null;
-      if (footer && footer.parentElement === form) {
-        form.insertBefore(row, footer);
-      } else {
-        form.appendChild(row);
-      }
-    }
-
-    const assigned = projectId ? getProjectPeople(projectId) : { owner: '', techLead: '' };
-    const ownerSel = row.querySelector('#ppProjOwnerSelect');
-    const leadSel = row.querySelector('#ppProjLeadSelect');
-    if (ownerSel) ownerSel.innerHTML = buildOptionsHtml('Project Owner', assigned.owner);
-    if (leadSel) leadSel.innerHTML = buildOptionsHtml('Technical Lead', assigned.techLead);
-
-    if (!form.__ppPeopleSubmitWired) {
-      form.__ppPeopleSubmitWired = true;
-      form.addEventListener('submit', () => {
-        const ownerVal = (document.getElementById('ppProjOwnerSelect')?.value || '').trim();
-        const leadVal = (document.getElementById('ppProjLeadSelect')?.value || '').trim();
-        const editedId = currentEditingProjectId;
-        setTimeout(() => {
-          const db = getDb();
-          const projects = db.projects || [];
-          let targetId = editedId;
-          if (!targetId && projects.length > 0) {
-            targetId = projects[projects.length - 1].id;
-          }
-          if (targetId) {
-            setProjectPeople(targetId, ownerVal, leadVal);
-            persistAppChanges();
-          }
-        }, 0);
-      });
-    }
+  function enhanceProjectModalFields() {
+    const ownerInput = findInputByLabelText('Project Owner');
+    const leadInput = findInputByLabelText('Technical Lead');
+    if (ownerInput) convertInputToDirectoryDropdown(ownerInput, 'Project Owner', 'owner');
+    if (leadInput) convertInputToDirectoryDropdown(leadInput, 'Technical Lead', 'techLead');
   }
 
   if (typeof openProjectModal === 'function') {
     const nativeOpenProjectModal = openProjectModal;
-    openProjectModal = function (projectId, ...rest) {
-      const res = nativeOpenProjectModal.call(this, projectId, ...rest);
-      injectProjectModalDropdowns(projectId || '');
+    openProjectModal = function (...args) {
+      const res = nativeOpenProjectModal.apply(this, args);
+      enhanceProjectModalFields();
+      setTimeout(enhanceProjectModalFields, 0);
       return res;
     };
   }
@@ -482,29 +413,13 @@
     }
 
     tbody.querySelectorAll('tr').forEach(tr => {
+      if (tr.querySelector(`[data-pp-row-cb="${listKey}"]`)) return;
       const rowId = extractRowId(tr, listKey);
       if (!rowId) return;
-      if (!tr.querySelector(`[data-pp-row-cb="${listKey}"]`)) {
-        const td = document.createElement('td');
-        td.className = 'pp-sel-col';
-        td.innerHTML = `<input type="checkbox" class="pp-sel-cb" data-pp-row-cb="${listKey}" value="${esc(rowId)}" aria-label="Select row" />`;
-        tr.insertBefore(td, tr.firstChild);
-      }
-      if (listKey === 'projects' && !tr.querySelector('.pp-proj-people-badges')) {
-        const assigned = getProjectPeople(rowId);
-        if (assigned.owner || assigned.techLead) {
-          const nameCell = tr.children[2] || tr.children[1];
-          if (nameCell) {
-            const wrap = document.createElement('div');
-            wrap.className = 'pp-proj-people-badges';
-            wrap.innerHTML = [
-              assigned.owner ? `<span class="pp-proj-people-pill">Owner: ${esc(assigned.owner)}</span>` : '',
-              assigned.techLead ? `<span class="pp-proj-people-pill">Lead: ${esc(assigned.techLead)}</span>` : '',
-            ].join('');
-            nameCell.appendChild(wrap);
-          }
-        }
-      }
+      const td = document.createElement('td');
+      td.className = 'pp-sel-col';
+      td.innerHTML = `<input type="checkbox" class="pp-sel-cb" data-pp-row-cb="${listKey}" value="${esc(rowId)}" aria-label="Select row" />`;
+      tr.insertBefore(td, tr.firstChild);
     });
 
     wireBulkEventsForList(
@@ -568,8 +483,7 @@
     globalThis.__ppSetupDirTestApi = {
       getPeople: () => peopleList.slice(),
       addPerson(name, role) { peopleList.push({ id: makeId('ppl'), name, role: role || 'Both' }); savePeople(); },
-      setProjectPeople,
-      getProjectPeople,
+      enhanceProjectModalFields,
     };
   }
 })();
