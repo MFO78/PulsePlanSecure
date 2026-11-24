@@ -1,10 +1,13 @@
-/* Isolated Setup & Data enhancements: Project Owners & Technical Leads Directory + Multi-Select Bulk Actions. */
+/* Isolated Setup & Data enhancements: Project Owners & Technical Leads Directory + Dropdowns + Multi-Select Bulk Actions. */
 (function ppSetupDirectoryBulkModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
   const PEOPLE_KEY = 'pulseplan_people_dir_v1';
-  const ROLES = ['Project Owner', 'Technical Lead', 'Both'];
+  const PROJ_PEOPLE_KEY = 'pulseplan_proj_people_v1';
+  const ROLES = ['Both', 'Project Owner', 'Technical Lead'];
   let peopleList = loadPeople();
+  let projPeopleMap = loadProjPeopleMap();
+  let currentEditingProjectId = '';
 
   function esc(str) {
     if (typeof escapeHtml === 'function') return escapeHtml(String(str ?? ''));
@@ -57,6 +60,46 @@
     } catch (_e) {}
   }
 
+  function loadProjPeopleMap() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PROJ_PEOPLE_KEY) : localStorage.getItem(PROJ_PEOPLE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_e) {
+      return {};
+    }
+  }
+
+  function saveProjPeopleMap() {
+    try {
+      const raw = JSON.stringify(projPeopleMap);
+      if (typeof safeSetStorage === 'function') safeSetStorage(PROJ_PEOPLE_KEY, raw);
+      else localStorage.setItem(PROJ_PEOPLE_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function getProjectPeople(projectId) {
+    const db = getDb();
+    const proj = (db.projects || []).find(p => p.id === projectId) || null;
+    const saved = projPeopleMap[projectId] || {};
+    return {
+      owner: String((proj && proj.owner) || saved.owner || '').trim(),
+      techLead: String((proj && proj.techLead) || saved.techLead || '').trim(),
+    };
+  }
+
+  function setProjectPeople(projectId, owner, techLead) {
+    if (!projectId) return;
+    projPeopleMap[projectId] = { owner: String(owner || '').trim(), techLead: String(techLead || '').trim() };
+    saveProjPeopleMap();
+    const db = getDb();
+    const proj = (db.projects || []).find(p => p.id === projectId);
+    if (proj) {
+      proj.owner = projPeopleMap[projectId].owner;
+      proj.techLead = projPeopleMap[projectId].techLead;
+    }
+  }
+
   function seedPeopleFromProjects() {
     const db = getDb();
     if (db && Array.isArray(db.peopleDirectory) && db.peopleDirectory.length > 0 && peopleList.length === 0) {
@@ -67,8 +110,9 @@
     const existingNames = new Map(peopleList.map(p => [p.name.trim().toLowerCase(), p]));
     let changed = false;
     (db.projects || []).forEach(p => {
-      const owner = String(p.owner || p.projectOwner || '').trim();
-      const lead = String(p.techLead || p.technicalLead || p.lead || '').trim();
+      const assigned = getProjectPeople(p.id);
+      const owner = assigned.owner;
+      const lead = assigned.techLead;
       if (owner) {
         const key = owner.toLowerCase();
         if (!existingNames.has(key)) {
@@ -121,10 +165,14 @@
       .pp-people-table { width: 100%; border-collapse: collapse; font-size: 12px; }
       .pp-people-table th, .pp-people-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; }
       .pp-people-table th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); }
-      .pp-role-badge { display: inline-block; padding: .14rem .45rem; border-radius: .4rem; font-size: 10.5px; font-weight: 700; background: #eef2ff; color: #4338ca; }
-      .pp-proj-dir-select { width: 100%; margin-top: .25rem; padding: .38rem .55rem; border-radius: .6rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 12px; }
+      .pp-proj-people-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .65rem; margin: .65rem 0; padding: .65rem .75rem; border-radius: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
+      .pp-proj-people-field { display: flex; flex-direction: column; gap: .25rem; }
+      .pp-proj-people-field label { font-size: 11px; font-weight: 700; color: var(--text-muted, #475569); }
+      .pp-proj-people-field select { width: 100%; padding: .4rem .55rem; border-radius: .6rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); font-size: 12px; }
+      .pp-proj-people-badges { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .2rem; }
+      .pp-proj-people-pill { display: inline-flex; align-items: center; padding: .1rem .4rem; border-radius: .35rem; font-size: 10px; font-weight: 600; background: #eef2ff; color: #4338ca; }
       html.dark .pp-bulk-bar, body.dark .pp-bulk-bar { background: rgba(79,70,229,.22); border-color: rgba(129,140,248,.4); color: #e0e7ff; }
-      html.dark .pp-role-badge, body.dark .pp-role-badge { background: rgba(99,102,241,.22); color: #c7d2fe; }
+      html.dark .pp-proj-people-pill, body.dark .pp-proj-people-pill { background: rgba(99,102,241,.22); color: #c7d2fe; }
     `;
     document.head.appendChild(style);
   }
@@ -150,7 +198,11 @@
         <tr data-pp-row-id="${esc(p.id)}">
           <td class="pp-sel-col"><input type="checkbox" class="pp-sel-cb" data-pp-row-cb="people" value="${esc(p.id)}" aria-label="Select ${esc(p.name)}" /></td>
           <td><strong>${esc(p.name)}</strong></td>
-          <td><span class="pp-role-badge">${esc(p.role)}</span></td>
+          <td>
+            <select class="pp-people-select" data-pp-role-person="${esc(p.id)}" aria-label="Role for ${esc(p.name)}">
+              ${ROLES.map(r => `<option value="${esc(r)}" ${p.role === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+            </select>
+          </td>
           <td style="text-align:right">
             <button type="button" class="pp-bulk-btn pp-bulk-btn-danger" data-pp-del-person="${esc(p.id)}">Delete</button>
           </td>
@@ -161,7 +213,7 @@
       <div class="pp-people-head">
         <div>
           <h3>Project Owners &amp; Technical Leads Directory</h3>
-          <div style="font-size:11px;color:var(--text-muted,#64748b)">Used to populate dropdown menus in the Projects modal.</div>
+          <div style="font-size:11px;color:var(--text-muted,#64748b)">Choose <strong>Both</strong> when the same person can act as Project Owner and Technical Lead.</div>
         </div>
         <form id="ppAddPersonForm" class="pp-people-form">
           <input type="text" id="ppPersonNameInput" class="pp-people-input" placeholder="Full name..." required />
@@ -208,6 +260,18 @@
       toast(`Added ${name} (${role}).`, 'success');
     });
 
+    card.querySelectorAll('[data-pp-role-person]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const id = sel.getAttribute('data-pp-role-person');
+        const target = peopleList.find(p => p.id === id);
+        if (target && ROLES.includes(sel.value)) {
+          target.role = sel.value;
+          savePeople();
+          toast(`Updated ${target.name} to ${target.role}.`, 'info');
+        }
+      });
+    });
+
     card.querySelectorAll('[data-pp-del-person]').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-pp-del-person');
@@ -225,47 +289,83 @@
     });
   }
 
-  /* ---------- Dropdown Menus in Project Modal for Owner & Technical Lead ---------- */
-  function attachDropdownToInput(inputEl, roleFilter, selectId) {
-    if (!inputEl || !inputEl.parentElement) return;
-    seedPeopleFromProjects();
-    let sel = document.getElementById(selectId);
-    if (!sel) {
-      sel = document.createElement('select');
-      sel.id = selectId;
-      sel.className = 'pp-proj-dir-select';
-      sel.setAttribute('aria-label', `Select ${roleFilter} from directory`);
-      sel.addEventListener('change', () => {
-        if (sel.value !== '__custom__') {
-          inputEl.value = sel.value;
-          inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      });
-      inputEl.parentElement.appendChild(sel);
-    }
+  /* ---------- Guaranteed Project Owner & Technical Lead Dropdowns in Project Modal ---------- */
+  function buildOptionsHtml(roleFilter, selectedVal) {
     const matching = peopleList.filter(p => p.role === 'Both' || p.role === roleFilter);
-    const currentVal = String(inputEl.value || '').trim();
-    sel.innerHTML = [
-      `<option value="">— Select ${esc(roleFilter)} —</option>`,
-      ...matching.map(p => `<option value="${esc(p.name)}" ${p.name === currentVal ? 'selected' : ''}>${esc(p.name)}</option>`),
-      currentVal && !matching.some(p => p.name === currentVal)
-        ? `<option value="__custom__" selected>${esc(currentVal)} (custom)</option>`
-        : '',
+    const hasCurrent = selectedVal && !matching.some(p => p.name === selectedVal);
+    return [
+      `<option value="">— Unassigned —</option>`,
+      ...matching.map(p => `<option value="${esc(p.name)}" ${p.name === selectedVal ? 'selected' : ''}>${esc(p.name)}</option>`),
+      hasCurrent ? `<option value="${esc(selectedVal)}" selected>${esc(selectedVal)}</option>` : '',
     ].join('');
   }
 
-  function enhanceProjectModalDropdowns() {
-    const ownerInput = document.getElementById('projOwner') || document.getElementById('projectOwner') || document.querySelector('#projectModal input[name*="owner" i], dialog input[id*="Owner" i]');
-    const leadInput = document.getElementById('projTechLead') || document.getElementById('projLead') || document.getElementById('projectTechLead') || document.querySelector('#projectModal input[name*="lead" i], dialog input[id*="Lead" i]');
-    if (ownerInput) attachDropdownToInput(ownerInput, 'Project Owner', 'ppProjOwnerDirSelect');
-    if (leadInput) attachDropdownToInput(leadInput, 'Technical Lead', 'ppProjLeadDirSelect');
+  function injectProjectModalDropdowns(projectId) {
+    injectStyles();
+    seedPeopleFromProjects();
+    currentEditingProjectId = projectId || '';
+
+    const modal = document.getElementById('projectModal')
+      || document.querySelector('dialog#projectModal, dialog[open]');
+    if (!modal) return;
+    const form = modal.querySelector('form') || modal;
+
+    let row = document.getElementById('ppProjectPeopleRow');
+    if (!row) {
+      row = document.createElement('div');
+      row.id = 'ppProjectPeopleRow';
+      row.className = 'pp-proj-people-row';
+      row.innerHTML = `
+        <div class="pp-proj-people-field">
+          <label for="ppProjOwnerSelect">Project Owner</label>
+          <select id="ppProjOwnerSelect" name="ppProjOwner"></select>
+        </div>
+        <div class="pp-proj-people-field">
+          <label for="ppProjLeadSelect">Technical Lead</label>
+          <select id="ppProjLeadSelect" name="ppProjLead"></select>
+        </div>`;
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const footer = submitBtn ? submitBtn.closest('div') : null;
+      if (footer && footer.parentElement === form) {
+        form.insertBefore(row, footer);
+      } else {
+        form.appendChild(row);
+      }
+    }
+
+    const assigned = projectId ? getProjectPeople(projectId) : { owner: '', techLead: '' };
+    const ownerSel = row.querySelector('#ppProjOwnerSelect');
+    const leadSel = row.querySelector('#ppProjLeadSelect');
+    if (ownerSel) ownerSel.innerHTML = buildOptionsHtml('Project Owner', assigned.owner);
+    if (leadSel) leadSel.innerHTML = buildOptionsHtml('Technical Lead', assigned.techLead);
+
+    if (!form.__ppPeopleSubmitWired) {
+      form.__ppPeopleSubmitWired = true;
+      form.addEventListener('submit', () => {
+        const ownerVal = (document.getElementById('ppProjOwnerSelect')?.value || '').trim();
+        const leadVal = (document.getElementById('ppProjLeadSelect')?.value || '').trim();
+        const editedId = currentEditingProjectId;
+        setTimeout(() => {
+          const db = getDb();
+          const projects = db.projects || [];
+          let targetId = editedId;
+          if (!targetId && projects.length > 0) {
+            targetId = projects[projects.length - 1].id;
+          }
+          if (targetId) {
+            setProjectPeople(targetId, ownerVal, leadVal);
+            persistAppChanges();
+          }
+        }, 0);
+      });
+    }
   }
 
   if (typeof openProjectModal === 'function') {
     const nativeOpenProjectModal = openProjectModal;
-    openProjectModal = function (...args) {
-      const res = nativeOpenProjectModal.apply(this, args);
-      enhanceProjectModalDropdowns();
+    openProjectModal = function (projectId, ...rest) {
+      const res = nativeOpenProjectModal.call(this, projectId, ...rest);
+      injectProjectModalDropdowns(projectId || '');
       return res;
     };
   }
@@ -382,13 +482,29 @@
     }
 
     tbody.querySelectorAll('tr').forEach(tr => {
-      if (tr.querySelector(`[data-pp-row-cb="${listKey}"]`)) return;
       const rowId = extractRowId(tr, listKey);
       if (!rowId) return;
-      const td = document.createElement('td');
-      td.className = 'pp-sel-col';
-      td.innerHTML = `<input type="checkbox" class="pp-sel-cb" data-pp-row-cb="${listKey}" value="${esc(rowId)}" aria-label="Select row" />`;
-      tr.insertBefore(td, tr.firstChild);
+      if (!tr.querySelector(`[data-pp-row-cb="${listKey}"]`)) {
+        const td = document.createElement('td');
+        td.className = 'pp-sel-col';
+        td.innerHTML = `<input type="checkbox" class="pp-sel-cb" data-pp-row-cb="${listKey}" value="${esc(rowId)}" aria-label="Select row" />`;
+        tr.insertBefore(td, tr.firstChild);
+      }
+      if (listKey === 'projects' && !tr.querySelector('.pp-proj-people-badges')) {
+        const assigned = getProjectPeople(rowId);
+        if (assigned.owner || assigned.techLead) {
+          const nameCell = tr.children[2] || tr.children[1];
+          if (nameCell) {
+            const wrap = document.createElement('div');
+            wrap.className = 'pp-proj-people-badges';
+            wrap.innerHTML = [
+              assigned.owner ? `<span class="pp-proj-people-pill">Owner: ${esc(assigned.owner)}</span>` : '',
+              assigned.techLead ? `<span class="pp-proj-people-pill">Lead: ${esc(assigned.techLead)}</span>` : '',
+            ].join('');
+            nameCell.appendChild(wrap);
+          }
+        }
+      }
     });
 
     wireBulkEventsForList(
@@ -451,7 +567,9 @@
   if (typeof globalThis !== 'undefined') {
     globalThis.__ppSetupDirTestApi = {
       getPeople: () => peopleList.slice(),
-      addPerson(name, role) { peopleList.push({ id: makeId('ppl'), name, role }); savePeople(); },
+      addPerson(name, role) { peopleList.push({ id: makeId('ppl'), name, role: role || 'Both' }); savePeople(); },
+      setProjectPeople,
+      getProjectPeople,
     };
   }
 })();
