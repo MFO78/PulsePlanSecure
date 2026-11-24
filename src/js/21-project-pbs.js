@@ -1,4 +1,4 @@
-/* Isolated per-project Product Breakdown Structure (PBS) with AES-256-GCM encrypted separate-file sync. */
+/* Isolated per-project Product Breakdown Structure (PBS) with AES-256-GCM encrypted separate-file sync & PDF export. */
 (function ppProjectPbsModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
@@ -276,8 +276,12 @@
       await saveRememberedDirHandle(handle);
       toast(`Linked PBS folder: ${handle.name}`, 'success');
       if (activeProjectId) {
-        await syncActiveProjectFromFolder({ silentMissing: true });
+        const loaded = await syncActiveProjectFromFolder({ silentMissing: true });
+        if (!loaded && activeDoc && activeDoc.items.length > 0) {
+          await writeActiveProjectToFolder(false);
+        }
         renderPbsDialog();
+        startPolling();
       }
     } catch (err) {
       if (err && err.name === 'AbortError') return;
@@ -296,8 +300,12 @@
       dirHandle = rememberedDirHandle;
       toast(`Reconnected PBS folder: ${dirHandle.name}`, 'success');
       if (activeProjectId) {
-        await syncActiveProjectFromFolder({ silentMissing: true });
+        const loaded = await syncActiveProjectFromFolder({ silentMissing: true });
+        if (!loaded && activeDoc && activeDoc.items.length > 0) {
+          await writeActiveProjectToFolder(false);
+        }
         renderPbsDialog();
+        startPolling();
       }
     } catch (_e) {
       await linkPbsFolder();
@@ -507,10 +515,120 @@
     }
   }
 
-  /* ---------- Tree Helpers ---------- */
+  /* ---------- Tree Helpers & Vector PDF Export ---------- */
   function getChildren(parentId) {
     if (!activeDoc) return [];
     return activeDoc.items.filter(item => (item.parentId || null) === (parentId || null));
+  }
+
+  function flattenTreeRows(parentId, depth, out) {
+    const list = out || [];
+    getChildren(parentId).forEach(item => {
+      list.push({ item, depth });
+      flattenTreeRows(item.id, depth + 1, list);
+    });
+    return list;
+  }
+
+  function exportActivePbsPdf() {
+    if (!activeProjectId || !activeDoc) return;
+    const project = getProject(activeProjectId);
+    const db = getDb();
+    const deptMap = new Map((db.departments || []).map(d => [d.id, d]));
+    const msMap = new Map((db.milestones || []).map(m => [m.id, m]));
+    const rows = flattenTreeRows(null, 0, []);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const title = `Product Breakdown Structure — [${project ? project.code : ''}] ${project ? project.name : 'Project'}`;
+    const subtitle = `Revision ${activeDoc.meta.revision}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${getUserName()}`;
+
+    const jsPdfLib = typeof window !== 'undefined' && window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : null;
+    if (jsPdfLib) {
+      try {
+        const pdf = new jsPdfLib({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+        pdf.setFillColor(15, 23, 42);
+        pdf.rect(0, 0, pdf.internal.pageSize.getWidth(), 62, 'F');
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(14);
+        pdf.text(title, 36, 28);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(9.5);
+        pdf.setTextColor(203, 213, 225);
+        pdf.text(subtitle, 36, 46);
+
+        const body = rows.map(({ item, depth }) => {
+          const dept = item.deptId ? deptMap.get(item.deptId) : null;
+          const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
+          const indent = depth > 0 ? `${'  '.repeat(depth)}↳ ` : '';
+          return [
+            item.code,
+            `${indent}${item.name}`,
+            item.maturity,
+            dept ? `[${dept.code}] ${dept.name}` : '—',
+            item.owner || '—',
+            ms ? `${ms.title}${ms.date ? ` (${ms.date})` : ''}` : '—',
+            item.notes || '',
+          ];
+        });
+
+        if (typeof pdf.autoTable === 'function') {
+          pdf.autoTable({
+            startY: 78,
+            head: [['Code', 'Deliverable / Subsystem', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes']],
+            body: body.length ? body : [['—', 'No PBS items recorded', '—', '—', '—', '—', '']],
+            styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
+            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            columnStyles: {
+              0: { cellWidth: 52, fontStyle: 'bold' },
+              1: { cellWidth: 195 },
+              2: { cellWidth: 64 },
+              3: { cellWidth: 110 },
+              4: { cellWidth: 85 },
+              5: { cellWidth: 120 },
+              6: { cellWidth: 'auto' },
+            },
+            margin: { left: 36, right: 36, bottom: 36 },
+          });
+        }
+        const pdfName = `pbs_${sanitizeFilenamePart(project ? (project.code || project.id) : activeProjectId)}_${dateStr}.pdf`;
+        pdf.save(pdfName);
+        toast(`Exported ${pdfName}`, 'success');
+        return;
+      } catch (err) {
+        toast(err?.message || 'Vector PDF failed; opening print view.', 'warning');
+      }
+    }
+
+    // Offline fallback: clean light-mode print window
+    if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      const win = window.open('', '_blank');
+      if (!win) {
+        toast('Popup blocked — allow popups or connect online for direct PDF export.', 'warning');
+        return;
+      }
+      const tableRows = rows.map(({ item, depth }) => {
+        const dept = item.deptId ? deptMap.get(item.deptId) : null;
+        const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
+        return `<tr>
+          <td style="font-family:monospace;font-weight:700">${esc(item.code)}</td>
+          <td style="padding-left:${8 + depth * 16}px;font-weight:${depth === 0 ? 700 : 500}">${esc(item.name)}</td>
+          <td>${esc(item.maturity)}</td>
+          <td>${dept ? esc(`[${dept.code}] ${dept.name}`) : '—'}</td>
+          <td>${esc(item.owner || '—')}</td>
+          <td>${ms ? esc(ms.title) : '—'}</td>
+          <td>${esc(item.notes || '')}</td>
+        </tr>`;
+      }).join('');
+      win.document.write(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(title)}</title>
+        <style>body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:24px;font-size:12px}h1{font-size:18px;margin:0 0 4px}p{color:#475569;margin:0 0 16px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:11px}</style>
+        </head><body><h1>${esc(title)}</h1><p>${esc(subtitle)}</p>
+        <table><thead><tr><th>Code</th><th>Deliverable / Subsystem</th><th>Maturity</th><th>Department</th><th>Owner</th><th>Milestone</th><th>Notes</th></tr></thead>
+        <tbody>${tableRows || '<tr><td colspan="7">No PBS items recorded.</td></tr>'}</tbody></table></body></html>`);
+      win.document.close();
+      win.focus();
+      win.print();
+    }
   }
 
   function suggestNextCode(parentId) {
@@ -568,71 +686,66 @@
     renderPbsDialog();
   }
 
-  /* ---------- Styles & Semantic HTML5 Dialog ---------- */
+  /* ---------- Styles Matched to PulsePlanSecure Design Tokens ---------- */
   function injectStyles() {
     if (document.getElementById('ppPbsStyles')) return;
     const style = document.createElement('style');
     style.id = 'ppPbsStyles';
     style.textContent = `
-      dialog#ppPbsDialog { width: min(94vw, 52rem); max-height: 88dvh; padding: 0; border: 1px solid #cbd5e1; border-radius: 1rem; background: #ffffff; color: #0f172a; box-shadow: 0 24px 48px -12px rgba(15,23,42,.32); overflow: hidden; }
-      dialog#ppPbsDialog::backdrop { background: rgba(15,23,42,.55); backdrop-filter: blur(2px); }
+      dialog#ppPbsDialog { width: min(95vw, 56rem); max-height: 88dvh; padding: 0; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: 1.25rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15,23,42,.35); overflow: hidden; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+      dialog#ppPbsDialog::backdrop { background: rgba(15,23,42,.55); backdrop-filter: blur(3px); }
       .pp-pbs-shell { display: flex; flex-direction: column; max-height: 88dvh; font-size: 12px; }
-      .pp-pbs-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; padding: .9rem 1.1rem; border-bottom: 1px solid #e2e8f0; }
-      .pp-pbs-title { margin: 0; font-size: 15px; font-weight: 800; line-height: 1.25; }
-      .pp-pbs-sub { margin: .2rem 0 0; font-size: 11px; color: #64748b; }
-      .pp-pbs-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .6rem 1.1rem; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+      .pp-pbs-header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); }
+      .pp-pbs-title-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+      .pp-pbs-swatch { width: 10px; height: 10px; border-radius: 9999px; flex: 0 0 auto; }
+      .pp-pbs-title { margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -0.015em; color: var(--text-heading, #0f172a); }
+      .pp-pbs-sub { margin: .25rem 0 0; font-size: 11px; color: var(--text-muted, #64748b); }
+      .pp-pbs-sub code { padding: .1rem .35rem; border-radius: .375rem; background: var(--surface-subtle, #f1f5f9); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; }
+      .pp-pbs-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .65rem 1.25rem; background: var(--surface-subtle, #f8fafc); border-bottom: 1px solid var(--border-subtle, #e2e8f0); }
       .pp-pbs-group { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
-      .pp-pbs-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .35rem .6rem; border-radius: .5rem; border: 1px solid #cbd5e1; background: #ffffff; color: #1e293b; font-size: 11px; font-weight: 600; cursor: pointer; line-height: 1.2; }
-      .pp-pbs-btn:hover { background: #f1f5f9; }
-      .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; }
-      .pp-pbs-btn-primary:hover { background: #4338ca; }
+      .pp-pbs-btn { display: inline-flex; align-items: center; gap: .3rem; padding: .4rem .7rem; border-radius: .75rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-secondary, #334155); font-size: 11.5px; font-weight: 600; cursor: pointer; line-height: 1.2; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+      .pp-pbs-btn:hover { background: var(--surface-hover, #f1f5f9); border-color: var(--border-strong, #94a3b8); }
+      .pp-pbs-btn:disabled { opacity: .35; cursor: not-allowed; }
+      .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; font-weight: 700; }
+      .pp-pbs-btn-primary:hover { background: #4338ca; border-color: #4338ca; color: #ffffff; }
+      .pp-pbs-btn-emerald { background: #059669; border-color: #059669; color: #ffffff; font-weight: 700; }
+      .pp-pbs-btn-emerald:hover { background: #047857; border-color: #047857; color: #ffffff; }
       .pp-pbs-btn-danger { color: #be123c; border-color: #fecdd3; background: #fff1f2; }
-      .pp-pbs-btn-danger:hover { background: #ffe4e6; }
-      .pp-pbs-btn-sm { padding: .2rem .42rem; font-size: 10.5px; }
-      .pp-pbs-badge { display: inline-flex; align-items: center; padding: .15rem .45rem; border-radius: .375rem; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
-      .pp-pbs-badge-ok { background: #d1fae5; color: #065f46; }
-      .pp-pbs-badge-warn { background: #fef3c7; color: #92400e; }
-      .pp-pbs-badge-idle { background: #e2e8f0; color: #334155; }
-      .pp-pbs-badge-error { background: #ffe4e6; color: #9f1239; }
-      .pp-pbs-body { flex: 1 1 auto; overflow-y: auto; padding: .9rem 1.1rem; display: flex; flex-direction: column; gap: .75rem; }
-      .pp-pbs-conflict { padding: .65rem .8rem; border-radius: .65rem; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
-      .pp-pbs-form { padding: .75rem; border-radius: .75rem; border: 1px solid #c7d2fe; background: #eef2ff; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .5rem; }
-      .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; }
+      .pp-pbs-btn-danger:hover { background: #ffe4e6; border-color: #fda4af; }
+      .pp-pbs-btn-sm { padding: .22rem .48rem; border-radius: .5rem; font-size: 10.5px; }
+      .pp-pbs-close { width: 2rem; height: 2rem; justify-content: center; padding: 0; font-size: 16px; border-radius: .75rem; }
+      .pp-pbs-badge { display: inline-flex; align-items: center; padding: .18rem .5rem; border-radius: .45rem; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; border: 1px solid transparent; }
+      .pp-pbs-badge-ok { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+      .pp-pbs-badge-warn { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+      .pp-pbs-badge-idle { background: var(--surface-muted, #e2e8f0); color: var(--text-secondary, #334155); border-color: var(--border-subtle, #cbd5e1); }
+      .pp-pbs-badge-error { background: #ffe4e6; color: #be123c; border-color: #fda4af; }
+      .pp-pbs-body { flex: 1 1 auto; overflow-y: auto; padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: .75rem; background: var(--surface-page, #f1f5f9); }
+      .pp-pbs-conflict { padding: .75rem .9rem; border-radius: .85rem; border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+      .pp-pbs-form { padding: .9rem; border-radius: 1rem; border: 1px solid #c7d2fe; background: var(--surface-card, #ffffff); display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; box-shadow: 0 4px 12px -4px rgba(79,70,229,.15); }
+      .pp-pbs-field { display: flex; flex-direction: column; gap: .25rem; }
       .pp-pbs-field-full { grid-column: 1 / -1; }
-      .pp-pbs-field label { font-size: 10.5px; font-weight: 700; color: #334155; }
-      .pp-pbs-field input, .pp-pbs-field select, .pp-pbs-field textarea { padding: .35rem .5rem; border-radius: .45rem; border: 1px solid #cbd5e1; background: #ffffff; color: #0f172a; font-size: 12px; }
-      .pp-pbs-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
-      .pp-pbs-tree .pp-pbs-tree { margin-top: .4rem; padding-left: 1rem; border-left: 2px solid #e2e8f0; }
-      .pp-pbs-node { border: 1px solid #e2e8f0; border-radius: .65rem; background: #ffffff; }
-      .pp-pbs-node > summary { list-style: none; cursor: pointer; padding: .5rem .65rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem; }
+      .pp-pbs-field label { font-size: 10.5px; font-weight: 700; color: var(--text-muted, #475569); text-transform: uppercase; letter-spacing: .03em; }
+      .pp-pbs-field input, .pp-pbs-field select, .pp-pbs-field textarea { padding: .42rem .6rem; border-radius: .6rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 12px; }
+      .pp-pbs-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
+      .pp-pbs-tree .pp-pbs-tree { margin-top: .45rem; padding-left: 1.05rem; border-left: 2px solid var(--border-subtle, #cbd5e1); }
+      .pp-pbs-node { border: 1px solid var(--border-subtle, #e2e8f0); border-radius: .85rem; background: var(--surface-card, #ffffff); box-shadow: 0 1px 2px rgba(15,23,42,.05); }
+      .pp-pbs-node > summary { list-style: none; cursor: pointer; padding: .6rem .8rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
       .pp-pbs-node > summary::-webkit-details-marker { display: none; }
-      .pp-pbs-node-main { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; min-width: 0; flex: 1 1 200px; }
-      .pp-pbs-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 800; color: #4338ca; background: #eef2ff; padding: .1rem .35rem; border-radius: .35rem; font-size: 11px; }
-      .pp-pbs-name { font-weight: 700; color: #0f172a; overflow-wrap: anywhere; }
-      .pp-pbs-meta { font-size: 10.5px; color: #64748b; }
-      .pp-pbs-notes { padding: 0 .65rem .55rem; font-size: 11px; color: #475569; white-space: pre-wrap; }
-      .pp-pbs-children { padding: 0 .65rem .6rem; }
-      .pp-pbs-empty { text-align: center; padding: 2rem 1rem; color: #64748b; border: 1px dashed #cbd5e1; border-radius: .75rem; }
-      .pp-pbs-trigger { padding: .25rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #4338ca; font-size: 11px; font-weight: 700; cursor: pointer; }
+      .pp-pbs-node-main { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; min-width: 0; flex: 1 1 220px; }
+      .pp-pbs-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 800; color: #4338ca; background: #eef2ff; border: 1px solid #c7d2fe; padding: .12rem .42rem; border-radius: .45rem; font-size: 11px; }
+      .pp-pbs-name { font-weight: 700; color: var(--text-heading, #0f172a); overflow-wrap: anywhere; font-size: 12.5px; }
+      .pp-pbs-meta { font-size: 11px; color: var(--text-muted, #64748b); }
+      .pp-pbs-notes { padding: 0 .8rem .65rem; font-size: 11.5px; color: var(--text-secondary, #334155); white-space: pre-wrap; }
+      .pp-pbs-children { padding: 0 .8rem .7rem; }
+      .pp-pbs-empty { text-align: center; padding: 2.25rem 1.25rem; color: var(--text-muted, #64748b); border: 1.5px dashed var(--border-strong, #cbd5e1); border-radius: 1rem; background: var(--surface-card, #ffffff); }
+      .pp-pbs-trigger { padding: .25rem .55rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #4338ca; font-size: 11px; font-weight: 700; cursor: pointer; transition: background-color 140ms ease; }
       .pp-pbs-trigger:hover { background: #e0e7ff; }
-      html.dark dialog#ppPbsDialog, body.dark dialog#ppPbsDialog { background: #0f172a; color: #f1f5f9; border-color: #334155; }
-      html.dark .pp-pbs-header, body.dark .pp-pbs-header { border-color: #1e293b; }
-      html.dark .pp-pbs-sub, body.dark .pp-pbs-sub, html.dark .pp-pbs-meta, body.dark .pp-pbs-meta { color: #94a3b8; }
-      html.dark .pp-pbs-toolbar, body.dark .pp-pbs-toolbar { background: #162033; border-color: #1e293b; }
-      html.dark .pp-pbs-btn, body.dark .pp-pbs-btn { background: #1e293b; border-color: #334155; color: #f1f5f9; }
-      html.dark .pp-pbs-btn:hover, body.dark .pp-pbs-btn:hover { background: #334155; }
-      html.dark .pp-pbs-btn-primary, body.dark .pp-pbs-btn-primary { background: #4f46e5; border-color: #6366f1; color: #ffffff; }
+      html.dark .pp-pbs-badge-ok, body.dark .pp-pbs-badge-ok { background: rgba(16,185,129,.16); color: #34d399; border-color: rgba(16,185,129,.35); }
+      html.dark .pp-pbs-badge-warn, body.dark .pp-pbs-badge-warn { background: rgba(245,158,11,.18); color: #fbbf24; border-color: rgba(245,158,11,.42); }
+      html.dark .pp-pbs-badge-error, body.dark .pp-pbs-badge-error { background: rgba(244,63,94,.22); color: #fda4af; border-color: rgba(244,63,94,.48); }
+      html.dark .pp-pbs-code, body.dark .pp-pbs-code { background: rgba(99,102,241,.22); border-color: rgba(129,140,248,.4); color: #c7d2fe; }
+      html.dark .pp-pbs-form, body.dark .pp-pbs-form { border-color: #4f46e5; }
       html.dark .pp-pbs-btn-danger, body.dark .pp-pbs-btn-danger { background: rgba(244,63,94,.16); border-color: rgba(244,63,94,.4); color: #fda4af; }
-      html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #162033; border-color: #3730a3; }
-      html.dark .pp-pbs-field label, body.dark .pp-pbs-field label { color: #cbd5e1; }
-      html.dark .pp-pbs-field input, html.dark .pp-pbs-field select, html.dark .pp-pbs-field textarea,
-      body.dark .pp-pbs-field input, body.dark .pp-pbs-field select, body.dark .pp-pbs-field textarea { background: #0f172a; border-color: #334155; color: #f8fafc; }
-      html.dark .pp-pbs-node, body.dark .pp-pbs-node { background: #162033; border-color: #334155; }
-      html.dark .pp-pbs-name, body.dark .pp-pbs-name { color: #f8fafc; }
-      html.dark .pp-pbs-notes, body.dark .pp-pbs-notes { color: #cbd5e1; }
-      html.dark .pp-pbs-code, body.dark .pp-pbs-code { background: rgba(99,102,241,.22); color: #c7d2fe; }
-      html.dark .pp-pbs-tree .pp-pbs-tree, body.dark .pp-pbs-tree .pp-pbs-tree { border-color: #334155; }
-      html.dark .pp-pbs-empty, body.dark .pp-pbs-empty { border-color: #334155; color: #94a3b8; }
       html.dark .pp-pbs-trigger, body.dark .pp-pbs-trigger { background: rgba(99,102,241,.2); border-color: rgba(129,140,248,.4); color: #c7d2fe; }
     `;
     document.head.appendChild(style);
@@ -788,13 +901,16 @@
       <div class="pp-pbs-shell">
         <header class="pp-pbs-header">
           <div>
-            <h2 id="ppPbsTitle" class="pp-pbs-title">PBS — [${esc(project.code)}] ${esc(project.name)}</h2>
+            <div class="pp-pbs-title-row">
+              <span class="pp-pbs-swatch" style="background:${esc(project.color || '#4f46e5')}" aria-hidden="true"></span>
+              <h2 id="ppPbsTitle" class="pp-pbs-title">PBS — [${esc(project.code)}] ${esc(project.name)}</h2>
+            </div>
             <p class="pp-pbs-sub">Separate file: <code>${esc(getPbsFilename(project))}</code> &middot; ${activeDoc.items.length} item${activeDoc.items.length === 1 ? '' : 's'} &middot; Rev ${activeDoc.meta.revision}</p>
           </div>
           <div class="pp-pbs-group">
             <span id="ppPbsEncBadge" class="pp-pbs-badge ${encrypted ? 'pp-pbs-badge-ok' : 'pp-pbs-badge-idle'}">${encrypted ? 'AES-256-GCM' : 'Plaintext'}</span>
             <span id="ppPbsStatusBadge" class="pp-pbs-badge pp-pbs-badge-${lastStatusTone}">${esc(lastStatusText)}</span>
-            <button type="button" id="ppPbsCloseBtn" class="pp-pbs-btn" aria-label="Close PBS dialog">&times;</button>
+            <button type="button" id="ppPbsCloseBtn" class="pp-pbs-btn pp-pbs-close" aria-label="Close PBS dialog">&times;</button>
           </div>
         </header>
 
@@ -806,8 +922,9 @@
           </div>
           <div class="pp-pbs-group">
             ${canDir ? `<button type="button" id="ppPbsFolderBtn" class="pp-pbs-btn">${esc(folderLabel)}</button>` : ''}
-            <button type="button" id="ppPbsLoadBtn" class="pp-pbs-btn">Load PBS (.json)</button>
-            <button type="button" id="ppPbsSaveBtn" class="pp-pbs-btn">Save PBS (.json)</button>
+            <button type="button" id="ppPbsLoadBtn" class="pp-pbs-btn">Load (.json)</button>
+            <button type="button" id="ppPbsSaveBtn" class="pp-pbs-btn">Save (.json)</button>
+            <button type="button" id="ppPbsPdfBtn" class="pp-pbs-btn pp-pbs-btn-emerald">Export PDF</button>
             <button type="button" id="ppPbsPassBtn" class="pp-pbs-btn">${encrypted ? 'Passphrase Active' : 'Set Passphrase'}</button>
             <input type="file" id="ppPbsFileInput" accept=".json,application/json" hidden />
           </div>
@@ -850,6 +967,7 @@
       if (f) importPbsFromFile(f);
     });
     dlg.querySelector('#ppPbsSaveBtn')?.addEventListener('click', () => exportActivePbsFile());
+    dlg.querySelector('#ppPbsPdfBtn')?.addEventListener('click', () => exportActivePbsPdf());
     dlg.querySelector('#ppPbsPassBtn')?.addEventListener('click', () => {
       if (typeof openSyncEncryptionDialog === 'function') {
         openSyncEncryptionDialog('Set or unlock the single session passphrase shared by your roadmap and all PBS files.');
@@ -1035,6 +1153,7 @@
       decodePbsFromText,
       getPbsFilename,
       supportsDirSync,
+      exportActivePbsPdf,
     };
   }
 })();
