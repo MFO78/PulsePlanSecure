@@ -66,7 +66,7 @@
     });
   }
 
-  function setDefaultAllocationFte() {
+  function findAllocationFteInputs() {
     const candidates = [
       document.getElementById('allocFte'),
       document.getElementById('allocationFte'),
@@ -84,22 +84,59 @@
         }
       }
     }
+    return candidates;
+  }
 
+  let lastDesiredFte = '1';
+  let isNewAllocationSession = false;
+
+  function setDefaultAllocationFte(force) {
+    const candidates = findAllocationFteInputs();
     candidates.forEach(inp => {
-      inp.value = '1';
-      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      if (!inp.__ppFteTracked) {
+        inp.__ppFteTracked = true;
+        inp.addEventListener('input', () => {
+          if (String(inp.value || '').trim() !== '') lastDesiredFte = String(inp.value).trim();
+        });
+      }
+      if (force || String(inp.value || '').trim() === '') {
+        inp.value = lastDesiredFte || '1';
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+      }
     });
+
+    // Keep 1 FTE (or user's typed value) when switching Project/Department dropdowns in the allocation modal
+    const modalRoot = candidates[0] ? (candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || candidates[0].closest('.fixed') || document) : document;
+    if (modalRoot && typeof modalRoot.querySelectorAll === 'function') {
+      modalRoot.querySelectorAll('select').forEach(sel => {
+        if (sel.__ppFteGuard) return;
+        sel.__ppFteGuard = true;
+        sel.addEventListener('change', () => {
+          if (!isNewAllocationSession) return;
+          setTimeout(() => {
+            if (!isNewAllocationSession) return;
+            findAllocationFteInputs().forEach(inp => {
+              if (String(inp.value || '').trim() === '') {
+                inp.value = lastDesiredFte || '1';
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+            });
+          }, 0);
+        });
+      });
+    }
   }
 
   if (typeof openAllocationModal === 'function') {
     const nativeOpenAlloc = openAllocationModal;
     openAllocationModal = function (...args) {
       const res = nativeOpenAlloc.apply(this, args);
-      // Only apply 1 FTE default when creating a new allocation (not editing an existing one)
       const isEdit = args.some(a => typeof a === 'string' && a.startsWith('alloc_'));
-      if (!isEdit) {
-        setDefaultAllocationFte();
-        setTimeout(setDefaultAllocationFte, 0);
+      isNewAllocationSession = !isEdit;
+      if (isNewAllocationSession) {
+        lastDesiredFte = '1';
+        setDefaultAllocationFte(true);
+        setTimeout(() => setDefaultAllocationFte(false), 0);
       }
       return res;
     };
