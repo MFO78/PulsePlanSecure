@@ -1,5 +1,5 @@
 /* Isolated UX Enhancements:
- * 1. Sortable Setup & Data tables
+ * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
  * 3. Log Notes in ChangeLog + Notes category in Evolution & Snapshot Comparison
  * 4. Bidirectional Weeks/Months & Horizon controls in Health & Evolution tab
@@ -48,6 +48,31 @@
   }
 
   /* ---------- 1. Sortable Tables in Setup & Data ---------- */
+  const PRIO_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+  const PURE_NUM_RE = /^[€$£\s+-]*\d[\d,\s.]*\s*(fte|days?|d|hrs?|h|%)?$/i;
+
+  function getCellSortValue(cell) {
+    if (!cell) return '';
+    const ctrl = cell.querySelector ? cell.querySelector('select, input:not([type="checkbox"])') : null;
+    if (ctrl && ctrl.value !== undefined) return String(ctrl.value).trim();
+    return String(cell.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function compareSortValues(aVal, bVal) {
+    const aLow = aVal.toLowerCase();
+    const bLow = bVal.toLowerCase();
+    if (PRIO_RANK[aLow] && PRIO_RANK[bLow]) return PRIO_RANK[aLow] - PRIO_RANK[bLow];
+    if (/^\d{4}-\d{2}-\d{2}/.test(aVal) && /^\d{4}-\d{2}-\d{2}/.test(bVal)) {
+      return aVal.localeCompare(bVal);
+    }
+    if (PURE_NUM_RE.test(aVal) && PURE_NUM_RE.test(bVal)) {
+      const aNum = parseFloat(aVal.replace(/[^0-9.-]+/g, ''));
+      const bNum = parseFloat(bVal.replace(/[^0-9.-]+/g, ''));
+      if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+    }
+    return aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' });
+  }
+
   function makeSetupTablesSortable() {
     const dataTab = document.getElementById('tab-data');
     if (!dataTab) return;
@@ -57,7 +82,7 @@
       const tbody = table.querySelector('tbody');
       if (!thead || !tbody) return;
       const ths = Array.from(thead.querySelectorAll('th'));
-      ths.forEach((th, colIdx) => {
+      ths.forEach(th => {
         if (th.__ppSortWired) return;
         const txt = String(th.textContent || '').trim().toLowerCase();
         if (!txt || txt === 'actions' || th.querySelector('input[type="checkbox"]')) return;
@@ -68,8 +93,12 @@
         ind.textContent = '⇅';
         th.appendChild(ind);
         th.addEventListener('click', () => {
+          const liveThs = Array.from(th.parentElement.children);
+          const liveColIdx = liveThs.indexOf(th);
+          if (liveColIdx < 0) return;
+
           const dir = th.getAttribute('data-pp-sort-dir') === 'asc' ? 'desc' : 'asc';
-          ths.forEach(h => {
+          liveThs.forEach(h => {
             h.removeAttribute('data-pp-sort-dir');
             const s = h.querySelector('.pp-sort-ind');
             if (s) s.textContent = '⇅';
@@ -77,16 +106,9 @@
           th.setAttribute('data-pp-sort-dir', dir);
           ind.textContent = dir === 'asc' ? '▲' : '▼';
 
-          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.children.length > liveColIdx);
           rows.sort((a, b) => {
-            const aCell = a.children[colIdx];
-            const bCell = b.children[colIdx];
-            const aVal = String(aCell?.textContent || '').trim();
-            const bVal = String(bCell?.textContent || '').trim();
-            const aNum = parseFloat(aVal.replace(/[^0-9.-]+/g, ''));
-            const bNum = parseFloat(bVal.replace(/[^0-9.-]+/g, ''));
-            const bothNum = !isNaN(aNum) && !isNaN(bNum) && /\d/.test(aVal) && /\d/.test(bVal);
-            const cmp = bothNum ? (aNum - bNum) : aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' });
+            const cmp = compareSortValues(getCellSortValue(a.children[liveColIdx]), getCellSortValue(b.children[liveColIdx]));
             return dir === 'asc' ? cmp : -cmp;
           });
           rows.forEach(r => tbody.appendChild(r));
@@ -314,5 +336,9 @@
       makeSetupTablesSortable();
       return res;
     };
+  }
+
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__ppUxSortTestApi = { compareSortValues };
   }
 })();
