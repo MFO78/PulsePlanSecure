@@ -1,4 +1,4 @@
-/* Isolated Roadmap enhancements: Default 1 FTE on new allocations + Priority colour-coded project codes. */
+/* Isolated Roadmap enhancements: Default 1 FTE on NEW empty allocations + Priority colour-coded project codes. */
 (function ppRoadmapPriorityFteModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
@@ -87,11 +87,30 @@
     return candidates;
   }
 
+  function isEmptyOrZero(val) {
+    const s = String(val ?? '').trim();
+    if (s === '') return true;
+    const n = Number(s);
+    return !Number.isFinite(n) || n <= 0;
+  }
+
   let lastDesiredFte = '1';
   let isNewAllocationSession = false;
 
-  function setDefaultAllocationFte(force) {
+  function applyDefaultFteIfEmpty() {
     const candidates = findAllocationFteInputs();
+    if (!candidates.length) return;
+
+    // Only treat as a NEW allocation if the native modal left the FTE input empty or 0
+    const existingVal = String(candidates[0].value ?? '').trim();
+    if (!isEmptyOrZero(existingVal)) {
+      isNewAllocationSession = false;
+      lastDesiredFte = existingVal;
+      return;
+    }
+
+    isNewAllocationSession = true;
+    lastDesiredFte = '1';
     candidates.forEach(inp => {
       if (!inp.__ppFteTracked) {
         inp.__ppFteTracked = true;
@@ -99,14 +118,13 @@
           if (String(inp.value || '').trim() !== '') lastDesiredFte = String(inp.value).trim();
         });
       }
-      if (force || String(inp.value || '').trim() === '') {
-        inp.value = lastDesiredFte || '1';
+      if (isEmptyOrZero(inp.value)) {
+        inp.value = '1';
         inp.dispatchEvent(new Event('input', { bubbles: true }));
       }
     });
 
-    // Keep 1 FTE (or user's typed value) when switching Project/Department dropdowns in the allocation modal
-    const modalRoot = candidates[0] ? (candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || candidates[0].closest('.fixed') || document) : document;
+    const modalRoot = candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || candidates[0].closest('.fixed') || document;
     if (modalRoot && typeof modalRoot.querySelectorAll === 'function') {
       modalRoot.querySelectorAll('select').forEach(sel => {
         if (sel.__ppFteGuard) return;
@@ -116,7 +134,7 @@
           setTimeout(() => {
             if (!isNewAllocationSession) return;
             findAllocationFteInputs().forEach(inp => {
-              if (String(inp.value || '').trim() === '') {
+              if (isEmptyOrZero(inp.value)) {
                 inp.value = lastDesiredFte || '1';
                 inp.dispatchEvent(new Event('input', { bubbles: true }));
               }
@@ -131,13 +149,9 @@
     const nativeOpenAlloc = openAllocationModal;
     openAllocationModal = function (...args) {
       const res = nativeOpenAlloc.apply(this, args);
-      const isEdit = args.some(a => typeof a === 'string' && a.startsWith('alloc_'));
-      isNewAllocationSession = !isEdit;
-      if (isNewAllocationSession) {
-        lastDesiredFte = '1';
-        setDefaultAllocationFte(true);
-        setTimeout(() => setDefaultAllocationFte(false), 0);
-      }
+      // Wait for native modal population, then ONLY set 1 FTE if empty/0 (never overwrite existing task FTE)
+      applyDefaultFteIfEmpty();
+      setTimeout(applyDefaultFteIfEmpty, 0);
       return res;
     };
   }
@@ -157,25 +171,6 @@
       const res = nativeRenderAll.apply(this, args);
       applyPriorityColorsToRoadmap();
       return res;
-    };
-  }
-
-  if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
-    const wn = MANUAL_SECTIONS.find(s => s && s.id === 'whatsnew');
-    if (wn && typeof wn.bodyHtml === 'string' && !wn.bodyHtml.includes('Priority Colour-Coded Project Codes')) {
-      wn.keywords = `${wn.keywords || ''} priority colour code roadmap 1 fte default allocation`;
-      wn.bodyHtml = wn.bodyHtml.replace(
-        '</ul>',
-        `<li>&bull; <strong>Priority Colour-Coded Project Codes &amp; 1 FTE Default:</strong> Project codes in Roadmap view are colour-coded by priority (High = rose, Medium = amber, Low = slate), and new manpower allocations now default to <strong>1 FTE</strong>.</li></ul>`
-      );
-    }
-  }
-
-  if (typeof globalThis !== 'undefined') {
-    globalThis.__ppRoadmapPrioTestApi = {
-      normalizePriority,
-      applyPriorityColorsToRoadmap,
-      setDefaultAllocationFte,
     };
   }
 })();
