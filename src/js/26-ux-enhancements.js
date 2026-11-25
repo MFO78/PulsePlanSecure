@@ -2,7 +2,7 @@
  * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
  * 3. Log Notes in ChangeLog + Notes category in Evolution & Snapshot Comparison
- * 4. Bidirectional Weeks/Months & Horizon controls in Health & Evolution tab
+ * 4. Bidirectional Weeks/Months & Horizon controls in Health & Evolution tab (hidden on mobile)
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
  */
 (function ppUxEnhancementsModule() {
@@ -37,6 +37,7 @@
       .pp-sort-th:hover { color: #4f46e5; }
       .pp-sort-ind { margin-left: .25rem; font-size: 9px; opacity: .65; }
       .pp-health-ctrl-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .85rem; margin-bottom: .85rem; border-radius: .85rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 12px; }
+      @media (max-width: 767px) { .pp-health-ctrl-bar { display: none !important; } }
       .pp-health-btn-grp { display: inline-flex; border-radius: .6rem; overflow: hidden; border: 1px solid #cbd5e1; }
       .pp-health-seg { padding: .3rem .65rem; font-size: 11.5px; font-weight: 700; cursor: pointer; background: transparent; color: var(--text-primary, #334155); border: none; }
       .pp-health-seg.active { background: #4f46e5; color: #ffffff; }
