@@ -30,6 +30,7 @@ const makeStubEl = () => ({
   getAttribute: () => null,
   addEventListener: noop,
   removeEventListener: noop,
+  dispatchEvent: noop,
   querySelector: () => null,
   querySelectorAll: () => [],
   appendChild: noop,
@@ -58,6 +59,13 @@ const sandbox = {
   RegExp,
   Error,
   Promise,
+  Uint8Array,
+  TextEncoder,
+  TextDecoder,
+  btoa,
+  atob,
+  Event: globalThis.Event,
+  crypto: globalThis.crypto,
   parseInt,
   parseFloat,
   isNaN,
@@ -77,6 +85,7 @@ const sandbox = {
   navigator: { userAgent: 'PulsePlanTestRunner' },
   document: {
     documentElement: makeStubEl(),
+    head: makeStubEl(),
     body: makeStubEl(),
     activeElement: null,
     fullscreenElement: null,
@@ -2316,6 +2325,192 @@ test('PBS v2 enhancements: non-double-counting SWaP + Qty, lead-time/spares risk
   assert.ok(out.dialogHtml.includes('id="ppPbsExportPdfViewBtn"') && out.dialogHtml.includes('FILTERED') && out.dialogHtml.includes('2 / 4 items'), 'Dialog renders PDF (Current View) and FILTERED subtotal footer');
   assert.ok(out.dialogHtml.includes('data-pbs-flag-pill="leadRisk"') && out.dialogHtml.includes('data-pbs-flag-pill="spareGap"') && out.dialogHtml.includes('data-pbs-flag-pill="overlap"'), 'Summary bar renders clickable lead-time, spares-gap, and budget-overlap pills');
   assert.ok(out.dialogHtml.includes('pp-pbs-yn-Warn') && out.dialogHtml.includes('pp-pbs-link'), 'Table renders spares gap warning pill and clickable URL link');
+});
+
+test('WhatsApp-style automatic bullet lists in Roadmap notes (editor transforms, exit on empty bullet, safe HTML rendering)', () => {
+  const out = vm.runInContext(`(() => {
+    const api = globalThis.__ppRoadmapBulletsTestApi;
+    if (!api) throw new Error('Missing __ppRoadmapBulletsTestApi');
+
+    // 1. Typing "- " at start of line converts to "• "
+    const dashSpace = api.transformDashSpaceOnInput('- ', 2, 2);
+    const dashSpaceLine2 = api.transformDashSpaceOnInput('Heading\\n- ', 10, 10);
+    const midLineIgnore = api.transformDashSpaceOnInput('hello - ', 8, 8);
+
+    // 2. Pressing Enter on "- First item" normalizes and starts next bullet "• "
+    const enterFromDash = api.transformEnterKey('- First item', 12, 12);
+    // 3. Pressing Enter on "-NoSpace" also works seamlessly
+    const enterNoSpace = api.transformEnterKey('-NoSpace', 8, 8);
+    // 4. Pressing Enter on "• Second" continues "• "
+    const enterFromBullet = api.transformEnterKey('• First\\n• Second', 16, 16);
+    // 5. Pressing Enter on empty bullet "• " exits the list cleanly
+    const exitEmpty = api.transformEnterKey('• First\\n• ', 10, 10);
+    // 6. Pressing Enter mid-bullet splits cleanly into two bullets
+    const splitMid = api.transformEnterKey('• Alpha Beta', 7, 7);
+    // 7. Backspace right after "• " removes bullet prefix
+    const bsBullet = api.transformBackspaceKey('• ', 2, 2);
+
+    // 8. Safe HTML rendering groups consecutive bullets into <ul class="pp-note-bullets"> and escapes HTML
+    const rendered = api.ppFormatRoadmapNoteHtml('Overview:\\n• Ship <script>v1</script>\\n- Verify QA\\nDone');
+
+    return {
+      dashSpace, dashSpaceLine2, midLineIgnore,
+      enterFromDash, enterNoSpace, enterFromBullet, exitEmpty, splitMid, bsBullet, rendered,
+    };
+  })()`, ctx);
+
+  assert.equal(out.dashSpace.value, '• ', 'Typing "- " converts to "• "');
+  assert.equal(out.dashSpaceLine2.value, 'Heading\n• ', 'Typing "- " on a new line converts to "• "');
+  assert.equal(out.midLineIgnore, null, 'Mid-line "- " is untouched');
+  assert.equal(out.enterFromDash.value, '• First item\n• ', 'Enter on "- First item" turns into bullet list and starts next bullet');
+  assert.equal(out.enterNoSpace.value, '• NoSpace\n• ', 'Enter on "-NoSpace" turns into bullet list');
+  assert.equal(out.enterFromBullet.value, '• First\n• Second\n• ', 'Enter on existing bullet adds next bullet');
+  assert.equal(out.exitEmpty.value, '• First\n', 'Enter on empty bullet removes prefix and exits list');
+  assert.equal(out.splitMid.value, '• Alpha\n• Beta', 'Enter mid-bullet splits text onto next bullet');
+  assert.equal(out.bsBullet.value, '', 'Backspace after "• " clears bullet prefix cleanly');
+  assert.ok(out.rendered.includes('<ul class="pp-note-bullets">') && out.rendered.includes('<li>Ship &lt;script&gt;v1&lt;/script&gt;</li>') && out.rendered.includes('<li>Verify QA</li>'), 'Rendered Roadmap note groups bullets and escapes XSS');
+});
+
+test('Multi-user RBAC, wrapped-key login, self-service password change, admin reset & unified-key separate Finance Vault', async () => {
+  assert.ok(html.includes('class="pp-sync-strip"') && html.includes('class="pp-switch-track"'), 'Modernized Sync Hub status strip and toggle switches are present in HTML');
+
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    const fin = globalThis.__ppFinanceVaultTestApi;
+    if (!auth || !fin) throw new Error('Missing auth or finance test API');
+
+    liveDB = createSampleDemoDB();
+    liveDB.peopleDirectory = [{ id: 'ppl_1', name: 'Elena Rostova', role: 'Technical Lead' }];
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.activeTab = 'sync';
+
+    // 1. Admin enables master encryption password
+    const adminPw = 'AdminMaster#2026!';
+    ppSyncPassphrase = adminPw;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Lead Admin');
+    const adminHasAccess = auth.ppHasAdminAccess();
+    const adminSeesRates = hasAnyDayRates(liveDB);
+
+    // 2. Admin provisions two users: Elena (Matrix+Health, NO finance) & Marco (Matrix+Health+Sync, Finance ON)
+    const elena = await auth.createOrUpdateUserAccount({
+      name: 'Elena Rostova',
+      roleTitle: 'Technical Lead',
+      permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+      tempPassword: 'ElenaTemp#123',
+      mustChangePassword: true,
+    });
+    const marco = await auth.createOrUpdateUserAccount({
+      name: 'Marco Bellini',
+      roleTitle: 'Project Owner',
+      permissions: { tabs: { matrix: true, health: true, data: false, sync: true }, finance: true },
+      tempPassword: 'MarcoTemp#456',
+      mustChangePassword: false,
+    });
+
+    // 3. Verify normalizeAndMigrateDB & 3-way merge preserve accessControl + peopleDirectory
+    const migrated = normalizeAndMigrateDB(JSON.parse(JSON.stringify(liveDB)));
+    const preservedUsers = migrated.accessControl.users.length;
+    const preservedPeople = migrated.peopleDirectory.length;
+
+    const baseSnap = cloneSyncSnapshot(liveDB);
+    const localCopy = cloneSyncSnapshot(liveDB);
+    const diskCopy = cloneSyncSnapshot(liveDB);
+    diskCopy.comments['d_eng::p_nova::2026-W48'] = '• Remote bullet';
+    localCopy.accessControl.adminName = 'Chief Admin';
+    const mergeRes = tryThreeWayAutoMerge(baseSnap, localCopy, diskCopy);
+
+    // 4. Separate Finance Vault encrypted with SAME Admin key (no Password B)
+    const finPayload = fin.extractFinancialsFromDb(liveDB);
+    const finEncJson = await fin.encryptFinancePayload(finPayload, adminPw);
+
+    // 5. Switch to Elena (restricted tabs, NO finance)
+    ppSyncPassphrase = ''; // Clear key to prove Elena's password unwraps Admin key internally!
+    await auth.authenticateInMemoryAccount(elena.id, 'ElenaTemp#123');
+    const elenaUnwrappedKeyMatches = (ppSyncPassphrase === adminPw);
+    const elenaCanMatrix = auth.ppCanAccessTab('matrix');
+    const elenaCanData = auth.ppCanAccessTab('data');
+    const elenaCanSync = auth.ppCanAccessTab('sync');
+    const elenaCanFin = auth.ppCanAccessFinance();
+    const elenaSeesRates = hasAnyDayRates(liveDB);
+    switchTab('data');
+    const tabAfterBlockedSwitch = ui.activeTab;
+
+    // 6. Elena chooses her own personal password -> old temp password stops working
+    await auth.changeCurrentUserPassword({
+      currentPassword: 'ElenaTemp#123',
+      newPassword: 'ElenaPrivate#999',
+      skipCurrentVerify: false,
+    });
+    const elenaMustChangeAfter = liveDB.accessControl.users.find(u => u.id === elena.id).mustChangePassword;
+    let oldPwRejected = false;
+    try {
+      await auth.authenticateInMemoryAccount(elena.id, 'ElenaTemp#123');
+    } catch (_e) {
+      oldPwRejected = true;
+    }
+    ppSyncPassphrase = '';
+    await auth.authenticateInMemoryAccount(elena.id, 'ElenaPrivate#999');
+    const elenaPersonalWorks = (ppSyncPassphrase === adminPw);
+
+    // 7. Switch to Marco (Finance ON) -> internally unwraps Admin key AND decrypts separate Finance Vault without Password B!
+    ppSyncPassphrase = '';
+    await auth.authenticateInMemoryAccount(marco.id, 'MarcoTemp#456');
+    const marcoCanFin = auth.ppCanAccessFinance();
+    const marcoSeesRates = hasAnyDayRates(liveDB);
+    const marcoDecryptedFin = await fin.decryptFinancePayload(finEncJson, ppSyncPassphrase);
+
+    // 8. Switch back to Admin & reset Elena's password
+    await auth.authenticateInMemoryAccount('__ADMIN__', adminPw);
+    const adminBack = auth.ppHasAdminAccess() && !auth.ppIsStandardUser();
+    await auth.adminResetUserPassword(elena.id, 'AdminReset#777', true);
+    const elenaResetFlag = liveDB.accessControl.users.find(u => u.id === elena.id).mustChangePassword;
+    ppSyncPassphrase = '';
+    await auth.authenticateInMemoryAccount(elena.id, 'AdminReset#777');
+    const elenaResetWorks = (ppSyncPassphrase === adminPw);
+
+    // Cleanup session back to open
+    ppSyncPassphrase = '';
+    auth.ppApplyAuthenticatedSession('open');
+
+    return {
+      adminHasAccess, adminSeesRates,
+      preservedUsers, preservedPeople,
+      mergeOk: mergeRes.ok,
+      mergedAdminName: mergeRes.mergedDB?.accessControl?.adminName,
+      mergedUsersLen: mergeRes.mergedDB?.accessControl?.users?.length,
+      elenaUnwrappedKeyMatches, elenaCanMatrix, elenaCanData, elenaCanSync, elenaCanFin, elenaSeesRates,
+      tabAfterBlockedSwitch, elenaMustChangeAfter, oldPwRejected, elenaPersonalWorks,
+      marcoCanFin, marcoSeesRates,
+      marcoFinRateEng: marcoDecryptedFin?.deptRates?.d_eng?.dayRate,
+      adminBack, elenaResetFlag, elenaResetWorks,
+    };
+  })()`, ctx);
+
+  assert.equal(out.adminHasAccess, true, 'Admin session has admin access');
+  assert.equal(out.adminSeesRates, true, 'Admin session sees financial day rates');
+
+  assert.equal(out.preservedUsers, 2, 'normalizeAndMigrateDB preserves configured user accounts');
+  assert.equal(out.preservedPeople, 1, 'normalizeAndMigrateDB preserves peopleDirectory');
+  assert.equal(out.mergeOk, true, '3-way auto-merge succeeds with disjoint comments and accessControl edits');
+  assert.equal(out.mergedAdminName, 'Chief Admin', '3-way merge preserves updated adminName');
+  assert.equal(out.mergedUsersLen, 2, '3-way merge preserves configured user accounts');
+  assert.equal(out.elenaUnwrappedKeyMatches, true, 'User login internally unwraps Administrator master key');
+  assert.equal(out.elenaCanMatrix, true, 'Elena can access allowed Roadmap tab');
+  assert.equal(out.elenaCanData, false, 'Elena is blocked from Setup & Data tab');
+  assert.equal(out.elenaCanSync, false, 'Elena is blocked from Sync & Snapshots tab');
+  assert.equal(out.elenaCanFin, false, 'Elena is blocked from Financial Data');
+  assert.equal(out.elenaSeesRates, false, 'hasAnyDayRates hides all financial metrics for non-finance user');
+  assert.equal(out.tabAfterBlockedSwitch, 'matrix', 'switchTab refuses disallowed tab and stays on allowed tab');
+  assert.equal(out.elenaMustChangeAfter, false, 'Personal password update clears mustChangePassword flag');
+  assert.equal(out.oldPwRejected, true, 'Old temporary password is rejected after user picks personal password');
+  assert.equal(out.elenaPersonalWorks, true, 'Personal password unlocks Administrator key internally');
+  assert.equal(out.marcoCanFin, true, 'Finance-authorized user has financial access');
+  assert.equal(out.marcoSeesRates, true, 'Finance-authorized user sees department rates');
+  assert.equal(out.marcoFinRateEng, 650, 'Finance-authorized user decrypts separate Finance Vault with unified session key (no Password B)');
+  assert.equal(out.adminBack, true, 'Administrator can sign back in with Admin password');
+  assert.equal(out.elenaResetFlag, true, 'Admin password reset sets mustChangePassword flag');
+  assert.equal(out.elenaResetWorks, true, 'User can sign in with Admin-reset temporary password');
 });
 
 let passed = 0;

@@ -55,14 +55,17 @@
 
       const dBody = document.getElementById('dataDepartmentsBody');
       const curSym = getCurrencySymbol(db);
+      const canSeeFinance = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
       if (db.departments.length === 0) {
         dBody.innerHTML = `<tr><td colspan="7" class="px-4 py-8 text-center text-slate-400">No departments yet. Click "+ Add Department" to start.</td></tr>`;
       } else {
         dBody.innerHTML = db.departments.map((d, idx) => {
           const deptSpans = getGroupedCapacityOverrides(db, d.id);
           const overrideCount = deptSpans.reduce((acc, sp) => acc + sp.weekKeys.length, 0);
-          const rateVal = Number(d.dayRate) || 0;
-          const rateTxt = rateVal > 0 ? `${curSym.length > 1 ? curSym + ' ' : curSym}${rateVal.toLocaleString('en-US')}/d` : '—';
+          const rateVal = canSeeFinance ? (Number(d.dayRate) || 0) : 0;
+          const rateTxt = !canSeeFinance
+            ? 'Restricted'
+            : (rateVal > 0 ? `${curSym.length > 1 ? curSym + ' ' : curSym}${rateVal.toLocaleString('en-US')}/d` : '—');
           const ovSummary = overrideCount > 0
             ? `${deptSpans.length} span${deptSpans.length === 1 ? '' : 's'} (${overrideCount} wk${overrideCount === 1 ? '' : 's'}) &bull; + / Edit`
             : '+ Add Override';
@@ -87,7 +90,7 @@
                   <button type="button" aria-label="Increase ${escapeHtml(d.name)} default capacity" onclick="quickStepDeptDefaultCapacity('${d.id}', 0.5)" title="Increase default capacity by 0.5 FTE" class="px-2.5 py-1.5 md:px-2 md:py-0.5 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 font-bold transition">+</button>
                 </div>
               </td>
-              <td class="px-4 py-3 font-semibold tabular-nums ${rateVal > 0 ? 'text-slate-800' : 'text-slate-400'} whitespace-nowrap">${escapeHtml(rateTxt)}</td>
+              <td class="px-4 py-3 font-semibold tabular-nums ${!canSeeFinance ? 'text-slate-400 italic text-[11px]' : (rateVal > 0 ? 'text-slate-800' : 'text-slate-400')} whitespace-nowrap">${escapeHtml(rateTxt)}</td>
               <td class="px-4 py-3">
                 <button type="button" onclick="openCapacityModal('${d.id}', '${ui.timeUnit === 'month' ? ui.startMonth : ui.startWeek}')"
                   class="px-2.5 py-1.5 md:px-2 md:py-1 rounded-lg ${overrideCount > 0 ? 'bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100' : 'bg-slate-50 border border-slate-200 text-slate-600 hover:bg-sky-50 hover:text-sky-700'} text-[11px] font-semibold transition whitespace-nowrap">
@@ -1148,11 +1151,17 @@
       try {
         let migrated = null;
         try {
-          const rawText = (await withTimeout(
-            file.text(),
+          const readRawPromise = (typeof ppReadRawFileText === 'function')
+            ? ppReadRawFileText(file)
+            : file.text();
+          let rawText = (await withTimeout(
+            readRawPromise,
             15000,
             'Reading file contents timed out after 15s'
           )).replace(/^\uFEFF/, '');
+          if (typeof ppResolveEncryptedJsonText === 'function') {
+            rawText = await ppResolveEncryptedJsonText(rawText, { fileName: handle.name, isSilentAutoReload });
+          }
           ppDebug('INFO', 'file.text succeeded', {
             chars: rawText.length,
             startsWithBrace: rawText.trimStart().startsWith('{'),
@@ -1182,7 +1191,7 @@
         } catch (err) {
           ppDebug('ERROR', 'Sync file parse/migrate error', { name: err?.name, message: err?.message });
           if (!isSilentAutoReload) {
-            showToast(`Failed to parse "${handle.name}": ${err?.message || 'invalid JSON'}`, 'error');
+            showToast(`Failed to open "${handle.name}": ${err?.message || 'invalid JSON'}`, 'error');
           }
           return;
         }
@@ -1193,6 +1202,9 @@
           ui.whatIfMode = false;
           whatIfDB = null;
           clearUndoHistory();
+          if (typeof ppSyncAuthAfterDbLoad === 'function') {
+            ppSyncAuthAfterDbLoad(liveDB);
+          }
 
           let shifted = false;
           if (!isSilentAutoReload) {
@@ -1229,6 +1241,9 @@
             ppDebug('ERROR', 'Post-load renderAll error', { name: renderErr?.name, message: renderErr?.message });
             if (!isSilentAutoReload) showToast(`Loaded "${handle.name}", but a view render error occurred (${renderErr?.message || 'Error'}).`, 'warning');
             return;
+          }
+          if (typeof ppCheckForcedPasswordChange === 'function' && !isSilentAutoReload) {
+            setTimeout(() => ppCheckForcedPasswordChange(), 120);
           }
 
           if (isSilentAutoReload) {
@@ -1290,6 +1305,8 @@
           snapshots: db.snapshots || [],
           changeLog: db.changeLog || [],
           dumpHistory: db.dumpHistory || [],
+          peopleDirectory: db.peopleDirectory || [],
+          accessControl: db.accessControl || { version: 1, adminName: 'Administrator', users: [] },
         }));
       } catch (e) {
         return null;
@@ -1308,7 +1325,7 @@
 
     function areDBDataEqual(a, b) {
       if (!a || !b) return false;
-      const fields = ['settings', 'departments', 'projects', 'allocations', 'capacityOverrides', 'comments', 'milestones', 'snapshots'];
+      const fields = ['settings', 'departments', 'projects', 'allocations', 'capacityOverrides', 'comments', 'milestones', 'snapshots', 'peopleDirectory', 'accessControl'];
       for (const f of fields) {
         if (!syncValuesEqual(a[f], b[f])) return false;
       }
@@ -1415,6 +1432,8 @@
       const mProj = mergeArrayByIdThreeWay(baseDB.projects, localDB.projects, diskDB.projects, 'projects');
       const mMs = mergeArrayByIdThreeWay(baseDB.milestones, localDB.milestones, diskDB.milestones, 'milestones');
       const mSnap = mergeArrayByIdThreeWay(baseDB.snapshots, localDB.snapshots, diskDB.snapshots, 'snapshots');
+      const mPeople = mergeArrayByIdThreeWay(baseDB.peopleDirectory || [], localDB.peopleDirectory || [], diskDB.peopleDirectory || [], 'peopleDirectory');
+      const mUsers = mergeArrayByIdThreeWay(baseDB.accessControl?.users || [], localDB.accessControl?.users || [], diskDB.accessControl?.users || [], 'accessControl.users');
 
       const allConflicts = [
         ...mAlloc.conflicts,
@@ -1425,10 +1444,17 @@
         ...mProj.conflicts,
         ...mMs.conflicts,
         ...mSnap.conflicts,
+        ...mPeople.conflicts,
+        ...mUsers.conflicts,
       ];
       if (allConflicts.length > 0) {
         return { ok: false, reason: 'collision', conflicts: allConflicts };
       }
+
+      const baseAdminName = baseDB.accessControl?.adminName || 'Administrator';
+      const localAdminName = localDB.accessControl?.adminName || 'Administrator';
+      const diskAdminName = diskDB.accessControl?.adminName || 'Administrator';
+      const mergedAdminName = localAdminName !== baseAdminName ? localAdminName : diskAdminName;
 
       const mergedDB = {
         meta: {
@@ -1449,10 +1475,16 @@
         snapshots: mSnap.merged,
         changeLog: mergeLogEntriesById(localDB.changeLog, diskDB.changeLog, 500),
         dumpHistory: mergeLogEntriesById(localDB.dumpHistory, diskDB.dumpHistory, 100),
+        peopleDirectory: mPeople.merged,
+        accessControl: {
+          version: 1,
+          adminName: mergedAdminName,
+          users: mUsers.merged,
+        },
       };
 
-      const localAppliedCount = mAlloc.localApplied + mCap.localApplied + mCmt.localApplied + mSet.localApplied + mDept.localApplied + mProj.localApplied + mMs.localApplied + mSnap.localApplied;
-      const diskAppliedCount = mAlloc.diskApplied + mCap.diskApplied + mCmt.diskApplied + mSet.diskApplied + mDept.diskApplied + mProj.diskApplied + mMs.diskApplied + mSnap.diskApplied;
+      const localAppliedCount = mAlloc.localApplied + mCap.localApplied + mCmt.localApplied + mSet.localApplied + mDept.localApplied + mProj.localApplied + mMs.localApplied + mSnap.localApplied + mPeople.localApplied + mUsers.localApplied;
+      const diskAppliedCount = mAlloc.diskApplied + mCap.diskApplied + mCmt.diskApplied + mSet.diskApplied + mDept.diskApplied + mProj.diskApplied + mMs.diskApplied + mSnap.diskApplied + mPeople.diskApplied + mUsers.diskApplied;
       return { ok: true, mergedDB, localAppliedCount, diskAppliedCount, conflicts: [] };
     }
 
@@ -1924,6 +1956,7 @@
       }
 
       renderSyncDebugPanel();
+      if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
     }
 
     function renderSyncDebugPanel() {

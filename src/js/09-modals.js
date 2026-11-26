@@ -465,14 +465,17 @@
         const valStr = alloc && alloc.hasData
           ? formatValue(fteToDisplayValue(alloc.avgFte, periodKey, ui.timeUnit))
           : '0 ' + unitShortLabel();
+        const fmtNote = (txt) => (typeof ppFormatRoadmapNoteHtml === 'function')
+          ? ppFormatRoadmapNoteHtml(txt, 'inline')
+          : escapeHtml(txt);
         const weekNotesHtml = (cmt && cmt.weekEntries && cmt.weekEntries.length > 0)
           ? `<div class="mt-1.5 p-2 rounded-lg bg-indigo-50/70 border border-indigo-200 text-[11px] text-indigo-900 space-y-1">
                <div class="font-bold text-[10px] uppercase tracking-wider text-indigo-700">Weekly Notes inside ${escapeHtml(hdr.title)}:</div>
-               ${cmt.weekEntries.map(we => `<div><span class="font-mono font-bold">${escapeHtml(we.weekShort)}:</span> ${escapeHtml(we.text)}</div>`).join('')}
+               ${cmt.weekEntries.map(we => `<div><span class="font-mono font-bold">${escapeHtml(we.weekShort)}:</span> ${fmtNote(we.text)}</div>`).join('')}
              </div>`
           : '';
         const monthNoteRefHtml = (cmt && cmt.monthNote)
-          ? `<div class="mt-1 text-[11px] text-slate-500 italic">Month note (${escapeHtml(getWeekOwningMonth(periodKey))}): ${escapeHtml(cmt.monthNote)}</div>`
+          ? `<div class="mt-1 text-[11px] text-slate-500 italic">Month note (${escapeHtml(getWeekOwningMonth(periodKey))}): ${fmtNote(cmt.monthNote)}</div>`
           : '';
         const rightControlsHtml = isAdminPair
           ? `<div class="flex items-center gap-1.5 shrink-0">
@@ -492,8 +495,8 @@
                  class="px-2.5 py-1.5 sm:px-2 sm:py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-300 text-indigo-700 text-[11px] font-semibold transition">Edit</button>
              </div>`;
         const placeholderTxt = isAdminPair
-          ? `Log expected departmental issues or requested meetings for ${escapeHtml(hdr.title)}...`
-          : `Add a few lines of comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}...`;
+          ? `Log expected departmental issues or meetings for ${escapeHtml(hdr.title)}... (start a line with "- " for bullets)`
+          : `Add comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}... (start a line with "- " for bullets)`;
 
         return `
           <div class="${isAdminPair ? 'admin-hashed-card' : 'accent-card border border-slate-200 bg-slate-50/70'} p-3 rounded-xl space-y-2" style="${isAdminPair ? `--admin-accent:${item.color}; --accent-w:4px;` : `--accent-color:${item.color}; --accent-w:4px; border-left: 4px solid ${item.color};`}">
@@ -505,6 +508,7 @@
               ${rightControlsHtml}
             </div>
             <textarea rows="3"
+              data-bullet-notes="true"
               aria-label="Comments for ${escapeHtml(item.name)} in ${escapeHtml(hdr.title)}"
               data-comment-dept="${deptId}" data-comment-proj="${projId}"
               placeholder="${placeholderTxt}"
@@ -609,9 +613,10 @@
           <span class="text-[11px] text-slate-500 font-semibold">0 ${unitShortLabel()}</span>
         </div>
         <textarea rows="3"
+          data-bullet-notes="true"
           aria-label="Comments for ${escapeHtml(item.name)} in ${escapeHtml(hdr.title)}"
           data-comment-dept="${deptId}" data-comment-proj="${projId}"
-          placeholder="Add a few lines of comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}..."
+          placeholder="Add comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}... (start a line with &quot;- &quot; for bullets)"
           class="cell-comment-input w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30"></textarea>`;
       container.appendChild(div);
       div.querySelector('textarea')?.focus();
@@ -764,8 +769,11 @@
           </div>
 
           <div>
-            <label id="mAllocCommentLabel" for="mAllocComment" class="block font-semibold text-slate-700 mb-1">${initIsAdmin ? 'Expected Departmental Issues &amp; Requested Meetings (shown inside cell)' : 'Cell Comments / Notes (optional, shown inside cell)'}</label>
-            <textarea id="mAllocComment" rows="${initIsAdmin ? '3' : '2'}" placeholder="${initIsAdmin ? 'List expected departmental issues, risks, or requested meetings for this period...' : 'Add context, blockers, or key deliverables for this period...'}"
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <label id="mAllocCommentLabel" for="mAllocComment" class="block font-semibold text-slate-700">${initIsAdmin ? 'Expected Departmental Issues &amp; Requested Meetings (shown inside cell)' : 'Cell Comments / Notes (optional, shown inside cell)'}</label>
+              <span class="text-[10px] text-slate-400 font-medium hidden sm:inline">Start a line with <code class="px-1 rounded bg-slate-100 font-mono">- </code> for bullets</span>
+            </div>
+            <textarea id="mAllocComment" data-bullet-notes="true" rows="${initIsAdmin ? '3' : '2'}" placeholder="${initIsAdmin ? 'List expected departmental issues, risks, or requested meetings... (start with "- " for bullets)' : 'Add context, blockers, or deliverables... (start with "- " for bullets)'}"
               class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs leading-relaxed">${escapeHtml(existingComment)}</textarea>
           </div>
 
@@ -1320,10 +1328,11 @@
               <input id="mDeptColor" type="color" value="${color}" class="w-full h-10 rounded-xl border border-slate-200 cursor-pointer" />
             </div>
           </div>
+          ${typeof ppCanAccessFinance === 'function' && !ppCanAccessFinance() ? '' : `
           <div>
             <label for="mDeptDayRate" class="block font-semibold text-slate-700 mb-1">Blended Day Rate (${escapeHtml(getCurrencySymbol(db))}/day, optional)</label>
             <input id="mDeptDayRate" type="number" inputmode="decimal" min="0" step="25" value="${Number(d?.dayRate) > 0 ? d.dayRate : ''}" placeholder="Leave blank if cost tracking is not needed" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
-          </div>
+          </div>`}
           <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
             <button type="button" onclick="closeModal()" class="px-4 py-2.5 sm:py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold">Cancel</button>
             <button type="button" onclick="saveDeptModal()" class="px-4 py-2.5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">Save Department</button>
@@ -1339,7 +1348,11 @@
       const defaultCapacity = Math.max(0, parseFloat(document.getElementById('mDeptCap').value) || 0);
       const manager = document.getElementById('mDeptMgr').value.trim();
       const color = document.getElementById('mDeptColor').value || '#4f46e5';
-      const dayRate = Math.max(0, parseFloat(document.getElementById('mDeptDayRate')?.value) || 0);
+      const canFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+      const existingDept = id ? db.departments.find(x => x.id === id) : null;
+      const dayRate = canFin
+        ? Math.max(0, parseFloat(document.getElementById('mDeptDayRate')?.value) || 0)
+        : (Number(existingDept?.dayRate) || 0);
 
       if (!name) { showToast('Department name is required.', 'warning'); return; }
 
@@ -1347,10 +1360,10 @@
       if (id) {
         const d = db.departments.find(x => x.id === id);
         if (d) Object.assign(d, { name, code, defaultCapacity, manager, color, dayRate });
-        recordChange('Department', `Updated department [${code}] ${name} (${defaultCapacity} FTE${dayRate > 0 ? `, ${getCurrencySymbol(db)}${dayRate}/d` : ''})`);
+        recordChange('Department', `Updated department [${code}] ${name} (${defaultCapacity} FTE${canFin && dayRate > 0 ? `, ${getCurrencySymbol(db)}${dayRate}/d` : ''})`);
       } else {
         db.departments.push({ id: uid('d'), name, code, defaultCapacity, manager, color, dayRate });
-        recordChange('Department', `Added department [${code}] ${name} (${defaultCapacity} FTE${dayRate > 0 ? `, ${getCurrencySymbol(db)}${dayRate}/d` : ''})`);
+        recordChange('Department', `Added department [${code}] ${name} (${defaultCapacity} FTE${canFin && dayRate > 0 ? `, ${getCurrencySymbol(db)}${dayRate}/d` : ''})`);
       }
       closeModal();
       renderAll();
@@ -1391,6 +1404,7 @@
       const color = p ? p.color : PALETTE[(db.projects.length + 2) % PALETTE.length];
       const curCategory = isNonFteProject(p) ? 'admin' : (p?.tentative ? 'tentative' : 'standard');
       const isAdmin = curCategory === 'admin';
+      const canFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
 
       showModal(`
         <div class="p-5 space-y-4 text-xs">
@@ -1449,15 +1463,16 @@
               <input id="mProjColor" type="color" value="${color}" class="w-full h-10 rounded-xl border border-slate-200 cursor-pointer" />
             </div>
           </div>
-          <div id="mProjBudgetRow" class="${isAdmin ? 'hidden' : ''} grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div id="mProjBudgetRow" class="${isAdmin ? 'hidden' : ''} grid grid-cols-1 ${canFin ? 'sm:grid-cols-2' : ''} gap-3">
             <div>
               <label for="mProjBudget" class="block font-semibold text-slate-700 mb-1">Effort Budget (Person-Days, optional)</label>
               <input id="mProjBudget" type="number" inputmode="decimal" min="0" step="5" value="${Number(p?.budgetDays) > 0 ? p.budgetDays : ''}" placeholder="e.g. 120" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
             </div>
+            ${canFin ? `
             <div>
               <label for="mProjBudgetCost" class="block font-semibold text-slate-700 mb-1">Cost Budget (${escapeHtml(getCurrencySymbol(db))}, optional)</label>
               <input id="mProjBudgetCost" type="number" inputmode="decimal" min="0" step="1000" value="${Number(p?.budgetCost) > 0 ? p.budgetCost : ''}" placeholder="e.g. 150000" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
-            </div>
+            </div>` : ''}
           </div>
           <label class="inline-flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer select-none w-full">
             <input id="mProjArchived" type="checkbox" ${p?.archived ? 'checked' : ''} class="rounded text-indigo-600" />
@@ -1485,7 +1500,9 @@
       const techLead = (document.getElementById('mProjTechLead')?.value || '').trim();
       const color = document.getElementById('mProjColor').value || '#4f46e5';
       const budgetDays = nonFte ? 0 : Math.max(0, parseFloat(document.getElementById('mProjBudget')?.value) || 0);
-      const budgetCost = nonFte ? 0 : Math.max(0, parseFloat(document.getElementById('mProjBudgetCost')?.value) || 0);
+      const canFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+      const existingProj = id ? db.projects.find(x => x.id === id) : null;
+      const budgetCost = nonFte ? 0 : (canFin ? Math.max(0, parseFloat(document.getElementById('mProjBudgetCost')?.value) || 0) : (Number(existingProj?.budgetCost) || 0));
       const archived = Boolean(document.getElementById('mProjArchived')?.checked);
 
       if (!name) { showToast('Project name is required.', 'warning'); return; }

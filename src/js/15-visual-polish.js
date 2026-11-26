@@ -162,6 +162,10 @@
           </svg>
           <span id="ppHeaderShieldLabel">Plain</span>`;
         btn.addEventListener('click', () => {
+          if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+            if (typeof openUserSwitcherModal === 'function') openUserSwitcherModal();
+            return;
+          }
           if (typeof openSyncEncryptionDialog === 'function') openSyncEncryptionDialog();
         });
         h1.parentElement.appendChild(btn);
@@ -188,16 +192,24 @@
         renderPlanningIntelligenceDialog.__ppSvgWrapped = true;
       }
 
-      // 4. Add "Export Milestones (.ics)" button inside the Sync encryption bar
-      const encBar = document.getElementById('ppSyncTabEncBar');
-      if (encBar && !document.getElementById('ppExportIcsBtn')) {
-        const icsBtn = document.createElement('button');
-        icsBtn.id = 'ppExportIcsBtn';
-        icsBtn.type = 'button';
-        icsBtn.className = 'px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold transition cursor-pointer';
-        icsBtn.textContent = 'Export Milestones (.ics)';
-        icsBtn.addEventListener('click', ppExportMilestonesIcs);
-        encBar.appendChild(icsBtn);
+      // 4. Wire or inject "Export Milestones (.ics)" button inside the Sync tab
+      const existingIcsBtn = document.getElementById('ppExportIcsBtn');
+      if (existingIcsBtn) {
+        if (!existingIcsBtn.__ppIcsWired) {
+          existingIcsBtn.__ppIcsWired = true;
+          existingIcsBtn.addEventListener('click', ppExportMilestonesIcs);
+        }
+      } else {
+        const encBar = document.getElementById('ppSyncTabEncBar');
+        if (encBar) {
+          const icsBtn = document.createElement('button');
+          icsBtn.id = 'ppExportIcsBtn';
+          icsBtn.type = 'button';
+          icsBtn.className = 'px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold transition cursor-pointer';
+          icsBtn.textContent = 'Export Milestones (.ics)';
+          icsBtn.addEventListener('click', ppExportMilestonesIcs);
+          encBar.appendChild(icsBtn);
+        }
       }
     }
 

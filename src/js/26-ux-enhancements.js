@@ -254,15 +254,19 @@
 
   /* ---------- 5. Sync & Snapshots: Password-Gated Clear DB + Clear Plan (Keep Setup & Data) ---------- */
   function verifyClearPassword(actionLabel) {
+    if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+      toast('Administrator privileges are required for this action.', 'error');
+      return false;
+    }
     const expected = typeof ppSyncPassphrase === 'string' && ppSyncPassphrase ? ppSyncPassphrase : '';
     const promptMsg = expected
-      ? `Enter your Sync Encryption Password to confirm: ${actionLabel}`
+      ? `Enter the Administrator Password to confirm: ${actionLabel}`
       : `Type CLEAR to confirm: ${actionLabel}`;
     const entered = typeof window !== 'undefined' && typeof window.prompt === 'function' ? window.prompt(promptMsg, '') : null;
     if (entered === null) return false;
     if (expected) {
       if (entered !== expected) {
-        toast('Incorrect password. Clear operation cancelled.', 'error');
+        toast('Incorrect Administrator password. Clear operation cancelled.', 'error');
         return false;
       }
       return true;
@@ -277,8 +281,13 @@
   function enhanceSyncClearButtons() {
     const syncTab = document.getElementById('tab-sync');
     if (!syncTab) return;
+    const isStdUser = typeof ppIsStandardUser === 'function' && ppIsStandardUser();
+    const dangerZone = document.getElementById('syncDangerZone');
+    if (dangerZone) dangerZone.classList.toggle('hidden', isStdUser);
+
     const clearBtn = Array.from(syncTab.querySelectorAll('button')).find(b => /clear\s+current\s+db/i.test(b.textContent || ''));
     if (!clearBtn) return;
+    clearBtn.classList.toggle('hidden', isStdUser);
 
     if (!clearBtn.__ppPwGuarded) {
       clearBtn.__ppPwGuarded = true;
@@ -290,14 +299,15 @@
       }, true);
     }
 
-    if (!document.getElementById('ppClearPlanOnlyBtn') && clearBtn.parentElement) {
-      const btn = document.createElement('button');
-      btn.id = 'ppClearPlanOnlyBtn';
-      btn.type = 'button';
-      btn.className = clearBtn.className;
-      btn.textContent = 'Clear Plan (Keep Setup & Data)';
-      btn.title = 'Clears allocations, overrides, notes, milestones, snapshots & logs while keeping Departments, Projects & Settings';
-      btn.addEventListener('click', () => {
+    let clearPlanBtn = document.getElementById('ppClearPlanOnlyBtn');
+    if (!clearPlanBtn && clearBtn.parentElement) {
+      clearPlanBtn = document.createElement('button');
+      clearPlanBtn.id = 'ppClearPlanOnlyBtn';
+      clearPlanBtn.type = 'button';
+      clearPlanBtn.className = 'px-3 py-1.5 rounded-xl border border-amber-200 bg-white hover:bg-amber-50 text-amber-800 text-xs font-semibold transition cursor-pointer';
+      clearPlanBtn.textContent = 'Clear Plan (Keep Setup & Data)';
+      clearPlanBtn.title = 'Clears allocations, overrides, notes, milestones, snapshots & logs while keeping Departments, Projects & Settings';
+      clearPlanBtn.addEventListener('click', () => {
         if (!verifyClearPassword('Clear Plan Only (keeps Setup & Data)')) return;
         const db = getDb();
         db.allocations = {};
@@ -310,8 +320,9 @@
         if (typeof renderAll === 'function') renderAll();
         toast('Cleared roadmap plan, notes, milestones & snapshots while preserving Setup & Data.', 'success');
       });
-      clearBtn.parentElement.insertBefore(btn, clearBtn.nextSibling);
+      clearBtn.parentElement.insertBefore(clearPlanBtn, clearBtn);
     }
+    if (clearPlanBtn) clearPlanBtn.classList.toggle('hidden', isStdUser);
   }
 
   /* ---------- 6. EUPL-1.2 User Licence Alignment ---------- */

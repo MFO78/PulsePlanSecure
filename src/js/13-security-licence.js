@@ -50,6 +50,7 @@
     let ppPassphraseResolver = null;
     let ppAutoLockMinutes = 30;
     let ppAutoLockTimer = null;
+    let ppOrigFileText = null;
 
     function ppBytesToBase64(bytes) {
       let binary = '';
@@ -64,7 +65,7 @@
       return out;
     }
 
-    async function ppDeriveAesKey(passphrase, saltBytes) {
+    async function ppDeriveAesKey(passphrase, saltBytes, iterations = PP_PBKDF2_ITERATIONS) {
       const enc = new TextEncoder();
       const baseKey = await crypto.subtle.importKey(
         'raw',
@@ -74,12 +75,91 @@
         ['deriveKey']
       );
       return crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: saltBytes, iterations: PP_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+        { name: 'PBKDF2', salt: saltBytes, iterations: Number(iterations) || PP_PBKDF2_ITERATIONS, hash: 'SHA-256' },
         baseKey,
         { name: 'AES-GCM', length: 256 },
         false,
         ['encrypt', 'decrypt']
       );
+    }
+
+    async function ppWrapMasterPassphrase(masterPassphrase, userPassword, userId = '') {
+      if (!masterPassphrase || masterPassphrase.length < 8) {
+        throw new Error('Administrator passphrase must be active (at least 8 characters).');
+      }
+      if (!userPassword || userPassword.length < 8) {
+        throw new Error('User password must be at least 8 characters long.');
+      }
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await ppDeriveAesKey(userPassword, salt, PP_PBKDF2_ITERATIONS);
+      const payload = JSON.stringify({
+        v: 1,
+        userId: String(userId || ''),
+        masterPass: masterPassphrase,
+      });
+      const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(payload));
+      return {
+        kdf: 'PBKDF2-SHA256',
+        iterations: PP_PBKDF2_ITERATIONS,
+        salt: ppBytesToBase64(salt),
+        iv: ppBytesToBase64(iv),
+        wrapped: ppBytesToBase64(new Uint8Array(cipherBuf)),
+      };
+    }
+
+    async function ppUnwrapMasterPassphrase(keySlot, userPassword, expectedUserId = '') {
+      if (!keySlot || !keySlot.salt || !keySlot.iv || !keySlot.wrapped) {
+        throw new Error('User key slot is missing or requires an Administrator password reset.');
+      }
+      if (!userPassword) {
+        throw new Error('Password is required.');
+      }
+      const salt = ppBase64ToBytes(keySlot.salt);
+      const iv = ppBase64ToBytes(keySlot.iv);
+      const wrappedBytes = ppBase64ToBytes(keySlot.wrapped);
+      const key = await ppDeriveAesKey(userPassword, salt, keySlot.iterations || PP_PBKDF2_ITERATIONS);
+      let decoded;
+      try {
+        const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, wrappedBytes);
+        decoded = JSON.parse(new TextDecoder().decode(plainBuf));
+      } catch (_err) {
+        throw new Error('Incorrect password. Please try again.');
+      }
+      if (!decoded || decoded.v !== 1 || typeof decoded.masterPass !== 'string' || decoded.masterPass.length < 8) {
+        throw new Error('Corrupted user key slot. Ask your Administrator to reset your password.');
+      }
+      if (expectedUserId && decoded.userId && decoded.userId !== expectedUserId) {
+        throw new Error('Key slot identity mismatch.');
+      }
+      return decoded.masterPass;
+    }
+
+    function ppBuildOuterAuthMetadata(dbObj) {
+      const ac = dbObj && typeof dbObj === 'object' ? dbObj.accessControl : null;
+      if (!ac || !Array.isArray(ac.users)) return null;
+      const activeUsers = ac.users.filter(u =>
+        u && u.id && u.name && u.enabled !== false && !u.needsAdminKeyReset &&
+        u.keySlot && u.keySlot.salt && u.keySlot.iv && u.keySlot.wrapped
+      );
+      if (activeUsers.length === 0) return null;
+      return {
+        version: 1,
+        adminName: String(ac.adminName || 'Administrator').trim() || 'Administrator',
+        users: activeUsers.map(u => ({
+          id: String(u.id),
+          name: String(u.name),
+          roleTitle: String(u.roleTitle || ''),
+          mustChangePassword: Boolean(u.mustChangePassword),
+          keySlot: {
+            kdf: String(u.keySlot.kdf || 'PBKDF2-SHA256'),
+            iterations: Number(u.keySlot.iterations) || PP_PBKDF2_ITERATIONS,
+            salt: String(u.keySlot.salt),
+            iv: String(u.keySlot.iv),
+            wrapped: String(u.keySlot.wrapped),
+          },
+        })),
+      };
     }
 
     async function encryptPulsePlanData(dbObj, passphrase) {
@@ -88,10 +168,10 @@
       }
       const salt = crypto.getRandomValues(new Uint8Array(16));
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const key = await ppDeriveAesKey(passphrase, salt);
+      const key = await ppDeriveAesKey(passphrase, salt, PP_PBKDF2_ITERATIONS);
       const plaintext = new TextEncoder().encode(JSON.stringify(dbObj));
       const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-      return {
+      const envelope = {
         format: PP_ENC_FORMAT,
         kdf: 'PBKDF2-SHA256',
         iterations: PP_PBKDF2_ITERATIONS,
@@ -101,6 +181,9 @@
         iv: ppBytesToBase64(iv),
         ciphertext: ppBytesToBase64(new Uint8Array(cipherBuf)),
       };
+      const outerAuth = ppBuildOuterAuthMetadata(dbObj);
+      if (outerAuth) envelope.auth = outerAuth;
+      return envelope;
     }
 
     async function decryptPulsePlanData(envelope, passphrase) {
@@ -113,13 +196,46 @@
       const salt = ppBase64ToBytes(envelope.salt);
       const iv = ppBase64ToBytes(envelope.iv);
       const ciphertext = ppBase64ToBytes(envelope.ciphertext);
-      const key = await ppDeriveAesKey(passphrase, salt);
+      const key = await ppDeriveAesKey(passphrase, salt, envelope.iterations || PP_PBKDF2_ITERATIONS);
       try {
         const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
         return new TextDecoder().decode(plainBuf);
       } catch (_err) {
         throw new Error('Decryption failed. Check your passphrase or verify the JSON file was not altered.');
       }
+    }
+
+    async function ppDecryptWithUserCredentials(envelope, accountId, password) {
+      if (!envelope || envelope.format !== PP_ENC_FORMAT) {
+        throw new Error('Invalid encrypted PulsePlan file.');
+      }
+      if (!password) {
+        throw new Error('Please enter your password.');
+      }
+      if (!accountId || accountId === '__ADMIN__') {
+        const plainJson = await decryptPulsePlanData(envelope, password);
+        return { plainJson, masterPass: password, authRole: 'admin', userRecord: null };
+      }
+      const authUsers = Array.isArray(envelope.auth?.users) ? envelope.auth.users : [];
+      const slotEntry = authUsers.find(u => u && u.id === accountId);
+      if (!slotEntry || !slotEntry.keySlot) {
+        throw new Error('Account not found or requires a password reset by your Administrator.');
+      }
+      const masterPass = await ppUnwrapMasterPassphrase(slotEntry.keySlot, password, accountId);
+      const plainJson = await decryptPulsePlanData(envelope, masterPass);
+      let parsedDb = null;
+      try {
+        parsedDb = JSON.parse(plainJson);
+      } catch (_err) {
+        throw new Error('Decrypted database is malformed.');
+      }
+      const authUser = Array.isArray(parsedDb?.accessControl?.users)
+        ? parsedDb.accessControl.users.find(u => u && u.id === accountId)
+        : null;
+      if (!authUser || authUser.enabled === false) {
+        throw new Error('This user account has been disabled or removed by the Administrator.');
+      }
+      return { plainJson, masterPass, authRole: 'user', userRecord: authUser };
     }
 
     function ppEvaluatePassphraseStrength(pass) {
@@ -162,9 +278,10 @@
       if (ppSyncPassphrase && ppAutoLockMinutes > 0) {
         ppAutoLockTimer = setTimeout(() => {
           ppSyncPassphrase = '';
+          if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('inactivity');
           updateSyncEncryptionBadges();
           if (typeof showToast === 'function') {
-            showToast('Sync JSON encryption passphrase locked after inactivity.', 'info');
+            showToast('Session locked after inactivity. Sign in again to read or write encrypted files.', 'info');
           }
         }, ppAutoLockMinutes * 60 * 1000);
       }
@@ -184,6 +301,8 @@
           ? 'px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px] uppercase'
           : 'px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase';
       }
+      if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
+      if (typeof ppSyncAuthChromeUI === 'function') ppSyncAuthChromeUI();
     }
 
     function setEncryptStatus(msg, isError) {
@@ -191,24 +310,64 @@
       if (!el) return;
       el.textContent = msg;
       el.className = isError
-        ? 'text-xs rounded-lg px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200'
-        : 'text-xs rounded-lg px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200';
+        ? 'text-xs rounded-xl px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200'
+        : 'text-xs rounded-xl px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-200';
     }
 
     function openSyncEncryptionDialog(promptReason = '') {
+      if (!ppPassphraseResolver && typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+        if (typeof openUserSwitcherModal === 'function') openUserSwitcherModal();
+        else if (typeof showToast === 'function') showToast('Administrator access required to configure master encryption.', 'warning');
+        return;
+      }
       const dlg = document.getElementById('ppEncryptDialog');
       if (!dlg) return;
+      const isDecryptPrompt = Boolean(ppPassphraseResolver);
+      const titleEl = document.getElementById('ppEncryptDialogTitle');
+      if (titleEl) {
+        titleEl.textContent = isDecryptPrompt
+          ? 'Unlock Encrypted Database'
+          : 'Administrator Encryption Key (AES-256-GCM)';
+      }
       const reasonEl = document.getElementById('ppEncryptReason');
       if (reasonEl) {
-        reasonEl.textContent = promptReason || 'Set a session passphrase to automatically encrypt synced .json saves, folder backups, and Share / Save JSON exports with AES-256-GCM.';
+        reasonEl.textContent = promptReason || 'Set the Administrator master password. It encrypts synced .json files, backups, and the separate Finance Vault automatically. Team users unlock it internally with their own passwords.';
       }
       const statusEl = document.getElementById('ppEncryptStatus');
       if (statusEl) {
         statusEl.textContent = '';
-        statusEl.className = 'hidden text-xs rounded-lg px-3 py-2';
+        statusEl.className = 'hidden text-xs rounded-xl px-3 py-2';
       }
       const passEl = document.getElementById('ppEncryptPassphrase');
-      if (passEl) passEl.value = '';
+      const confEl = document.getElementById('ppEncryptPassphraseConfirm');
+      const confWrap = document.getElementById('ppEncryptConfirmWrap');
+      const disableBtn = document.getElementById('ppEncryptDisableBtn');
+      const saveBtn = document.getElementById('ppEncryptSaveBtn');
+      const userWarnEl = document.getElementById('ppEncryptUserWarn');
+      if (passEl) {
+        passEl.value = '';
+        passEl.type = 'password';
+      }
+      if (confEl) {
+        confEl.value = '';
+        confEl.type = 'password';
+      }
+      const eyeBtn = document.getElementById('ppEncryptEyeBtn');
+      if (eyeBtn) eyeBtn.textContent = 'Show';
+      if (confWrap) confWrap.classList.toggle('hidden', isDecryptPrompt);
+      if (disableBtn) disableBtn.classList.toggle('hidden', isDecryptPrompt || !ppSyncPassphrase);
+      if (saveBtn) saveBtn.textContent = isDecryptPrompt ? 'Decrypt & Open' : (ppSyncPassphrase ? 'Update Admin Password' : 'Enable Encryption');
+
+      const curDb = ppGetCurrentDbRef();
+      const existingUserCount = Array.isArray(curDb?.accessControl?.users) ? curDb.accessControl.users.filter(u => u && u.enabled !== false).length : 0;
+      if (userWarnEl) {
+        const showWarn = !isDecryptPrompt && Boolean(ppSyncPassphrase) && existingUserCount > 0;
+        userWarnEl.classList.toggle('hidden', !showWarn);
+        if (showWarn) {
+          userWarnEl.textContent = `Heads up: ${existingUserCount} team user account${existingUserCount === 1 ? '' : 's'} currently wrap your existing Admin key. Changing the Admin password requires resetting their temporary passwords in Team Access.`;
+        }
+      }
+
       updatePassphraseStrengthUI('');
       const timeoutSel = document.getElementById('ppEncryptAutoLock');
       if (timeoutSel) timeoutSel.value = String(ppAutoLockMinutes);
@@ -220,7 +379,7 @@
     function promptForDecryptionPassphrase() {
       return new Promise((resolve) => {
         ppPassphraseResolver = resolve;
-        openSyncEncryptionDialog('This .json file is encrypted (AES-256-GCM). Enter its passphrase to decrypt and load it.');
+        openSyncEncryptionDialog('This .json file is encrypted (AES-256-GCM). Enter the Administrator passphrase to decrypt and load it.');
       });
     }
 
@@ -250,7 +409,7 @@
       const dbObj = ppGetCurrentDbRef();
       if (!dbObj) return;
       const payload = JSON.parse(JSON.stringify(dbObj));
-      const incSnap = document.getElementById('exportIncludeSnapshots');
+      const incSnap = document.getElementById('chkExportIncludeSnapshots') || document.getElementById('exportIncludeSnapshots');
       if (incSnap && !incSnap.checked) {
         payload.snapshots = [];
       }
@@ -286,6 +445,72 @@
       }
     }
 
+    async function ppReadRawFileText(file) {
+      if (!file) return '';
+      if (ppOrigFileText) return ppOrigFileText.call(file);
+      if (typeof file.text === 'function') return file.text();
+      return '';
+    }
+
+    async function ppResolveEncryptedJsonText(raw, opts = {}) {
+      if (typeof raw !== 'string' || !raw.includes(PP_ENC_FORMAT)) return raw;
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (_err) {
+        return raw;
+      }
+      if (!parsed || parsed.format !== PP_ENC_FORMAT) return raw;
+
+      // Fast path: already unlocked in memory (e.g., silent auto-reload or 3-way merge check)
+      if (ppSyncPassphrase && !opts.forceLoginPrompt) {
+        try {
+          const plainJson = await decryptPulsePlanData(parsed, ppSyncPassphrase);
+          resetPassphraseAutoLock();
+          updateSyncEncryptionBadges();
+          return plainJson;
+        } catch (_err) {
+          if (opts.isSilentAutoReload) {
+            throw new Error('Encrypted file passphrase changed on disk. Sign in again to reload.');
+          }
+          // Fall through to interactive login
+        }
+      }
+
+      if (opts.isSilentAutoReload) {
+        throw new Error('Session locked — sign in to reload encrypted file.');
+      }
+
+      // Interactive modern multi-user login dialog (if loaded)
+      if (typeof ppPromptEncryptedFileLogin === 'function') {
+        const res = await ppPromptEncryptedFileLogin(parsed, opts);
+        if (!res || !res.plainJson || !res.masterPass) {
+          throw new Error('Sign-in cancelled.');
+        }
+        ppSyncPassphrase = res.masterPass;
+        resetPassphraseAutoLock();
+        if (typeof ppApplyAuthenticatedSession === 'function') {
+          ppApplyAuthenticatedSession(res.authRole, res.userRecord, parsed.auth?.adminName);
+        }
+        updateSyncEncryptionBadges();
+        return res.plainJson;
+      }
+
+      // Legacy fallback: single passphrase prompt
+      const pass = await promptForDecryptionPassphrase();
+      if (!pass) {
+        throw new Error('Decryption cancelled: no passphrase provided.');
+      }
+      const plainJson = await decryptPulsePlanData(parsed, pass);
+      ppSyncPassphrase = pass;
+      resetPassphraseAutoLock();
+      if (typeof ppApplyAuthenticatedSession === 'function') {
+        ppApplyAuthenticatedSession('admin', null, parsed.auth?.adminName);
+      }
+      updateSyncEncryptionBadges();
+      return plainJson;
+    }
+
     function installTransparentJsonCryptoHooks() {
       if (typeof window === 'undefined') return;
 
@@ -298,7 +523,7 @@
             if (ppSyncPassphrase && typeof data === 'string' && data.trim().startsWith('{')) {
               try {
                 const parsed = JSON.parse(data);
-                if (parsed && parsed.format !== PP_ENC_FORMAT && (parsed.departments || parsed.projects)) {
+                if (parsed && parsed.format !== PP_ENC_FORMAT && parsed.type !== 'pulseplan-finance-vault' && (parsed.departments || parsed.projects)) {
                   resetPassphraseAutoLock();
                   const envelope = await encryptPulsePlanData(parsed, ppSyncPassphrase);
                   return origWrite(JSON.stringify(envelope, null, 2));
@@ -316,31 +541,10 @@
 
       if (typeof File !== 'undefined' && File.prototype && File.prototype.text && !File.prototype.__ppCryptoWrapped) {
         const origText = File.prototype.text;
+        ppOrigFileText = origText;
         File.prototype.text = async function (...args) {
           const raw = await origText.apply(this, args);
-          if (typeof raw === 'string' && raw.includes(PP_ENC_FORMAT)) {
-            let parsed = null;
-            try {
-              parsed = JSON.parse(raw);
-            } catch (_err) {
-              return raw;
-            }
-            if (parsed && parsed.format === PP_ENC_FORMAT) {
-              let pass = ppSyncPassphrase;
-              if (!pass) {
-                pass = await promptForDecryptionPassphrase();
-              }
-              if (!pass) {
-                throw new Error('Decryption cancelled: no passphrase provided.');
-              }
-              const plainJson = await decryptPulsePlanData(parsed, pass);
-              ppSyncPassphrase = pass;
-              resetPassphraseAutoLock();
-              updateSyncEncryptionBadges();
-              return plainJson;
-            }
-          }
-          return raw;
+          return ppResolveEncryptedJsonText(raw, { fileName: this?.name || '' });
         };
         File.prototype.__ppCryptoWrapped = true;
       }
@@ -381,7 +585,7 @@
       const style = document.createElement('style');
       style.id = 'ppSecurityDialogStyles';
       style.textContent = `
-        dialog#ppEncryptDialog::backdrop, dialog#ppLicenceDialog::backdrop { background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(2px); }
+        dialog#ppEncryptDialog::backdrop, dialog#ppLicenceDialog::backdrop { background: rgba(15, 23, 42, 0.58); backdrop-filter: blur(4px); }
         html.dark dialog#ppEncryptDialog, html.dark dialog#ppLicenceDialog,
         body.dark dialog#ppEncryptDialog, body.dark dialog#ppLicenceDialog {
           background-color: #0f172a; color: #f1f5f9; border-color: #334155;
@@ -396,7 +600,7 @@
           background-color: #1e293b; color: #cbd5e1; border-color: #334155;
         }
         html.dark #ppSyncTabEncBar, body.dark #ppSyncTabEncBar {
-          background-color: #1e293b; border-color: #334155; color: #f1f5f9;
+          background-color: #162033; border-color: #334155; color: #f1f5f9;
         }
       `;
       document.head.appendChild(style);
@@ -427,7 +631,7 @@
             <svg class="w-3.5 h-3.5 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
             </svg>
-            <span>Sync JSON Encryption</span>
+            <span>Admin Encryption Key</span>
           </span>
           <span id="ppSyncEncChip" class="text-[10px] font-bold text-slate-400">OFF</span>`;
         encBtn.addEventListener('click', () => {
@@ -446,7 +650,7 @@
             </svg>
             <span>User Licence</span>
           </span>
-          <span class="text-[10px] text-slate-400">MIT</span>`;
+          <span class="text-[10px] text-slate-400">EUPL-1.2</span>`;
         licBtn.addEventListener('click', () => {
           if (typeof closeHeaderWorkspaceMenu === 'function') closeHeaderWorkspaceMenu();
           openLicenceDialog();
@@ -489,16 +693,16 @@
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-bold text-slate-900">Shared JSON Encryption</span>
             <span id="ppSyncTabEncBadge" class="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase">Plaintext JSON</span>
-            <span class="text-slate-500">Encrypts linked <code class="px-1 rounded bg-white font-mono">.json</code> saves, folder backups &amp; Share / Save JSON with AES-256-GCM.</span>
+            <span class="text-slate-500">AES-256-GCM master encryption with per-user login &amp; unified Finance Vault.</span>
           </div>
-          <button type="button" id="ppSyncTabEncBtn" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Configure Passphrase</button>`;
+          <button type="button" id="ppSyncTabEncBtn" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Configure Admin Key</button>`;
         if (targetCard && typeof targetCard.appendChild === 'function') {
           targetCard.appendChild(bar);
         } else {
           syncTab.prepend(bar);
         }
-        document.getElementById('ppSyncTabEncBtn')?.addEventListener('click', () => openSyncEncryptionDialog());
       }
+      document.getElementById('ppSyncTabEncBtn')?.addEventListener('click', () => openSyncEncryptionDialog());
 
       if (!document.getElementById('ppEncryptDialog')) {
         const encDialog = document.createElement('dialog');
@@ -506,42 +710,62 @@
         encDialog.setAttribute('aria-labelledby', 'ppEncryptDialogTitle');
         encDialog.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-full max-w-md';
         encDialog.innerHTML = `
-          <div class="p-5 space-y-4 text-xs">
+          <form id="ppEncryptForm" class="p-5 space-y-4 text-xs" onsubmit="return false;">
             <header class="flex items-start justify-between gap-3">
-              <div>
-                <h2 id="ppEncryptDialogTitle" class="text-base font-extrabold text-slate-900">Sync JSON Encryption (AES-256-GCM)</h2>
-                <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5">Set a session passphrase to automatically encrypt synced .json saves, folder backups, and Share / Save JSON exports with AES-256-GCM.</p>
+              <div class="flex items-start gap-2.5">
+                <div class="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                  <svg class="w-4.5 h-4.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 id="ppEncryptDialogTitle" class="text-base font-extrabold text-slate-900">Administrator Encryption Key (AES-256-GCM)</h2>
+                  <p id="ppEncryptReason" class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">Set the Administrator master password. It encrypts synced .json files, backups, and the separate Finance Vault automatically.</p>
+                </div>
               </div>
-              <button type="button" id="ppEncryptCloseBtn" aria-label="Close encryption dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
+              <button type="button" id="ppEncryptCloseBtn" aria-label="Close encryption dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0">&times;</button>
             </header>
+            <div id="ppEncryptUserWarn" class="hidden text-[11px] leading-relaxed rounded-xl px-3 py-2 bg-amber-50 text-amber-900 border border-amber-200"></div>
             <div class="space-y-1.5">
               <div class="flex items-center justify-between">
-                <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Passphrase (minimum 8 characters)</label>
+                <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Administrator Password (min 8 chars)</label>
                 <span id="ppStrengthLabel" class="text-[10px] font-bold text-slate-400"></span>
               </div>
-              <input id="ppEncryptPassphrase" type="password" autocomplete="new-password" placeholder="Enter passphrase..." class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+              <div class="flex items-center gap-1.5">
+                <input id="ppEncryptPassphrase" type="password" autocomplete="new-password" placeholder="Enter Administrator password..." class="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+                <button type="button" id="ppEncryptEyeBtn" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-semibold transition cursor-pointer shrink-0">Show</button>
+              </div>
               <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
                 <div id="ppStrengthBar" class="h-full rounded-full bg-slate-200 transition-all" style="width:0%"></div>
               </div>
             </div>
+            <div id="ppEncryptConfirmWrap" class="space-y-1.5">
+              <label for="ppEncryptPassphraseConfirm" class="block font-semibold text-slate-700">Confirm Administrator Password</label>
+              <input id="ppEncryptPassphraseConfirm" type="password" autocomplete="new-password" placeholder="Repeat Administrator password..." class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+            </div>
             <div class="space-y-1.5">
-              <label for="ppEncryptAutoLock" class="block font-semibold text-slate-700">Auto-lock passphrase after inactivity</label>
+              <label for="ppEncryptAutoLock" class="block font-semibold text-slate-700">Auto-lock session after inactivity</label>
               <select id="ppEncryptAutoLock" class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900">
                 <option value="15">15 minutes</option>
                 <option value="30" selected>30 minutes (default)</option>
+                <option value="60">60 minutes</option>
                 <option value="0">Never (until tab closed)</option>
               </select>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button type="button" id="ppEncryptSaveBtn" class="flex-1 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Enable / Unlock</button>
-              <button type="button" id="ppEncryptDisableBtn" class="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold transition cursor-pointer">Disable</button>
+            <div id="ppEncryptStatus" role="status" class="hidden text-xs rounded-xl px-3 py-2"></div>
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <button type="button" id="ppEncryptDisableBtn" class="px-3 py-2 rounded-xl border border-rose-200 bg-white hover:bg-rose-50 text-rose-700 font-semibold transition cursor-pointer">Disable Encryption</button>
+              <div class="flex items-center gap-2 ml-auto">
+                <button type="button" id="ppEncryptCancelBtn" class="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold transition cursor-pointer">Cancel</button>
+                <button type="submit" id="ppEncryptSaveBtn" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition cursor-pointer">Enable Encryption</button>
+              </div>
             </div>
-            <div id="ppEncryptStatus" role="status" class="hidden text-xs rounded-lg px-3 py-2"></div>
-          </div>`;
+          </form>`;
         document.body.appendChild(encDialog);
 
         const closeAndResolve = (val) => {
-          encDialog.close();
+          if (typeof encDialog.close === 'function') encDialog.close();
+          else encDialog.removeAttribute('open');
           if (ppPassphraseResolver) {
             const fn = ppPassphraseResolver;
             ppPassphraseResolver = null;
@@ -553,32 +777,76 @@
           updatePassphraseStrengthUI(e.target.value || '');
         });
 
+        document.getElementById('ppEncryptEyeBtn')?.addEventListener('click', () => {
+          const p1 = document.getElementById('ppEncryptPassphrase');
+          const p2 = document.getElementById('ppEncryptPassphraseConfirm');
+          const btn = document.getElementById('ppEncryptEyeBtn');
+          if (!p1 || !btn) return;
+          const show = p1.type === 'password';
+          p1.type = show ? 'text' : 'password';
+          if (p2) p2.type = show ? 'text' : 'password';
+          btn.textContent = show ? 'Hide' : 'Show';
+        });
+
         document.getElementById('ppEncryptCloseBtn')?.addEventListener('click', () => closeAndResolve(''));
+        document.getElementById('ppEncryptCancelBtn')?.addEventListener('click', () => closeAndResolve(''));
         encDialog.addEventListener('cancel', () => closeAndResolve(''));
 
-        document.getElementById('ppEncryptSaveBtn')?.addEventListener('click', () => {
+        const handleSave = () => {
           const val = (document.getElementById('ppEncryptPassphrase')?.value || '').trim();
+          const confVal = (document.getElementById('ppEncryptPassphraseConfirm')?.value || '').trim();
+          const isDecryptPrompt = Boolean(ppPassphraseResolver);
           const timeoutVal = parseInt(document.getElementById('ppEncryptAutoLock')?.value || '30', 10);
           ppAutoLockMinutes = isNaN(timeoutVal) ? 30 : timeoutVal;
           if (val.length < 8) {
-            setEncryptStatus('Passphrase must be at least 8 characters long.', true);
+            setEncryptStatus('Administrator password must be at least 8 characters long.', true);
             return;
           }
+          if (!isDecryptPrompt && confVal !== val) {
+            setEncryptStatus('Passwords do not match. Please repeat the Administrator password.', true);
+            return;
+          }
+          const prevPass = ppSyncPassphrase;
           ppSyncPassphrase = val;
           resetPassphraseAutoLock();
+          if (!isDecryptPrompt) {
+            const curDb = ppGetCurrentDbRef();
+            if (prevPass && prevPass !== val && Array.isArray(curDb?.accessControl?.users) && curDb.accessControl.users.length > 0) {
+              curDb.accessControl.users.forEach(u => {
+                if (u) {
+                  u.needsAdminKeyReset = true;
+                  u.mustChangePassword = true;
+                }
+              });
+              if (typeof touchDBAndSave === 'function') touchDBAndSave();
+            }
+            if (typeof ppApplyAuthenticatedSession === 'function') {
+              ppApplyAuthenticatedSession('admin', null, curDb?.accessControl?.adminName);
+            }
+          }
           updateSyncEncryptionBadges();
           if (ppPassphraseResolver) {
             closeAndResolve(val);
           } else {
-            setEncryptStatus('Sync JSON Encryption enabled for this session. Synced saves, backups, and Share / Save JSON will write AES-256-GCM ciphertext.', false);
+            setEncryptStatus('Administrator AES-256-GCM encryption enabled. Synced files, backups, and Finance Vault now encrypt automatically.', false);
+            if (typeof showToast === 'function') showToast('Administrator AES-256-GCM encryption enabled.', 'success');
+            if (typeof renderAll === 'function') renderAll();
+            setTimeout(() => closeAndResolve(''), 550);
           }
+        };
+
+        document.getElementById('ppEncryptForm')?.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handleSave();
         });
 
         document.getElementById('ppEncryptDisableBtn')?.addEventListener('click', () => {
           ppSyncPassphrase = '';
           resetPassphraseAutoLock();
+          if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('disabled');
           updateSyncEncryptionBadges();
-          setEncryptStatus('Sync JSON Encryption disabled. New saves will write standard JSON.', false);
+          setEncryptStatus('Encryption disabled for this session. New saves will write standard JSON.', false);
+          if (typeof renderAll === 'function') renderAll();
         });
       }
 
@@ -592,15 +860,12 @@
             <header class="flex items-start justify-between gap-3">
               <div>
                 <h2 id="ppLicenceDialogTitle" class="text-base font-extrabold text-slate-900">PulsePlanSecure User Licence</h2>
-                <p class="text-[11px] text-slate-500 mt-0.5">MIT Licence &amp; Local-First Privacy Notice (${PP_BUILD_INFO.version} &middot; ${PP_BUILD_INFO.sha})</p>
+                <p class="text-[11px] text-slate-500 mt-0.5">EUPL-1.2 &amp; Local-First Privacy Notice (${PP_BUILD_INFO.version} &middot; ${PP_BUILD_INFO.sha})</p>
               </div>
               <button type="button" id="ppLicenceCloseBtn" aria-label="Close user licence dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
             </header>
             <section class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-slate-700 leading-relaxed max-h-[55dvh] overflow-y-auto">
-              <p><strong>Copyright (c) 2026 MFO78</strong></p>
-              <p>Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:</p>
-              <p>The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.</p>
-              <p class="uppercase text-[11px] text-slate-600">THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</p>
+              <p><strong>Licensed under the EUPL-1.2.</strong> Copyright &copy; 2026 PulsePlanSecure Contributors.</p>
               <p><strong>Data Privacy:</strong> PulsePlanSecure processes and encrypts all planning data locally in your browser. No roadmap data or encryption passphrases are transmitted to external servers.</p>
             </section>
             <footer class="flex justify-end">

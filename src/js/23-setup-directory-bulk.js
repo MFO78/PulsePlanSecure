@@ -59,13 +59,21 @@
 
   function seedPeopleFromProjects() {
     const db = getDb();
-    if (db && Array.isArray(db.peopleDirectory) && db.peopleDirectory.length > 0 && peopleList.length === 0) {
-      peopleList = db.peopleDirectory.filter(p => p && p.name);
-      savePeople();
-      return;
-    }
     const existingNames = new Map(peopleList.map(p => [p.name.trim().toLowerCase(), p]));
     let changed = false;
+    if (db && Array.isArray(db.peopleDirectory) && db.peopleDirectory.length > 0) {
+      db.peopleDirectory.forEach(dp => {
+        const nm = String(dp?.name || '').trim();
+        if (!nm) return;
+        const key = nm.toLowerCase();
+        if (!existingNames.has(key)) {
+          const rec = { id: dp.id || makeId('ppl'), name: nm, role: ROLES.includes(dp.role) ? dp.role : 'Both' };
+          peopleList.push(rec);
+          existingNames.set(key, rec);
+          changed = true;
+        }
+      });
+    }
     (db.projects || []).forEach(p => {
       const owner = String(p.owner || p.projectOwner || '').trim();
       const lead = String(p.techLead || p.technicalLead || p.lead || '').trim();
@@ -92,6 +100,13 @@
       }
     });
     if (changed) savePeople();
+  }
+
+  if (typeof window !== 'undefined') {
+    window.ppGetPeopleDirectory = function () {
+      seedPeopleFromProjects();
+      return peopleList.slice();
+    };
   }
 
   /* ---------- Styles ---------- */

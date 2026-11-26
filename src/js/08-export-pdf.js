@@ -59,13 +59,16 @@
         ppDebug('ERROR', 'JSON FileReader error', { name: file.name, errName: reader.error?.name, message: reader.error?.message });
         showToast(`Could not read "${file.name}" (${reader.error?.message || 'file read error'}).`, 'error');
       };
-      reader.onload = () => {
+      reader.onload = async () => {
         let migrated = null;
         try {
-          const rawText = String(reader.result || '').replace(/^\uFEFF/, '');
+          let rawText = String(reader.result || '').replace(/^\uFEFF/, '');
           ppDebug('INFO', 'JSON FileReader onload', { name: file.name, chars: rawText.length, elapsedMs: Date.now() - t0 });
           if (!rawText.trim()) {
             throw new Error('File is empty (0 bytes — if on OneDrive/Google Drive, ensure it is downloaded offline)');
+          }
+          if (typeof ppResolveEncryptedJsonText === 'function') {
+            rawText = await ppResolveEncryptedJsonText(rawText, { fileName: file.name, isSilentAutoReload: false });
           }
           const parsed = JSON.parse(rawText);
           migrated = normalizeAndMigrateDB(parsed);
@@ -81,7 +84,7 @@
           });
         } catch (e) {
           ppDebug('ERROR', 'JSON import parse error', { name: file.name, errName: e?.name, message: e?.message });
-          showToast(`Could not parse "${file.name}": ${e?.message || 'invalid JSON'}.`, 'error');
+          showToast(`Could not open "${file.name}": ${e?.message || 'invalid JSON'}.`, 'error');
           return;
         }
         try {
@@ -90,6 +93,9 @@
           if (ui.demoMode) demoDB = migrated;
           else liveDB = migrated;
           clearUndoHistory();
+          if (typeof ppSyncAuthAfterDbLoad === 'function') {
+            ppSyncAuthAfterDbLoad(migrated);
+          }
           let shifted = false;
           try {
             shifted = syncHorizonAfterDBLoad(migrated);
@@ -98,6 +104,9 @@
           }
           touchDBAndSave();
           renderAll();
+          if (typeof ppCheckForcedPasswordChange === 'function') {
+            setTimeout(() => ppCheckForcedPasswordChange(), 120);
+          }
           const allocCount = Object.keys(migrated.allocations).length;
           ppDebug('INFO', 'JSON import completed & rendered', { name: file.name, shifted, elapsedMs: Date.now() - t0 });
           showToast(
@@ -1053,17 +1062,20 @@
         let commentLines = [];
         if (showComments && cmt.hasAny) {
           const noteParts = [];
-          if (cmt.direct) noteParts.push(cmt.direct.replace(/\n+/g, ' / '));
+          const hasBullets = /^\s*(?:•|-\s+)/m.test(String(cmt.direct || ''));
+          if (cmt.direct) {
+            noteParts.push(hasBullets ? cmt.direct.trim() : cmt.direct.replace(/\n+/g, ' / '));
+          }
           if (cmt.weekEntries.length > 0) {
             cmt.weekEntries.slice(0, compactMode ? 1 : 2).forEach(we => {
               noteParts.push(`${we.weekShort}: ${we.text.replace(/\n+/g, ' / ')}`);
             });
           }
-          const combinedNote = noteParts.join(' | ');
+          const combinedNote = noteParts.join(hasBullets ? '\n' : ' | ');
           const commentInnerW = Math.max(8, innerW - (isFilled ? 3.2 : 4.4) - 1.8);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(5.2);
-          commentLines = pdfWrapLines(doc, combinedNote, commentInnerW, compactMode ? 1 : 2);
+          commentLines = pdfWrapLines(doc, combinedNote, commentInnerW, compactMode ? (hasBullets ? 2 : 1) : (hasBullets ? 4 : 2));
         }
 
         const topRowH = Math.max(3.4, titleLines.length * 2.45);

@@ -84,13 +84,26 @@
 
           <!-- Collapsible Workspace & Preferences Popover (matches Filters & Display style) -->
           <div id="headerWorkspacePopover" class="hidden absolute right-0 mt-2 w-64 rounded-2xl border border-slate-200 bg-white shadow-xl p-2.5 space-y-2.5 text-xs z-40">
-            <!-- Group 1: User Profile -->
+            <!-- Group 1: User Account & Sign In -->
             <div class="p-2 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5">
-              <div class="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Active User</div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">Account &amp; Access</span>
+                <span id="headerMenuRoleBadge" class="hidden pp-role-badge pp-role-admin">Admin</span>
+              </div>
               <button id="userSwitcherBtn" type="button" onclick="closeHeaderWorkspaceMenu(); openUserSwitcherModal();"
-                class="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 font-semibold transition">
+                class="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 font-semibold transition cursor-pointer">
                 <span id="headerMenuUserLabel" class="truncate">Project Mgr</span>
-                <span class="text-[11px] text-indigo-600 font-bold shrink-0">Switch</span>
+                <span id="headerMenuAccountAction" class="text-[11px] text-indigo-600 font-bold shrink-0">Account</span>
+              </button>
+              <button id="headerMenuManageUsersBtn" type="button" onclick="closeHeaderWorkspaceMenu(); if (typeof ppOpenTeamAccessModal === 'function') ppOpenTeamAccessModal();"
+                class="hidden w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 hover:text-emerald-700 font-semibold transition cursor-pointer">
+                <span>Team Users &amp; Permissions</span>
+                <span id="headerMenuUsersCount" class="text-[10px] font-bold text-slate-400">0</span>
+              </button>
+              <button id="headerMenuChangePwBtn" type="button" onclick="closeHeaderWorkspaceMenu(); if (typeof ppOpenChangeMyPasswordModal === 'function') ppOpenChangeMyPasswordModal(false);"
+                class="hidden w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-700 font-semibold transition cursor-pointer">
+                <span>Change My Password</span>
+                <span class="text-[10px] text-slate-400">Key</span>
               </button>
             </div>
 
@@ -952,100 +965,183 @@
       </div>
     </section>
 
-    <!-- ==================== TAB 4: SYNC & SNAPSHOTS ==================== -->
-    <section id="tab-sync" role="tabpanel" aria-labelledby="nav-sync" class="hidden grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-5">
-      <!-- Left Card: Shared Folder / Mobile Share & Export -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <h2 class="text-base font-bold text-slate-900">Sync, Share &amp; Portable Files</h2>
-            <p class="text-xs text-slate-500 mt-0.5">Link a shared <code class="px-1 py-0.5 rounded bg-slate-100 font-mono">.json</code> file on desktop, or share/import directly with Google Drive &amp; Files on mobile.</p>
-          </div>
-          <span id="syncCardBadge" class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 text-slate-600 whitespace-nowrap">Local Only</span>
-        </div>
-
-        <!-- Connection Details Box -->
-        <div id="syncFileStatusBox" class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2"></div>
-
-        <!-- Desktop File System Actions (hidden automatically on mobile browsers lacking FS Access API) -->
-        <div id="desktopFsSyncControls" class="space-y-3">
-          <div class="flex flex-wrap gap-2">
-            <button type="button" onclick="openSharedDatabaseFile()" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition">Open &amp; Link Shared File</button>
-            <button type="button" onclick="createSharedDatabaseFile()" class="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold transition">Create New Sync File</button>
-            <button id="btnBackupConnectedToFolder" type="button" onclick="backupConnectedJsonToFolder()" title="Create a timestamped JSON backup in a folder you choose (without changing your active sync link)" class="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-semibold transition">Backup to Folder&hellip;</button>
-            <button id="btnReconnectFile" type="button" onclick="reconnectRememberedFile()" class="hidden px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition">Reconnect Remembered File</button>
-            <button id="btnUnlinkFile" type="button" onclick="unlinkSharedFile()" class="hidden px-3 py-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition">Unlink</button>
-          </div>
-
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-3 border-t border-slate-100 text-xs">
-            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
-              <input id="chkAutoSave" type="checkbox" onchange="toggleAutoSave(this.checked)" class="rounded text-indigo-600" />
-              <div>
-                <div class="font-semibold text-slate-800">Auto-Save</div>
-                <div class="text-[11px] text-slate-500">Write edits to file</div>
-              </div>
-            </label>
-            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
-              <input id="chkAutoReload" type="checkbox" onchange="toggleAutoReload(this.checked)" class="rounded text-indigo-600" />
-              <div>
-                <div class="font-semibold text-slate-800">Auto-Reload</div>
-                <div class="text-[11px] text-slate-500">Pull team edits</div>
-              </div>
-            </label>
-            <div class="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2">
-              <div>
-                <label for="pollIntervalSelect" class="font-semibold text-slate-800 block">Check Every</label>
-                <div class="text-[11px] text-slate-500">Poll + focus</div>
-              </div>
-              <select id="pollIntervalSelect" onchange="setPollInterval(this.value)" class="px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold">
-                <option value="10000">10s</option>
-                <option value="15000">15s</option>
-                <option value="30000">30s</option>
-                <option value="60000">60s</option>
-                <option value="0">Off</option>
-              </select>
+    <!-- ==================== TAB 4: SYNC, SECURITY & SNAPSHOTS ==================== -->
+    <section id="tab-sync" role="tabpanel" aria-labelledby="nav-sync" class="hidden space-y-4 md:space-y-5">
+      <!-- Top Full-Width Status Strip: Connection | Security & Account | Separate Finance Vault -->
+      <div class="pp-sync-strip" aria-label="Workspace sync and security overview">
+        <!-- Tile 1: Sync Connection -->
+        <div class="pp-sync-tile">
+          <div class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="pp-sync-tile-kicker">Database Sync</span>
+              <span id="syncCardBadge" class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600 whitespace-nowrap">Local Only</span>
             </div>
+            <div id="syncHeroConnTitle" class="pp-sync-tile-title">
+              <span id="syncHeroConnDot" class="pp-status-dot pp-status-dot-warn" aria-hidden="true"></span>
+              <span class="truncate">Browser Storage</span>
+            </div>
+            <div id="syncHeroConnSub" class="pp-sync-tile-sub">Link a shared file for automatic team sync.</div>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 pt-1">
+            <button type="button" onclick="openSharedDatabaseFile()" class="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold transition cursor-pointer">Open &amp; Link</button>
+            <button type="button" onclick="createSharedDatabaseFile()" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold transition cursor-pointer">Create New</button>
           </div>
         </div>
 
-        <!-- Universal Portable Backup / Import / Mobile Share / CSV / PDF -->
-        <div class="pt-3 border-t border-slate-100 space-y-2.5">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Export, Share &amp; Import (Desktop + Mobile)</div>
-            <label class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 cursor-pointer">
-              <input id="chkExportIncludeSnapshots" type="checkbox" checked class="rounded text-indigo-600" />
-              <span>Include Snapshots in JSON</span>
-            </label>
+        <!-- Tile 2: Encryption & Signed-In Account -->
+        <div class="pp-sync-tile">
+          <div class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="pp-sync-tile-kicker">Encryption &amp; Access</span>
+              <span id="ppSyncTabEncBadge" class="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase">Plaintext JSON</span>
+            </div>
+            <div id="syncHeroAuthTitle" class="pp-sync-tile-title">
+              <span id="syncHeroAuthDot" class="pp-status-dot pp-status-dot-neutral" aria-hidden="true"></span>
+              <span class="truncate">Administrator</span>
+            </div>
+            <div id="syncHeroAuthSub" class="pp-sync-tile-sub">Enable AES-256-GCM to protect files &amp; configure team logins.</div>
           </div>
-          <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
-            <button type="button" onclick="downloadJsonBackup()" class="px-3 py-2.5 sm:py-1.5 rounded-xl bg-indigo-50 sm:bg-white border border-indigo-200 sm:border-slate-200 hover:bg-slate-50 text-xs font-bold sm:font-semibold text-indigo-700 sm:text-slate-700 transition">Share / Save JSON</button>
-            <button id="btnImportJson" type="button" onclick="triggerJsonImportPicker()" class="px-3 py-2.5 sm:py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition cursor-pointer text-center">Import JSON</button>
-            <input id="importJsonFileInput" type="file" accept=".json,application/json,text/plain" onchange="importJsonFile(event)" class="hidden" />
-            <button type="button" onclick="exportMatrixCSV()" class="px-3 py-2.5 sm:py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition">Matrix CSV</button>
-            <button type="button" onclick="openExportPdfModal()" class="px-3 py-2.5 sm:py-1.5 rounded-xl border border-rose-200 bg-rose-50/50 hover:bg-rose-50 text-xs font-bold sm:font-semibold text-rose-700 transition">Export PDF</button>
-            <button type="button" onclick="confirmClearCurrentData()" class="col-span-2 sm:col-span-1 px-3 py-2 sm:py-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition sm:ml-auto">Clear Current DB</button>
+          <div class="flex flex-wrap items-center gap-1.5 pt-1">
+            <button type="button" id="ppSyncTabEncBtn" class="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold transition cursor-pointer">Configure Admin Key</button>
+            <button type="button" id="syncHeroTeamBtn" onclick="if (typeof ppOpenTeamAccessModal === 'function') ppOpenTeamAccessModal();" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold transition cursor-pointer">Team Users</button>
+            <button type="button" id="syncHeroSwitchBtn" onclick="openUserSwitcherModal()" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold transition cursor-pointer">Account</button>
           </div>
-          <p id="fsApiNote" class="text-[11px] text-slate-400"></p>
+        </div>
+
+        <!-- Tile 3: Separate Finance Vault -->
+        <div id="syncHeroFinanceTile" class="pp-sync-tile">
+          <div class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="pp-sync-tile-kicker">Finance Database</span>
+              <span id="syncHeroFinBadge" class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600 uppercase whitespace-nowrap">Separate File</span>
+            </div>
+            <div id="syncHeroFinTitle" class="pp-sync-tile-title">
+              <span id="syncHeroFinDot" class="pp-status-dot pp-status-dot-neutral" aria-hidden="true"></span>
+              <span class="truncate">Finance Vault</span>
+            </div>
+            <div id="syncHeroFinSub" class="pp-sync-tile-sub">Separate encrypted file using your unified session key — no second password needed.</div>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 pt-1">
+            <button type="button" id="syncHeroFinBtn" onclick="if (typeof ppOpenFinanceVaultModal === 'function') ppOpenFinanceVaultModal();" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 hover:text-emerald-700 text-[11px] font-semibold transition cursor-pointer">Open Finance Vault</button>
+          </div>
         </div>
       </div>
 
-      <!-- Right Card: Snapshots Manager (with Mod 3 Pinning) -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <div class="flex items-center gap-2">
-              <h2 class="text-base font-bold text-slate-900">Baselines &amp; Snapshots</h2>
-              <span id="snapshotsCountBadge" class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold"></span>
+      <!-- Primary Two-Column Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-5">
+        <!-- Left Card (7 cols): Shared File Sync, Automation & Portable Exports -->
+        <div class="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">Sync, Share &amp; Portable Files</h2>
+              <p class="text-xs text-slate-500 mt-0.5">Live file sync for Google Drive Desktop / network shares, plus encrypted portable exports.</p>
             </div>
-            <p class="text-xs text-slate-500 mt-0.5">Freeze point-in-time copies of your roadmap. Pin key baselines to protect them from rolling eviction.</p>
           </div>
-          <button type="button" onclick="openSnapshotModal()" class="px-3 py-2 md:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shrink-0">+ Save</button>
+
+          <!-- Connection Details Box -->
+          <div id="syncFileStatusBox" class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2"></div>
+
+          <!-- Desktop File System Actions -->
+          <div id="desktopFsSyncControls" class="space-y-3">
+            <div class="flex flex-wrap gap-2">
+              <button type="button" onclick="openSharedDatabaseFile()" class="pp-action-tile pp-action-tile-primary">
+                <svg class="w-3.5 h-3.5 shrink-0" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" /></svg>
+                <span>Open &amp; Link Shared File</span>
+              </button>
+              <button type="button" onclick="createSharedDatabaseFile()" class="pp-action-tile">Create New Sync File</button>
+              <button id="btnBackupConnectedToFolder" type="button" onclick="backupConnectedJsonToFolder()" title="Create a timestamped JSON backup in a folder you choose (without changing your active sync link)" class="pp-action-tile">Backup to Folder&hellip;</button>
+              <button id="btnReconnectFile" type="button" onclick="reconnectRememberedFile()" class="hidden px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold transition cursor-pointer">Reconnect File</button>
+              <button id="btnUnlinkFile" type="button" onclick="unlinkSharedFile()" class="hidden pp-action-tile pp-action-tile-rose">Unlink</button>
+            </div>
+
+            <!-- Modern Toggle Switches & Poll Frequency -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-3 border-t border-slate-100 text-xs">
+              <label class="pp-switch-row">
+                <div>
+                  <div class="font-semibold text-slate-800">Auto-Save</div>
+                  <div class="text-[11px] text-slate-500">Write edits live</div>
+                </div>
+                <span class="pp-switch">
+                  <input id="chkAutoSave" type="checkbox" onchange="toggleAutoSave(this.checked)" />
+                  <span class="pp-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="pp-switch-row">
+                <div>
+                  <div class="font-semibold text-slate-800">Auto-Reload</div>
+                  <div class="text-[11px] text-slate-500">Pull team edits</div>
+                </div>
+                <span class="pp-switch">
+                  <input id="chkAutoReload" type="checkbox" onchange="toggleAutoReload(this.checked)" />
+                  <span class="pp-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <div class="pp-switch-row" style="cursor:default">
+                <div>
+                  <label for="pollIntervalSelect" class="font-semibold text-slate-800 block">Check Every</label>
+                  <div class="text-[11px] text-slate-500">Poll + focus</div>
+                </div>
+                <select id="pollIntervalSelect" onchange="setPollInterval(this.value)" class="px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-semibold">
+                  <option value="10000">10s</option>
+                  <option value="15000">15s</option>
+                  <option value="30000">30s</option>
+                  <option value="60000">60s</option>
+                  <option value="0">Off</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Universal Portable Backup / Import / Share / CSV / PDF / ICS -->
+          <div class="pt-3 border-t border-slate-100 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Portable Exports &amp; Sharing</div>
+              <label class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 cursor-pointer">
+                <input id="chkExportIncludeSnapshots" type="checkbox" checked class="rounded text-indigo-600" />
+                <span>Include Snapshots in JSON</span>
+              </label>
+            </div>
+            <div class="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+              <button type="button" onclick="downloadJsonBackup()" class="pp-action-tile">Share / Save JSON</button>
+              <button id="btnImportJson" type="button" onclick="triggerJsonImportPicker()" class="pp-action-tile">Import JSON</button>
+              <input id="importJsonFileInput" type="file" accept=".json,application/json,text/plain" onchange="importJsonFile(event)" class="hidden" />
+              <button type="button" onclick="exportMatrixCSV()" class="pp-action-tile">Matrix CSV</button>
+              <button type="button" onclick="openExportPdfModal()" class="pp-action-tile pp-action-tile-rose">Export PDF</button>
+              <button id="ppExportIcsBtn" type="button" class="pp-action-tile">Milestones (.ics)</button>
+            </div>
+            <p id="fsApiNote" class="text-[11px] text-slate-400"></p>
+          </div>
+
+          <!-- Hidden compatibility anchor for 13-security-licence.js -->
+          <div id="ppSyncTabEncBar" class="hidden"></div>
+
+          <!-- Subtle Admin-Only Danger Zone Footer -->
+          <div id="syncDangerZone" class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] font-semibold text-slate-400">Workspace Reset (Administrator)</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" onclick="confirmClearCurrentData()" class="px-3 py-1.5 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold transition cursor-pointer">Clear Current DB</button>
+            </div>
+          </div>
         </div>
-        <div id="snapshotsList" class="space-y-2.5 max-h-[420px] overflow-y-auto pr-1"></div>
+
+        <!-- Right Card (5 cols): Snapshots Manager (with Mod 3 Pinning) -->
+        <div class="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base font-bold text-slate-900">Baselines &amp; Snapshots</h2>
+                <span id="snapshotsCountBadge" class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold"></span>
+              </div>
+              <p class="text-xs text-slate-500 mt-0.5">Freeze point-in-time copies of your roadmap. Pin key baselines to protect them from rolling eviction.</p>
+            </div>
+            <button type="button" onclick="openSnapshotModal()" class="px-3 py-2 md:py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shrink-0 cursor-pointer">+ Save</button>
+          </div>
+          <div id="snapshotsList" class="space-y-2.5 max-h-[440px] overflow-y-auto pr-1"></div>
+        </div>
       </div>
 
       <!-- Mod 3 Full-Width Card: Rolling Dump History & Export Hygiene -->
-      <div class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div class="flex items-center gap-2">
@@ -1109,7 +1205,7 @@
       </div>
 
       <!-- Sync & File Open Diagnostics (Collapsible Debug Log) -->
-      <details id="syncDebugDetails" class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs">
+      <details id="syncDebugDetails" class="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs">
         <summary class="no-marker flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none">
           <div class="flex items-center gap-2 min-w-0">
             <h2 class="text-sm font-bold text-slate-900">File Open &amp; Sync Diagnostics (Debug Log)</h2>

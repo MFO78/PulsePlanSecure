@@ -109,6 +109,16 @@
     }
 
     function switchTab(tab) {
+      if (typeof ppCanAccessTab === 'function' && !ppCanAccessTab(tab)) {
+        const fallback = typeof ppGetFirstAllowedTab === 'function' ? ppGetFirstAllowedTab() : 'matrix';
+        if (ui.activeTab !== fallback) {
+          ui.activeTab = fallback;
+          persistUIPrefs();
+          renderAll();
+        }
+        showToast('Access to this section is restricted by your Administrator.', 'warning');
+        return;
+      }
       ui.activeTab = tab;
       persistUIPrefs();
       renderAll();

@@ -159,6 +159,12 @@
         snapshots: [],         // [{ id, name, notes, createdAt, createdBy, pinned, data }]
         changeLog: [],
         dumpHistory: [],       // [{ id, timestamp, user, format, filename, revision, sizeBytes, summary }]
+        peopleDirectory: [],   // [{ id, name, role }]
+        accessControl: {       // Multi-user RBAC & wrapped-key login metadata
+          version: 1,
+          adminName: 'Administrator',
+          users: [],
+        },
       };
     }
 
@@ -690,6 +696,57 @@
         summary: String(d.summary || ''),
       }));
 
+      const rawPeople = Array.isArray(src.peopleDirectory) ? src.peopleDirectory : [];
+      db.peopleDirectory = rawPeople
+        .filter(p => p && String(p.name || '').trim())
+        .map(p => ({
+          id: String(p.id || uid('ppl')),
+          name: String(p.name).trim(),
+          role: ['Both', 'Project Owner', 'Technical Lead'].includes(p.role) ? p.role : 'Both',
+        }));
+
+      const rawAc = (src.accessControl && typeof src.accessControl === 'object') ? src.accessControl : {};
+      const rawUsers = Array.isArray(rawAc.users) ? rawAc.users : [];
+      db.accessControl = {
+        version: 1,
+        adminName: String(rawAc.adminName || 'Administrator').trim() || 'Administrator',
+        users: rawUsers
+          .filter(u => u && String(u.name || '').trim())
+          .map(u => {
+            const rawTabs = (u.permissions && u.permissions.tabs && typeof u.permissions.tabs === 'object') ? u.permissions.tabs : {};
+            const tabs = {
+              matrix: rawTabs.matrix !== undefined ? Boolean(rawTabs.matrix) : true,
+              health: rawTabs.health !== undefined ? Boolean(rawTabs.health) : true,
+              data: Boolean(rawTabs.data),
+              sync: Boolean(rawTabs.sync),
+            };
+            if (!tabs.matrix && !tabs.health && !tabs.data && !tabs.sync) tabs.matrix = true;
+            const ks = (u.keySlot && typeof u.keySlot === 'object' && u.keySlot.salt && u.keySlot.iv && u.keySlot.wrapped)
+              ? {
+                  kdf: String(u.keySlot.kdf || 'PBKDF2-SHA256'),
+                  iterations: Number(u.keySlot.iterations) || 250000,
+                  salt: String(u.keySlot.salt),
+                  iv: String(u.keySlot.iv),
+                  wrapped: String(u.keySlot.wrapped),
+                }
+              : null;
+            return {
+              id: String(u.id || uid('usr')),
+              name: String(u.name).trim(),
+              roleTitle: String(u.roleTitle || '').trim(),
+              enabled: u.enabled !== false,
+              mustChangePassword: Boolean(u.mustChangePassword),
+              needsAdminKeyReset: Boolean(u.needsAdminKeyReset),
+              permissions: {
+                tabs,
+                finance: Boolean(u.permissions && u.permissions.finance),
+              },
+              keySlot: ks,
+              updatedAt: u.updatedAt || new Date().toISOString(),
+            };
+          }),
+      };
+
       return db;
     }
 
@@ -913,6 +970,7 @@
     }
 
     function hasAnyDayRates(db = getActiveDB()) {
+      if (typeof ppCanAccessFinance === 'function' && !ppCanAccessFinance()) return false;
       return (db?.departments || []).some(d => (Number(d.dayRate) || 0) > 0);
     }
 

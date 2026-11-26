@@ -502,13 +502,16 @@
 
       const renderMobileCommentBlock = (cmtObj, filledTheme) => {
         if (!showComments || !cmtObj.hasAny) return '';
+        const fmt = (txt, cls) => (typeof ppFormatRoadmapNoteHtml === 'function')
+          ? ppFormatRoadmapNoteHtml(txt, cls)
+          : `<div class="${cls}">${escapeHtml(txt)}</div>`;
         const parts = [];
-        if (cmtObj.direct) parts.push(`<div class="whitespace-pre-line break-words mobile-wrap-anywhere">${escapeHtml(cmtObj.direct)}</div>`);
+        if (cmtObj.direct) parts.push(fmt(cmtObj.direct, 'whitespace-pre-line break-words mobile-wrap-anywhere'));
         cmtObj.weekEntries.forEach(we => {
           const wkPrefix = filledTheme
             ? `<span class="font-mono font-bold underline">${escapeHtml(we.weekShort)}:</span>`
             : `<span class="font-mono font-bold text-indigo-600">${escapeHtml(we.weekShort)}:</span>`;
-          parts.push(`<div class="whitespace-pre-line break-words mobile-wrap-anywhere">${wkPrefix} ${escapeHtml(we.text)}</div>`);
+          parts.push(`<div class="space-y-0.5">${wkPrefix} ${fmt(we.text, 'whitespace-pre-line break-words mobile-wrap-anywhere inline')}</div>`);
         });
         if (filledTheme) {
           return `<div class="mt-2 px-2.5 py-1.5 rounded-lg text-xs leading-relaxed space-y-0.5 break-words" style="background-color:${filledTheme.commentBg}; border:1px solid ${filledTheme.commentBorder}; color:${filledTheme.commentText};">${parts.join('')}</div>`;
@@ -1443,13 +1446,16 @@
 
       const renderInlineCommentHtml = (cmtObj, filledTheme = null) => {
         if (!showComments || !cmtObj.hasAny) return '';
+        const fmt = (txt, cls) => (typeof ppFormatRoadmapNoteHtml === 'function')
+          ? ppFormatRoadmapNoteHtml(txt, cls)
+          : `<div class="${cls}">${escapeHtml(txt)}</div>`;
         const parts = [];
-        if (cmtObj.direct) parts.push(`<div class="whitespace-pre-line">${escapeHtml(cmtObj.direct)}</div>`);
+        if (cmtObj.direct) parts.push(fmt(cmtObj.direct, 'whitespace-pre-line'));
         cmtObj.weekEntries.forEach(we => {
           const wkPrefix = filledTheme
             ? `<span class="font-mono font-bold underline">${escapeHtml(we.weekShort)}:</span>`
             : `<span class="font-mono font-bold text-indigo-600">${escapeHtml(we.weekShort)}:</span>`;
-          parts.push(`<div class="whitespace-pre-line">${wkPrefix} ${escapeHtml(we.text)}</div>`);
+          parts.push(`<div class="space-y-0.5">${wkPrefix} ${fmt(we.text, 'whitespace-pre-line inline')}</div>`);
         });
         if (filledTheme) {
           return `

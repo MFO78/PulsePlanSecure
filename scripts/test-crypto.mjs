@@ -10,9 +10,21 @@ import path from 'node:path';
 const src = fs.readFileSync(path.join(process.cwd(), 'src', 'js', '13-security-licence.js'), 'utf8');
 const loadModule = new Function(`
   ${src}
-  return { encryptPulsePlanData, decryptPulsePlanData };
+  return {
+    encryptPulsePlanData,
+    decryptPulsePlanData,
+    ppWrapMasterPassphrase,
+    ppUnwrapMasterPassphrase,
+    ppDecryptWithUserCredentials,
+  };
 `);
-const { encryptPulsePlanData, decryptPulsePlanData } = loadModule();
+const {
+  encryptPulsePlanData,
+  decryptPulsePlanData,
+  ppWrapMasterPassphrase,
+  ppUnwrapMasterPassphrase,
+  ppDecryptWithUserCredentials,
+} = loadModule();
 
 const sampleDb = {
   meta: { version: 3, revision: 42 },
@@ -26,6 +38,7 @@ const envelope = await encryptPulsePlanData(sampleDb, 'CorrectHorseBatteryStaple
 assert.equal(envelope.format, 'pulseplan-encrypted-v1');
 assert.equal(envelope.cipher, 'AES-256-GCM');
 assert.equal(envelope.iterations, 250000);
+assert.equal(envelope.auth, undefined, 'No outer auth block when no users exist');
 assert.ok(!envelope.ciphertext.includes('Engineering'), 'Plaintext must not leak into ciphertext');
 
 const plainJson = await decryptPulsePlanData(envelope, 'CorrectHorseBatteryStaple!');
@@ -53,4 +66,80 @@ await assert.rejects(
   'Passphrases under 8 characters must be rejected'
 );
 
-console.log('All 4 PulsePlanSecure AES-256-GCM cryptography tests passed.');
+// 5. Multi-user key wrapping: user password internally unlocks Admin password to decrypt DB
+const adminPass = 'AdminMasterPass#2026';
+const userTempPass = 'TempUserPw#11';
+const userPersonalPass = 'ElenaSecretPass#99';
+const slot = await ppWrapMasterPassphrase(adminPass, userTempPass, 'u_elena');
+const unwrapped = await ppUnwrapMasterPassphrase(slot, userTempPass, 'u_elena');
+assert.equal(unwrapped, adminPass, 'User password must unwrap exact Administrator master passphrase internally');
+
+await assert.rejects(
+  () => ppUnwrapMasterPassphrase(slot, 'WrongUserPw#99', 'u_elena'),
+  /Incorrect password/,
+  'Wrong user password must reject key unwrap'
+);
+
+const multiUserDb = {
+  ...sampleDb,
+  accessControl: {
+    version: 1,
+    adminName: 'Lead Admin',
+    users: [
+      {
+        id: 'u_elena',
+        name: 'Elena Rostova',
+        roleTitle: 'Technical Lead',
+        enabled: true,
+        mustChangePassword: true,
+        permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+        keySlot: slot,
+      },
+    ],
+  },
+};
+
+const multiEnv = await encryptPulsePlanData(multiUserDb, adminPass);
+assert.ok(multiEnv.auth && multiEnv.auth.users.length === 1, 'Outer envelope projects active user login metadata');
+assert.equal(multiEnv.auth.adminName, 'Lead Admin');
+assert.ok(!JSON.stringify(multiEnv.auth).includes(adminPass), 'Administrator passphrase must NEVER appear in plaintext outer auth');
+
+// User decrypts main DB via their own password -> masterPass unwrapped internally
+const userLoginRes = await ppDecryptWithUserCredentials(multiEnv, 'u_elena', userTempPass);
+assert.equal(userLoginRes.authRole, 'user');
+assert.equal(userLoginRes.masterPass, adminPass);
+assert.equal(userLoginRes.userRecord.permissions.finance, false);
+assert.equal(JSON.parse(userLoginRes.plainJson).projects[0].code, 'NVA');
+
+// Admin still decrypts directly with Admin password
+const adminLoginRes = await ppDecryptWithUserCredentials(multiEnv, '__ADMIN__', adminPass);
+assert.equal(adminLoginRes.authRole, 'admin');
+assert.equal(adminLoginRes.masterPass, adminPass);
+
+// 6. User selects personal password -> re-wraps same Admin key; old temp password no longer works
+const newSlot = await ppWrapMasterPassphrase(userLoginRes.masterPass, userPersonalPass, 'u_elena');
+multiUserDb.accessControl.users[0].keySlot = newSlot;
+multiUserDb.accessControl.users[0].mustChangePassword = false;
+const reEnv = await encryptPulsePlanData(multiUserDb, userLoginRes.masterPass);
+await assert.rejects(
+  () => ppDecryptWithUserCredentials(reEnv, 'u_elena', userTempPass),
+  /Incorrect password/,
+  'Old temporary password must fail after user sets personal password'
+);
+const personalLoginRes = await ppDecryptWithUserCredentials(reEnv, 'u_elena', userPersonalPass);
+assert.equal(personalLoginRes.masterPass, adminPass);
+assert.equal(personalLoginRes.userRecord.mustChangePassword, false);
+
+// 7. Disabled user inside authenticated ciphertext must be rejected even if outer auth tampered
+const disabledDb = JSON.parse(JSON.stringify(multiUserDb));
+disabledDb.accessControl.users[0].enabled = false;
+const disabledEnv = await encryptPulsePlanData(disabledDb, adminPass);
+assert.equal(disabledEnv.auth, undefined, 'Disabled user is excluded from outer auth');
+disabledEnv.auth = reEnv.auth; // Simulate attacker re-attaching old outer auth
+await assert.rejects(
+  () => ppDecryptWithUserCredentials(disabledEnv, 'u_elena', userPersonalPass),
+  /disabled or removed/,
+  'Authenticated ciphertext must reject disabled user even with forged outer auth'
+);
+
+console.log('All 7 PulsePlanSecure AES-256-GCM & multi-user wrapped-key cryptography tests passed.');

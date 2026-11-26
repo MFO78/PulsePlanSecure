@@ -158,26 +158,60 @@
     function renderAll() {
       const db = getActiveDB();
 
+      // Enforce RBAC tab permissions before rendering
+      const canTab = (t) => (typeof ppCanAccessTab === 'function' ? ppCanAccessTab(t) : true);
+      if (!canTab(ui.activeTab)) {
+        ui.activeTab = typeof ppGetFirstAllowedTab === 'function' ? ppGetFirstAllowedTab() : 'matrix';
+      }
+
+      let visibleTabCount = 0;
       // Update Desktop Tab Bar & Mobile Fixed Bottom Nav ARIA states
       ['matrix', 'health', 'data', 'sync'].forEach(t => {
         const btn = document.getElementById(`nav-${t}`);
         const mBtn = document.getElementById(`mnav-${t}`);
         const sec = document.getElementById(`tab-${t}`);
-        const active = ui.activeTab === t;
+        const allowed = canTab(t);
+        if (allowed) visibleTabCount++;
+        const active = allowed && ui.activeTab === t;
         if (btn) {
+          btn.classList.toggle('hidden', !allowed);
           btn.setAttribute('aria-selected', String(active));
-          btn.className = active
-            ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-indigo-700 shadow-xs transition whitespace-nowrap'
-            : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition whitespace-nowrap';
+          if (allowed) {
+            btn.className = active
+              ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-indigo-700 shadow-xs transition whitespace-nowrap'
+              : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition whitespace-nowrap';
+          }
         }
         if (mBtn) {
+          mBtn.classList.toggle('hidden', !allowed);
           mBtn.setAttribute('aria-selected', String(active));
-          mBtn.className = active
-            ? 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[44px] rounded-xl text-[11px] font-extrabold text-indigo-600 bg-indigo-50/80 transition relative'
-            : 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[44px] rounded-xl text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition relative';
+          if (allowed) {
+            mBtn.className = active
+              ? 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[44px] rounded-xl text-[11px] font-extrabold text-indigo-600 bg-indigo-50/80 transition relative'
+              : 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[44px] rounded-xl text-[11px] font-semibold text-slate-500 hover:text-slate-800 transition relative';
+          }
         }
         if (sec) sec.classList.toggle('hidden', !active);
       });
+
+      const mobileNavGrid = document.querySelector('#mobileBottomNav > div');
+      if (mobileNavGrid) {
+        const cols = Math.max(1, Math.min(4, visibleTabCount || 4));
+        mobileNavGrid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+      }
+
+      const headerSyncDotEl = document.getElementById('headerSyncDot');
+      const headerSyncBtn = (headerSyncDotEl && typeof headerSyncDotEl.closest === 'function')
+        ? headerSyncDotEl.closest('button')
+        : (headerSyncDotEl ? headerSyncDotEl.parentElement : null);
+      if (headerSyncBtn) {
+        const allowSync = canTab('sync');
+        headerSyncBtn.disabled = !allowSync;
+        if (headerSyncBtn.classList) {
+          headerSyncBtn.classList.toggle('opacity-75', !allowSync);
+          headerSyncBtn.classList.toggle('cursor-default', !allowSync);
+        }
+      }
 
       applyDarkMode();
       applyPresentMode();
@@ -189,6 +223,7 @@
       if (avatarEl) avatarEl.textContent = getUserInitials(userName);
       if (nameEl) nameEl.textContent = userName;
       if (menuUserLbl) menuUserLbl.textContent = userName;
+      if (typeof ppSyncAuthChromeUI === 'function') ppSyncAuthChromeUI();
 
       // Demo Mode UI & Banner
       const demoBtn = document.getElementById('demoToggleBtn');

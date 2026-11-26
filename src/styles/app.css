@@ -1529,3 +1529,387 @@
         position: static !important;
       }
     }
+
+    /* ==================== ROADMAP BULLET LISTS (WHATSAPP-STYLE NOTES) ==================== */
+    .pp-note-bullets {
+      list-style: none;
+      margin: 0.125rem 0;
+      padding: 0;
+    }
+    .pp-note-bullets li {
+      position: relative;
+      padding-left: 0.9rem;
+      line-height: 1.42;
+      word-break: break-word;
+    }
+    .pp-note-bullets li::before {
+      content: '\2022';
+      position: absolute;
+      left: 0.18rem;
+      top: 0;
+      font-weight: 800;
+      opacity: 0.85;
+    }
+    .pp-note-bullets li + li {
+      margin-top: 0.15rem;
+    }
+
+    /* ==================== MODERN SYNC HUB, TOGGLE SWITCHES & LOGIN / RBAC UI ==================== */
+    .pp-sync-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      background: var(--surface-card, #ffffff);
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      border-radius: 1rem;
+      overflow: hidden;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    @media (max-width: 1023px) {
+      .pp-sync-strip {
+        grid-template-columns: 1fr;
+      }
+    }
+    .pp-sync-tile {
+      padding: 1rem 1.15rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.6rem;
+      min-width: 0;
+    }
+    .pp-sync-tile + .pp-sync-tile {
+      border-left: 1px solid var(--border-subtle, #e2e8f0);
+    }
+    @media (max-width: 1023px) {
+      .pp-sync-tile + .pp-sync-tile {
+        border-left: 0;
+        border-top: 1px solid var(--border-subtle, #e2e8f0);
+      }
+    }
+    .pp-sync-tile-kicker {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-faint, #64748b);
+    }
+    .pp-sync-tile-title {
+      font-size: 13.5px;
+      font-weight: 800;
+      color: var(--text-heading, #0f172a);
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      min-width: 0;
+    }
+    .pp-sync-tile-sub {
+      font-size: 11.5px;
+      color: var(--text-muted, #64748b);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .pp-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 9999px;
+      flex-shrink: 0;
+      display: inline-block;
+    }
+    .pp-status-dot-ok { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16); }
+    .pp-status-dot-warn { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16); }
+    .pp-status-dot-err { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16); }
+    .pp-status-dot-neutral { background: #94a3b8; }
+
+    /* Accessible CSS Toggle Switch */
+    .pp-switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.8rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border-subtle, #e2e8f0);
+      background: var(--surface-subtle, #f8fafc);
+      cursor: pointer;
+      transition: border-color 140ms ease, background 140ms ease;
+    }
+    .pp-switch-row:hover {
+      border-color: var(--border-strong, #94a3b8);
+    }
+    .pp-switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .pp-switch input {
+      position: absolute;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      cursor: pointer;
+    }
+    .pp-switch-track {
+      width: 36px;
+      height: 20px;
+      border-radius: 9999px;
+      background: #cbd5e1;
+      transition: background 160ms ease;
+      position: relative;
+    }
+    html.dark .pp-switch-track {
+      background: #334155;
+    }
+    .pp-switch-track::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+      transition: transform 160ms ease;
+    }
+    .pp-switch input:checked + .pp-switch-track {
+      background: #4f46e5;
+    }
+    .pp-switch input:checked + .pp-switch-track::after {
+      transform: translateX(16px);
+    }
+    .pp-switch input:focus-visible + .pp-switch-track {
+      outline: 2px solid var(--focus-ring, #4f46e5);
+      outline-offset: 2px;
+    }
+
+    /* Modern Portable Action Tiles */
+    .pp-action-tile {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      padding: 0.55rem 0.8rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      background: var(--surface-card, #ffffff);
+      color: var(--text-secondary, #1e293b);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+    }
+    .pp-action-tile:hover {
+      background: var(--surface-hover, #e2e9f4);
+      border-color: var(--border-strong, #94a3b8);
+    }
+    .pp-action-tile:active {
+      transform: translateY(0.5px);
+    }
+    .pp-action-tile-primary {
+      background: #4f46e5;
+      border-color: #4f46e5;
+      color: #ffffff;
+    }
+    .pp-action-tile-primary:hover {
+      background: #4338ca;
+      border-color: #4338ca;
+    }
+    .pp-action-tile-rose {
+      border-color: #fecdd3;
+      background: #fff1f2;
+      color: #be123c;
+    }
+    .pp-action-tile-rose:hover {
+      background: #ffe4e6;
+      border-color: #fda4af;
+    }
+    html.dark .pp-action-tile-rose {
+      border-color: rgba(244, 63, 94, 0.35);
+      background: rgba(225, 29, 72, 0.12);
+      color: #fda4af;
+    }
+    html.dark .pp-action-tile-rose:hover {
+      background: rgba(225, 29, 72, 0.22);
+    }
+
+    /* Account / Sign-In Selector Cards */
+    .pp-auth-acct-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+      gap: 0.5rem;
+      max-height: 210px;
+      overflow-y: auto;
+      padding-right: 0.15rem;
+    }
+    .pp-auth-acct-card {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.55rem 0.7rem;
+      border-radius: 0.8rem;
+      border: 1.5px solid var(--border-subtle, #cbd5e1);
+      background: var(--surface-subtle, #f8fafc);
+      color: var(--text-primary, #0f172a);
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+    }
+    .pp-auth-acct-card:hover {
+      border-color: #818cf8;
+      background: var(--surface-card, #ffffff);
+    }
+    .pp-auth-acct-card.is-selected {
+      border-color: #4f46e5;
+      background: #eef2ff;
+      box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.14);
+    }
+    html.dark .pp-auth-acct-card.is-selected {
+      border-color: #818cf8;
+      background: rgba(79, 70, 229, 0.2);
+      box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
+    }
+    .pp-auth-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 0.6rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      flex-shrink: 0;
+      background: #e0e7ff;
+      color: #3730a3;
+    }
+    .pp-auth-avatar-admin {
+      background: #065f46;
+      color: #ecfdf5;
+    }
+    html.dark .pp-auth-avatar {
+      background: rgba(99, 102, 241, 0.25);
+      color: #c7d2fe;
+    }
+    html.dark .pp-auth-avatar-admin {
+      background: rgba(16, 185, 129, 0.25);
+      color: #6ee7b7;
+    }
+
+    /* Interactive RBAC Permission Pill Toggles */
+    .pp-perm-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.24rem 0.55rem;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      background: var(--surface-subtle, #f8fafc);
+      color: var(--text-muted, #64748b);
+      cursor: pointer;
+      transition: all 130ms ease;
+    }
+    .pp-perm-pill.is-on {
+      border-color: #a5b4fc;
+      background: #eef2ff;
+      color: #3730a3;
+    }
+    .pp-perm-pill.is-fin.is-on {
+      border-color: #6ee7b7;
+      background: #ecfdf5;
+      color: #065f46;
+    }
+    html.dark .pp-perm-pill.is-on {
+      border-color: rgba(129, 140, 248, 0.5);
+      background: rgba(79, 70, 229, 0.24);
+      color: #c7d2fe;
+    }
+    html.dark .pp-perm-pill.is-fin.is-on {
+      border-color: rgba(52, 211, 153, 0.45);
+      background: rgba(16, 185, 129, 0.18);
+      color: #6ee7b7;
+    }
+
+    /* Role Badge in Header & Account Center */
+    .pp-role-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.12rem 0.45rem;
+      border-radius: 9999px;
+      font-size: 9.5px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .pp-role-admin {
+      background: #ecfdf5;
+      color: #047857;
+      border: 1px solid #a7f3d0;
+    }
+    .pp-role-user {
+      background: #eef2ff;
+      color: #4338ca;
+      border: 1px solid #c7d2fe;
+    }
+    html.dark .pp-role-admin {
+      background: rgba(16, 185, 129, 0.16);
+      color: #6ee7b7;
+      border-color: rgba(52, 211, 153, 0.35);
+    }
+    html.dark .pp-role-user {
+      background: rgba(99, 102, 241, 0.2);
+      color: #c7d2fe;
+      border-color: rgba(129, 140, 248, 0.35);
+    }
+
+    /* Admin Team Access Card */
+    .pp-access-card {
+      margin-top: 1.25rem;
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      border-radius: 1rem;
+      background: var(--surface-card, #ffffff);
+      padding: 1.15rem;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .pp-access-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .pp-access-table th,
+    .pp-access-table td {
+      padding: 0.6rem 0.65rem;
+      border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+      text-align: left;
+      vertical-align: middle;
+    }
+    .pp-access-table th {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-faint, #64748b);
+    }
+
+    /* Ensure utility .hidden always overrides custom flex/grid display classes */
+    .pp-action-tile.hidden,
+    .pp-sync-tile.hidden,
+    .pp-role-badge.hidden,
+    .pp-perm-pill.hidden {
+      display: none !important;
+    }
+
+    /* Crisp centered modal widths on desktop while preserving mobile calc(100vw - 1.5rem) clamping */
+    @media (min-width: 640px) {
+      #modalCard.max-w-sm { max-width: min(24rem, calc(100vw - 1.5rem)) !important; }
+      #modalCard.max-w-md { max-width: min(28rem, calc(100vw - 1.5rem)) !important; }
+      #modalCard.max-w-lg { max-width: min(34rem, calc(100vw - 1.5rem)) !important; }
+      #modalCard.max-w-xl { max-width: min(38rem, calc(100vw - 1.5rem)) !important; }
+      #modalCard.max-w-2xl { max-width: min(44rem, calc(100vw - 1.5rem)) !important; }
+      #modalCard.max-w-3xl { max-width: min(56rem, calc(100vw - 1.5rem)) !important; }
+    }
+
