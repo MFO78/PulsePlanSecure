@@ -1015,14 +1015,21 @@
     function mobileRemoveAllocation(deptId, projId, periodKey) {
       document.getElementById('mobileCardActionSheet')?.close();
       const db = getActiveDB();
-      pushUndoState('Remove allocation');
-      setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, 0, db);
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
       const pCode = db.projects.find(p => p.id === projId)?.code || projId;
-      recordChange('Allocation', `Removed [${dCode} -> ${pCode}] allocation in ${periodKey}`);
-      triggerHaptic(12);
-      renderAll();
-      showToast('Allocation removed', 'info', { undoable: true });
+      openConfirmModal(
+        'Remove Allocation',
+        `Delete the [${dCode} → ${pCode}] allocation in ${periodKey}${ui.timeUnit === 'month' ? ' (all weeks in this month)' : ''}?`,
+        'Remove Allocation',
+        () => {
+          pushUndoState('Remove allocation');
+          setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, 0, db);
+          recordChange('Allocation', `Removed [${dCode} -> ${pCode}] allocation in ${periodKey}`);
+          triggerHaptic(12);
+          renderAll();
+          showToast('Allocation removed', 'info', { undoable: true });
+        }
+      );
     }
 
     /* ============================================================================
@@ -2976,11 +2983,29 @@
 
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
       const pCode = db.projects.find(p => p.id === projId)?.code || projId;
-      pushUndoState(`Adjust [${dCode} -> ${pCode}]`);
-      setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
-      recordChange('Allocation', `[${dCode} -> ${pCode}] adjusted to ${formatValue(nextDisp)} in ${periodKey}`);
-      triggerHaptic(8);
-      renderAll();
+      const applyQuickStep = () => {
+        pushUndoState(`Adjust [${dCode} -> ${pCode}]`);
+        setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
+        recordChange('Allocation', nextDisp <= 0.0001
+          ? `Removed [${dCode} -> ${pCode}] allocation in ${periodKey}`
+          : `[${dCode} -> ${pCode}] adjusted to ${formatValue(nextDisp)} in ${periodKey}`);
+        triggerHaptic(8);
+        renderAll();
+        if (nextDisp <= 0.0001) {
+          showToast(`Removed [${dCode} → ${pCode}] allocation`, 'info', { undoable: true });
+        }
+      };
+
+      if (cur.hasData && nextDisp <= 0.0001) {
+        openConfirmModal(
+          'Remove Allocation',
+          `Stepping [${dCode} → ${pCode}] in ${periodKey} to 0 will remove this allocation${ui.timeUnit === 'month' ? ' (all weeks in this month)' : ''}. Continue?`,
+          'Remove',
+          applyQuickStep
+        );
+        return;
+      }
+      applyQuickStep();
     }
 
     function copyPeriodToNext(periodKey) {
@@ -3023,7 +3048,8 @@
           `Copy ${srcTitle} → ${dstTitle}`,
           `${dstTitle} already has ${targetExisting} allocation${targetExisting === 1 ? '' : 's'}. Copying ${pairs.length} allocation${pairs.length === 1 ? '' : 's'} from ${srcTitle} will overwrite matching project cells in ${dstTitle}. Continue?`,
           'Copy Allocations',
-          executeCopy
+          executeCopy,
+          { tone: 'primary' }
         );
       } else {
         executeCopy();
@@ -3067,13 +3093,27 @@
         const nextFte = displayValueToFte(raw, periodKey, ui.timeUnit, ui.manpowerUnit);
         const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
         const pCode = db.projects.find(p => p.id === projId)?.code || projId;
-        pushUndoState(`Inline edit [${dCode} -> ${pCode}]`);
-        setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
-        recordChange('Allocation', raw <= 0.0001
-          ? `Cleared [${dCode} -> ${pCode}] allocation in ${periodKey}`
-          : `Updated [${dCode} -> ${pCode}] to ${formatValue(raw)} in ${periodKey}`);
-        renderAll();
-        showToast(raw <= 0.0001 ? `Cleared [${dCode} → ${pCode}]` : `Set [${dCode} → ${pCode}] to ${formatValue(raw)}`, 'success', { undoable: true });
+        const applyInline = () => {
+          pushUndoState(`Inline edit [${dCode} -> ${pCode}]`);
+          setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
+          recordChange('Allocation', raw <= 0.0001
+            ? `Cleared [${dCode} -> ${pCode}] allocation in ${periodKey}`
+            : `Updated [${dCode} -> ${pCode}] to ${formatValue(raw)} in ${periodKey}`);
+          renderAll();
+          showToast(raw <= 0.0001 ? `Cleared [${dCode} → ${pCode}]` : `Set [${dCode} → ${pCode}] to ${formatValue(raw)}`, 'success', { undoable: true });
+        };
+
+        if (cur.hasData && raw <= 0.0001) {
+          renderMatrix();
+          openConfirmModal(
+            'Remove Allocation',
+            `Setting [${dCode} → ${pCode}] in ${periodKey} to 0 will remove this allocation${ui.timeUnit === 'month' ? ' (all weeks in this month)' : ''}. Continue?`,
+            'Remove',
+            applyInline
+          );
+          return;
+        }
+        applyInline();
       };
 
       input.onclick = (e) => e.stopPropagation();

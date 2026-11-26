@@ -132,7 +132,10 @@
   }
 
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('focus', () => { C.pollOnce(); }, { passive: true });
+    window.addEventListener('focus', () => {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
+      C.pollOnce();
+    }, { passive: true });
   }
 
   if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
@@ -146,9 +149,20 @@
     }
   }
 
-  /* ---------- Public API (same global names as the legacy module) ---------- */
+  /* ---------- Public API (same global names as the legacy module) + Lifecycle Hooks ---------- */
   P.ui.setBadgeRefresh(refreshProjectsTableBadges);
   globalThis.openProjectPbsModal = openProjectPbsModal;
+  if (typeof window !== 'undefined') {
+    window.ppFlushPbsBeforeLock = () => C.flushBeforeLock();
+    window.ppClearPbsMemoryAndStopSync = () => {
+      P.ui.close();
+      C.clearMemoryAndStopSync();
+      refreshProjectsTableBadges();
+    };
+    window.ppReencryptAllPbsFilesInFolder = (oldPass, newPass) => C.reencryptAllPbsFilesInFolder(oldPass, newPass);
+    window.ppTryAutoReconnectPbsFolder = (opts) => C.tryAutoReconnectFolder(opts);
+    window.ppOnProjectCodeRenamedForPbs = (pid, prevCode, nextCode) => C.onProjectCodeRenamed(pid, prevCode, nextCode);
+  }
   globalThis.__ppPbsTestApi = {
     normalizePbsDoc: (raw, project) => D.normalizePbsDoc(raw, project, C.getUserName()),
     encodePbsForDisk: async (doc, requireEncryption) => {
@@ -167,6 +181,7 @@
     getPbsFilename: (project) => D.getPbsFilename(project, C.state.activeProjectId),
     supportsDirSync: () => C.supportsDirSync(),
     exportActivePbsPdf,
+    core: C,
   };
   P.activated = true;
   refreshProjectsTableBadges();

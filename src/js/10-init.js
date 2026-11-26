@@ -278,6 +278,10 @@
     }
 
     function toggleDemoMode() {
+      if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+        showToast('Demo Sandbox is restricted to Administrators.', 'warning');
+        return;
+      }
       if (ui.whatIfMode) {
         ui.whatIfMode = false;
         whatIfDB = null;
@@ -574,7 +578,12 @@
       });
 
       document.addEventListener('keydown', (e) => {
+        if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) {
+          return;
+        }
         if (e.key === 'Escape' && isModalOpen()) {
+          const forcedPwForm = document.querySelector('#ppChangeMyPwForm[data-forced="1"]');
+          if (forcedPwForm) return;
           closeModal();
           return;
         }
@@ -765,20 +774,43 @@
         }
       } catch (e) {}
 
-      // 2. Load or initialize Live DB
-      try {
-        const savedLive = safeGetStorage(STORAGE_KEYS.LIVE_DB);
-        liveDB = savedLive ? (normalizeAndMigrateDB(JSON.parse(savedLive)) || createEmptyDB()) : createEmptyDB();
-      } catch (e) {
+      // 2. Load or initialize Live DB — NEVER hydrate plaintext localStorage if last session was encrypted/protected
+      const secureFlag = typeof ppReadSecureSessionFlag === 'function' ? ppReadSecureSessionFlag() : null;
+      const startProtectedLocked = Boolean(secureFlag && secureFlag.protected);
+      if (startProtectedLocked) {
         liveDB = createEmptyDB();
+        if (typeof ppClearPlaintextLocalCaches === 'function') {
+          ppClearPlaintextLocalCaches();
+        } else {
+          try { localStorage.removeItem(STORAGE_KEYS.LIVE_DB); } catch (_e) {}
+        }
+        if (typeof window !== 'undefined' && typeof window.ppResetPeopleDirectoryMemory === 'function') {
+          window.ppResetPeopleDirectoryMemory();
+        }
+        if (typeof window !== 'undefined' && typeof window.ppClearPbsMemoryAndStopSync === 'function') {
+          window.ppClearPbsMemoryAndStopSync();
+        }
+        if (typeof window !== 'undefined' && typeof window.ppClearMspMemoryAndStopSync === 'function') {
+          window.ppClearMspMemoryAndStopSync();
+        }
+        ui.demoMode = false;
+        ui.whatIfMode = false;
+        whatIfDB = null;
+      } else {
+        try {
+          const savedLive = safeGetStorage(STORAGE_KEYS.LIVE_DB);
+          liveDB = savedLive ? (normalizeAndMigrateDB(JSON.parse(savedLive)) || createEmptyDB()) : createEmptyDB();
+        } catch (e) {
+          liveDB = createEmptyDB();
+        }
       }
 
       // Determine first-use Welcome Splash state (show automatically on first visit or unconfigured empty Live DB)
       if (parsedWelcomeSeen === undefined) {
         const hasExistingLiveData = Boolean(liveDB && ((liveDB.departments || []).length > 0 || (liveDB.projects || []).length > 0));
-        ui.welcomeSeen = hasSavedUIPrefs && hasExistingLiveData;
+        ui.welcomeSeen = startProtectedLocked || (hasSavedUIPrefs && hasExistingLiveData);
       } else {
-        ui.welcomeSeen = Boolean(parsedWelcomeSeen);
+        ui.welcomeSeen = startProtectedLocked || Boolean(parsedWelcomeSeen);
       }
 
       // 3. Load or initialize isolated Demo DB
@@ -805,36 +837,54 @@
       setupResponsiveViewportWatcher();
       setupMatrixFloatingHeaderSync();
 
-      // 6. Auto-check linked file immediately whenever the window/tab regains focus
-      window.addEventListener('focus', () => {
+      // 6. Auto-check inactivity timeout + linked file + Finance Vault whenever the window/tab regains focus
+      const handleAppResume = () => {
+        if (typeof ppCheckWallClockInactivityLock === 'function' && ppCheckWallClockInactivityLock()) return;
+        if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
         if (linkedFileHandle && !ui.demoMode) checkExternalFileUpdates();
-      });
+        if (typeof window !== 'undefined' && typeof window.ppPollFinanceVaultNow === 'function' && !ui.demoMode) {
+          window.ppPollFinanceVaultNow().catch(() => {});
+        }
+      };
+      window.addEventListener('focus', handleAppResume);
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && linkedFileHandle && !ui.demoMode) checkExternalFileUpdates();
+        if (!document.hidden) handleAppResume();
+      });
+      window.addEventListener('pagehide', () => {
+        if (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage()) {
+          if (typeof ppClearPlaintextLocalCaches === 'function') ppClearPlaintextLocalCaches();
+        }
       });
 
-      // 7. Apply theme & render UI immediately BEFORE async IndexedDB handle lookup so slow/blocked IDB never stalls startup
+      // 7. Apply theme & render UI (or lock screen immediately if previous session was encrypted/protected)
       ppDebug('INFO', 'PulsePlan initApp starting', getDebugEnvironmentSummary());
       applyDarkMode();
       applyPresentMode();
       updatePwaInstallUI();
+      if (startProtectedLocked && typeof ppEnterInitialLockedGate === 'function') {
+        ppEnterInitialLockedGate(secureFlag?.fileName || '', 'reconnect_required');
+      }
       try {
         renderAll();
       } catch (e) {
         ppDebug('ERROR', 'Initial renderAll error', { name: e?.name, message: e?.message });
       }
 
-      // Show first-use Welcome & Guided Setup Splash Screen on initial visit
-      if (!ui.welcomeSeen && typeof openWelcomeModal === 'function') {
+      // Show first-use Welcome & Guided Setup Splash Screen on initial visit (never over lock gate)
+      if (!startProtectedLocked && !ui.welcomeSeen && typeof openWelcomeModal === 'function') {
         setTimeout(() => {
-          if (!ui.welcomeSeen && !isModalOpen()) openWelcomeModal(true);
+          const isLocked = typeof ppIsSessionLocked === 'function' && ppIsSessionLocked();
+          if (!isLocked && !ui.welcomeSeen && !isModalOpen()) openWelcomeModal(true);
         }, 160);
       }
 
       // 8. Retrieve previously linked shared file handle (timeout-guarded IDB) & auto-reconnect on desktop
       rememberedFileHandle = await loadRememberedHandle();
+      if (startProtectedLocked && typeof ppRefreshLockedScreenUI === 'function') {
+        ppRefreshLockedScreenUI();
+      }
       await autoReconnectSyncFile();
-      if (ui.activeTab === 'sync') renderSyncTab();
+      if (ui.activeTab === 'sync' && !(typeof ppIsSessionLocked === 'function' && ppIsSessionLocked())) renderSyncTab();
 
       // 9. Register offline PWA Service Worker when served over HTTPS or localhost and trigger immediate update check
       try {

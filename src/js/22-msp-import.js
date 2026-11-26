@@ -52,6 +52,9 @@
   }
 
   function loadMeta() {
+    if (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage()) {
+      return {};
+    }
     try {
       const raw = typeof safeGetStorage === 'function' ? safeGetStorage(META_KEY) : localStorage.getItem(META_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
@@ -63,6 +66,10 @@
 
   function saveMeta() {
     try {
+      if (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage()) {
+        try { localStorage.removeItem(META_KEY); } catch (_e) {}
+        return;
+      }
       const raw = JSON.stringify(mspMeta);
       if (typeof safeSetStorage === 'function') safeSetStorage(META_KEY, raw);
       else localStorage.setItem(META_KEY, raw);
@@ -257,12 +264,7 @@
   }
 
   function persistAppChanges() {
-    if (typeof persistActiveDB === 'function') {
-      persistActiveDB();
-    } else if (typeof saveLocalState === 'function') {
-      saveLocalState();
-    }
-    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
   }
 
@@ -270,6 +272,7 @@
     const db = getDb();
     const meta = getProjectMeta(projectId);
     if (!Array.isArray(db.milestones)) db.milestones = [];
+    if (typeof pushUndoState === 'function') pushUndoState('Apply MS Project milestone sync');
 
     const hasExplicitAddList = Array.isArray(opts.addUids);
     const addSet = hasExplicitAddList ? new Set(opts.addUids.map(String)) : null;
@@ -435,6 +438,7 @@
   }
 
   async function checkAllLinkedFiles() {
+    if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
     for (const [projectId, handle] of activeHandles.entries()) {
       try {
         const ok = await ensureReadPermission(handle, false);
@@ -452,6 +456,23 @@
     if (pollTimer) clearInterval(pollTimer);
     if (activeHandles.size === 0) return;
     pollTimer = setInterval(checkAllLinkedFiles, POLL_MS);
+  }
+
+  function clearMspMemoryAndStopSync() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    mspMeta = {};
+    activeHandles.clear();
+    pendingDiffs.clear();
+    activeProjectId = '';
+    activePreviewDiff = null;
+    activePreviewFileName = '';
+    activePreviewLastMod = 0;
+    try { localStorage.removeItem(META_KEY); } catch (_e) {}
+    const dlg = document.getElementById('ppMspDialog');
+    if (dlg) {
+      try { if (dlg.open && typeof dlg.close === 'function') dlg.close(); } catch (_e) {}
+      dlg.innerHTML = '';
+    }
   }
 
   /* ---------- Styles & Dialog UI ---------- */
@@ -644,13 +665,21 @@
     dlg.querySelector('[data-msp-sel="add-none"]')?.addEventListener('click', () => {
       dlg.querySelectorAll('input[name="addUid"]').forEach(cb => { cb.checked = false; });
     });
-    dlg.querySelector('#ppMspApplyForm')?.addEventListener('submit', (ev) => {
+    dlg.querySelector('#ppMspApplyForm')?.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       if (!activePreviewDiff) return;
       const form = ev.target;
       const checkedAdds = Array.from(form.querySelectorAll('input[name="addUid"]:checked')).map(el => el.value);
       const checkedUpds = Array.from(form.querySelectorAll('input[name="updId"]:checked')).map(el => el.value);
       const checkedRems = Array.from(form.querySelectorAll('input[name="remId"]:checked')).map(el => el.value);
+      if (checkedRems.length > 0 && typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: `Delete ${checkedRems.length} Milestone${checkedRems.length === 1 ? '' : 's'}?`,
+          message: `Applying this MS Project sync will delete ${checkedRems.length} milestone${checkedRems.length === 1 ? '' : 's'} missing from the XML file. Continue?`,
+          confirmLabel: 'Apply & Delete',
+        });
+        if (!ok) return;
+      }
       const res = applyMspDiff(activeProjectId, activePreviewDiff, {
         addUids: checkedAdds,
         updateIds: checkedUpds,
@@ -667,7 +696,7 @@
       showIgnoredInPreview = false;
       refreshProjectsTableButtons();
       renderMspDialog();
-      toast(`Applied MS Project milestones: +${res.addedCount} new, ${res.updatedCount} updated, ${res.removedCount} removed.`, 'success');
+      toast(`Applied MS Project milestones: +${res.addedCount} new, ${res.updatedCount} updated, ${res.removedCount} removed.`, 'success', { undoable: true });
     });
   }
 
@@ -767,11 +796,16 @@
 
   if (typeof globalThis !== 'undefined') {
     globalThis.openProjectMspModal = openProjectMspModal;
+    globalThis.ppClearMspMemoryAndStopSync = clearMspMemoryAndStopSync;
     globalThis.__ppMspTestApi = {
       parseMspXml,
       computeMspDiff,
       applyMspDiff,
       getProjectMeta,
+      clearMspMemoryAndStopSync,
     };
+  }
+  if (typeof window !== 'undefined') {
+    window.ppClearMspMemoryAndStopSync = clearMspMemoryAndStopSync;
   }
 })();

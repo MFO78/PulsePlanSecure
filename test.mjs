@@ -2798,6 +2798,441 @@ test('Encrypted badges stay synced, Main DB stores Finance Vault path with handl
   assert.equal(out.lockedFileLabel, 'company_roadmap.json', 'Locked screen tracks remembered database filename for one-click Sign In');
 });
 
+test('Universal delete confirmations gate every destructive action until explicitly confirmed', async () => {
+  const out = await vm.runInContext(`(async () => {
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    liveDB.snapshots = [{ id: 'snap_1', name: 'Baseline Q1', createdAt: new Date().toISOString(), allocations: {} }];
+    liveDB.milestones = [{ id: 'ms_1', title: 'PDR Gate', date: '2026-06-15', deptId: 'd_eng', projectId: 'p_nova' }];
+    liveDB.capacityOverrides = { 'd_eng::2026-W25': 4 };
+    const allocKeysBefore = Object.keys(liveDB.allocations);
+    const sampleAllocKey = allocKeysBefore[0];
+    const [aDept, aProj, aWeek] = sampleAllocKey.split('::');
+
+    // Intercept openConfirmModal to verify each action requests confirmation without deleting immediately
+    const origOpenConfirm = openConfirmModal;
+    let lastConfirm = null;
+    const seenTitles = [];
+    openConfirmModal = (title, message, confirmLabel, onConfirm) => {
+      seenTitles.push(title);
+      lastConfirm = { title, message, confirmLabel, onConfirm };
+    };
+
+    try {
+      // 1. Delete snapshot
+      deleteSnapshot('snap_1');
+      const snapStillPresentBeforeConfirm = liveDB.snapshots.length === 1;
+      lastConfirm.onConfirm();
+      const snapDeletedAfterConfirm = liveDB.snapshots.length === 0;
+
+      // 2. Delete milestone
+      deleteMilestoneFromModal('ms_1');
+      const msStillPresentBeforeConfirm = liveDB.milestones.length === 1;
+      lastConfirm.onConfirm();
+      const msDeletedAfterConfirm = liveDB.milestones.length === 0;
+
+      // 3. Delete allocation (mobile quick remove)
+      ui.timeUnit = 'week';
+      mobileRemoveAllocation(aDept, aProj, aWeek);
+      const allocStillPresentBeforeConfirm = Boolean(liveDB.allocations[sampleAllocKey]);
+      lastConfirm.onConfirm();
+      const allocDeletedAfterConfirm = !liveDB.allocations[sampleAllocKey];
+
+      // 4. Reset capacity override span (UI wrapper)
+      confirmResetCapacityOverrideSpan('d_eng', '2026-W25', '2026-W25');
+      const ovStillPresentBeforeConfirm = Object.prototype.hasOwnProperty.call(liveDB.capacityOverrides, 'd_eng::2026-W25');
+      lastConfirm.onConfirm();
+      const ovDeletedAfterConfirm = !Object.prototype.hasOwnProperty.call(liveDB.capacityOverrides, 'd_eng::2026-W25');
+
+      // 5. Discard What-If mode (UI wrapper)
+      enterWhatIfMode();
+      const enteredWhatIf = ui.whatIfMode === true;
+      confirmDiscardWhatIfMode();
+      const stillInWhatIfBeforeConfirm = ui.whatIfMode === true;
+      lastConfirm.onConfirm();
+      const exitedWhatIfAfterConfirm = ui.whatIfMode === false;
+
+      // 6. Unlink shared file
+      const fakeH = { name: 'team_plan.json' };
+      linkedFileHandle = fakeH;
+      rememberedFileHandle = fakeH;
+      unlinkSharedFile();
+      const stillLinkedBeforeConfirm = linkedFileHandle === fakeH;
+      await lastConfirm.onConfirm();
+      const unlinkedAfterConfirm = linkedFileHandle === null;
+
+      return {
+        seenCount: seenTitles.length,
+        snapStillPresentBeforeConfirm, snapDeletedAfterConfirm,
+        msStillPresentBeforeConfirm, msDeletedAfterConfirm,
+        allocStillPresentBeforeConfirm, allocDeletedAfterConfirm,
+        ovStillPresentBeforeConfirm, ovDeletedAfterConfirm,
+        enteredWhatIf, stillInWhatIfBeforeConfirm, exitedWhatIfAfterConfirm,
+        stillLinkedBeforeConfirm, unlinkedAfterConfirm,
+      };
+    } finally {
+      openConfirmModal = origOpenConfirm;
+      linkedFileHandle = null;
+      rememberedFileHandle = null;
+    }
+  })()`, ctx);
+
+  assert.equal(out.seenCount, 6, 'All 6 destructive UI operations triggered confirmation dialogs');
+  assert.equal(out.snapStillPresentBeforeConfirm, true, 'Snapshot is NOT deleted before confirmation');
+  assert.equal(out.snapDeletedAfterConfirm, true, 'Snapshot IS deleted after confirmation');
+  assert.equal(out.msStillPresentBeforeConfirm, true, 'Milestone is NOT deleted before confirmation');
+  assert.equal(out.msDeletedAfterConfirm, true, 'Milestone IS deleted after confirmation');
+  assert.equal(out.allocStillPresentBeforeConfirm, true, 'Allocation is NOT deleted before confirmation');
+  assert.equal(out.allocDeletedAfterConfirm, true, 'Allocation IS deleted after confirmation');
+  assert.equal(out.ovStillPresentBeforeConfirm, true, 'Capacity override is NOT deleted before confirmation');
+  assert.equal(out.ovDeletedAfterConfirm, true, 'Capacity override IS deleted after confirmation');
+  assert.equal(out.enteredWhatIf && out.stillInWhatIfBeforeConfirm, true, 'What-If sandbox stays active before discard confirmation');
+  assert.equal(out.exitedWhatIfAfterConfirm, true, 'What-If sandbox exits after discard confirmation');
+  assert.equal(out.stillLinkedBeforeConfirm, true, 'Shared file stays linked before unlink confirmation');
+  assert.equal(out.unlinkedAfterConfirm, true, 'Shared file unlinks after confirmation');
+});
+
+test('Database connection loss wipes all local plaintext data, memory & caches until password is re-entered while remembering file path', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    const fin = globalThis.__ppFinanceVaultTestApi;
+    const pbs = globalThis.__ppPbsTestApi;
+
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.linkedFilePaths = { 'secure_roadmap.json': 'G:/Shared drives/PMO/secure_roadmap.json' };
+    ppSyncPassphrase = 'StrongAdmin#2026!';
+    auth.ppApplyAuthenticatedSession('admin', null, 'Lead Admin');
+    ppMarkSecureSessionFlag('secure_roadmap.json', true);
+
+    // Seed caches & check plaintext suppression in localStorage while encrypted
+    safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+    safeSetStorage('pulseplan_people_dir_v1', JSON.stringify([{ id: 'p1', name: 'Secret Lead', role: 'Lead' }]));
+    safeSetStorage('pulseplan_pbs_cache_v1', JSON.stringify({ p_nova: { items: [{ id: 'i1', name: 'Secret Assembly' }] } }));
+    ppPersistLiveDBCacheSafe(liveDB);
+    const suppressedPlaintextOnSave = safeGetStorage(STORAGE_KEYS.LIVE_DB) === null;
+
+    // Simulate active linked handle whose permission is revoked / file disconnected during polling!
+    const disconnectedHandle = {
+      name: 'secure_roadmap.json',
+      getFile: async () => {
+        const err = new Error('The requested file or directory could not be read due to permission problems.');
+        err.name = 'NotAllowedError';
+        throw err;
+      },
+    };
+    linkedFileHandle = disconnectedHandle;
+    rememberedFileHandle = disconnectedHandle;
+
+    await checkExternalFileUpdates();
+
+    const lockedAfterDrop = auth.ppIsSessionLocked();
+    const lockReason = auth.getLockedState()?.reason;
+    const lockHasNoInMemoryEnvelope = auth.getLockedState()?.envelope === null;
+    const passCleared = ppSyncPassphrase === '';
+    const deptsCleared = liveDB.departments.length === 0;
+    const projsCleared = liveDB.projects.length === 0;
+    const liveStorageWiped = safeGetStorage(STORAGE_KEYS.LIVE_DB) === null;
+    const peopleStorageWiped = safeGetStorage('pulseplan_people_dir_v1') === null;
+    const pbsStorageWiped = safeGetStorage('pulseplan_pbs_cache_v1') === null;
+    const linkedNulled = linkedFileHandle === null;
+    const handleRemembered = Boolean(rememberedFileHandle && rememberedFileHandle.name === 'secure_roadmap.json');
+    const pathRemembered = ui.linkedFilePaths['secure_roadmap.json'];
+    const pbsCacheEmpty = pbs ? Object.keys(pbs.core.getCache()).length === 0 : true;
+    const secureFlagPersisted = Boolean(ppReadSecureSessionFlag()?.protected);
+
+    // Verify writeDBToLinkedFile refuses writes while locked
+    const writeBlockedWhileLocked = await writeDBToLinkedFile();
+
+    // Cleanup
+    ppClearSecureSessionFlag();
+    rememberedFileHandle = null;
+    linkedFileHandle = null;
+    auth.ppApplyAuthenticatedSession('open');
+
+    return {
+      suppressedPlaintextOnSave,
+      lockedAfterDrop, lockReason, lockHasNoInMemoryEnvelope,
+      passCleared, deptsCleared, projsCleared,
+      liveStorageWiped, peopleStorageWiped, pbsStorageWiped,
+      linkedNulled, handleRemembered, pathRemembered, pbsCacheEmpty,
+      secureFlagPersisted,
+      writeBlockedOk: writeBlockedWhileLocked?.ok === false,
+    };
+  })()`, ctx);
+
+  assert.equal(out.suppressedPlaintextOnSave, true, 'ppPersistLiveDBCacheSafe suppresses plaintext localStorage cache when encrypted');
+  assert.equal(out.lockedAfterDrop, true, 'Connection loss immediately locks the workspace');
+  assert.equal(out.lockReason, 'connection_lost', 'Locked screen records connection_lost reason');
+  assert.equal(out.lockHasNoInMemoryEnvelope, true, 'Connection loss leaves zero in-memory data envelope until reconnected');
+  assert.equal(out.passCleared, true, 'Connection loss wipes encryption passphrase from memory');
+  assert.equal(out.deptsCleared && out.projsCleared, true, 'Connection loss scrubs liveDB departments & projects');
+  assert.equal(out.liveStorageWiped && out.peopleStorageWiped && out.pbsStorageWiped, true, 'Connection loss wipes all localStorage plaintext caches');
+  assert.equal(out.linkedNulled, true, 'Disconnected active file handle is cleared');
+  assert.equal(out.handleRemembered, true, 'Browser still remembers file handle for one-click reconnect');
+  assert.equal(out.pathRemembered, 'G:/Shared drives/PMO/secure_roadmap.json', 'Saved file path stays remembered across connection drop');
+  assert.equal(out.pbsCacheEmpty, true, 'PBS in-memory cache is wiped on connection loss');
+  assert.equal(out.secureFlagPersisted, true, 'Secure session flag persists across reload so cold start opens locked');
+  assert.equal(out.writeBlockedOk, true, 'writeDBToLinkedFile refuses writes while session is locked');
+});
+
+test('Finance Vault & PBS sync: reload/merge never wipes Finance Vault, Finance polling merges updates, PBS write queue & password rotation work', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    const fin = globalThis.__ppFinanceVaultTestApi;
+    const pbs = globalThis.__ppPbsTestApi;
+
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    const adminPw = 'SyncMaster#2026!';
+    ppSyncPassphrase = adminPw;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Sync Admin');
+
+    // 1. Create virtual encrypted Finance Vault file on disk
+    let finDiskText = await fin.encryptFinancePayload(fin.extractFinancialsFromDb(liveDB), adminPw, 'fin_init');
+    let finDiskMtime = 10000;
+    const mockFinHandle = {
+      name: 'pulseplan-finance.enc.json',
+      queryPermission: async () => 'granted',
+      getFile: async () => ({ name: 'pulseplan-finance.enc.json', lastModified: finDiskMtime, text: async () => finDiskText }),
+      createWritable: async () => ({
+        write: async (txt) => { finDiskText = txt; finDiskMtime += 1000; },
+        close: async () => {},
+      }),
+    };
+    fin.syncFinanceMetaToMainDb('pulseplan-finance.enc.json');
+    fin.lockFinanceVaultSilently(true);
+    fin.setTestHandles({ fileHandle: mockFinHandle, dirHandle: null });
+    const opened = await fin.tryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: true });
+
+    // 2. Simulate external Main DB reload (which carries stripped dayRate:0, budgetCost:0!)
+    //    AND verify liveDB financials & disk Finance Vault are NOT wiped!
+    liveDB.departments.forEach(d => { d.dayRate = 0; });
+    liveDB.projects.forEach(p => { p.budgetCost = 0; });
+    await fin.onMainDbReloadedForFinance(liveDB);
+    const ratePreservedAfterMainReload = liveDB.departments.find(d => d.id === 'd_eng').dayRate;
+    const costPreservedAfterMainReload = liveDB.projects.find(p => p.id === 'p_nova').budgetCost;
+
+    // 3. Verify cloneSyncSnapshot strips financials for Main DB 3-way merge so merge never wipes Finance Vault
+    const snapStripped = cloneSyncSnapshot(liveDB);
+    const snapRateZero = snapStripped.departments.find(d => d.id === 'd_eng').dayRate === 0;
+
+    // 4. Simulate teammate updating d_des dayRate in Finance Vault on disk while local updated d_eng dayRate -> poll & 3-way merge!
+    const remoteFinPayload = await fin.decryptFinancePayload(finDiskText, adminPw);
+    remoteFinPayload.deptRates.d_des = { dayRate: 880 };
+    finDiskText = await fin.encryptFinancePayload(remoteFinPayload, adminPw, 'fin_teammate_1');
+    finDiskMtime += 5000;
+    liveDB.departments.find(d => d.id === 'd_eng').dayRate = 790;
+    await fin.pollFinanceVaultNow({ silent: true });
+    const mergedEngRate = liveDB.departments.find(d => d.id === 'd_eng').dayRate;
+    const mergedDesRate = liveDB.departments.find(d => d.id === 'd_des').dayRate;
+
+    // 5. Verify PBS encrypted write embeds type & writeId, write queue coalesces concurrent edits, and password rotation re-encrypts PBS!
+    const pbsFiles = new Map();
+    const makeVirtualPbsFile = (name) => ({
+      kind: 'file',
+      name,
+      getFile: async () => {
+        const entry = pbsFiles.get(name);
+        if (!entry) { const e = new Error('Not found'); e.name = 'NotFoundError'; throw e; }
+        return { name, lastModified: entry.mtime, text: async () => entry.text };
+      },
+      createWritable: async () => {
+        let buf = '';
+        return {
+          write: async (t) => { buf = t; },
+          close: async () => {
+            const prev = pbsFiles.get(name);
+            pbsFiles.set(name, { text: buf, mtime: (prev ? prev.mtime : 20000) + 1000 });
+          },
+        };
+      },
+    });
+    const mockPbsDir = {
+      name: 'PBS_Shared',
+      queryPermission: async () => 'granted',
+      getFileHandle: async (name, opts) => {
+        if (!pbsFiles.has(name) && !(opts && opts.create)) {
+          const e = new Error('NotFound'); e.name = 'NotFoundError'; throw e;
+        }
+        return makeVirtualPbsFile(name);
+      },
+      values: async function* () {
+        for (const name of pbsFiles.keys()) yield makeVirtualPbsFile(name);
+      },
+    };
+
+    const core = pbs.core;
+    core.state.dirHandle = mockPbsDir;
+    core.state.rememberedDirHandle = mockPbsDir;
+    core.openSession('p_nova');
+    core.state.activeDoc.items.push({ id: 'pbs_1', parentId: null, code: '1', name: 'Avionics Bay', deptId: 'd_eng', owner: 'Lead', maturity: 'PDR', milestoneId: '', notes: '' });
+    const wrotePbs = await core.writeToFolder(false);
+    const pbsFileName = core.fileNameFor('p_nova');
+    const savedPbsEnv = JSON.parse(pbsFiles.get(pbsFileName).text);
+    const pbsHasTypeAndWriteId = savedPbsEnv.type === 'pulseplan-pbs' && Boolean(savedPbsEnv.writeId);
+
+    // Simulate concurrent edit while isSaving=true -> verify saveQueued flag is set instead of dropping!
+    core.state.isSaving = true;
+    await core.writeToFolder(false);
+    const queuedWhenBusy = core.state.saveQueued === true;
+    core.state.isSaving = false;
+    core.state.saveQueued = false;
+
+    // Rotate Main Admin password -> verifies BOTH Finance Vault AND PBS folder files re-encrypt seamlessly!
+    const newAdminPw = 'RotatedMaster#2027!';
+    const rotRes = await auth.changeMainAdminPassword({ currentPassword: adminPw, newPassword: newAdminPw });
+    const finDecryptsWithNewPw = (await fin.decryptFinancePayload(finDiskText, newAdminPw)).deptRates.d_des.dayRate === 880;
+    const pbsDecryptsWithNewPw = JSON.parse(await decryptPulsePlanData(JSON.parse(pbsFiles.get(pbsFileName).text), newAdminPw)).items[0].name === 'Avionics Bay';
+
+    // Cleanup
+    core.clearMemoryAndStopSync();
+    core.state.rememberedDirHandle = null;
+    fin.lockFinanceVaultSilently(true);
+    fin.setTestHandles({ fileHandle: null, dirHandle: null });
+    ppSyncPassphrase = '';
+    auth.ppApplyAuthenticatedSession('open');
+
+    return {
+      opened: opened.opened,
+      ratePreservedAfterMainReload, costPreservedAfterMainReload,
+      snapRateZero,
+      mergedEngRate, mergedDesRate,
+      wrotePbs, pbsHasTypeAndWriteId, queuedWhenBusy,
+      finReencrypted: Boolean(rotRes.financeResult?.reencryptedOnDisk),
+      pbsRotatedCount: rotRes.pbsResult?.rotatedCount || 0,
+      finDecryptsWithNewPw, pbsDecryptsWithNewPw,
+    };
+  })()`, ctx);
+
+  assert.equal(out.opened, true, 'Finance Vault opens cleanly with unified Admin key');
+  assert.equal(out.ratePreservedAfterMainReload, 650, 'External Main DB reload preserves Finance Vault day rates instead of wiping to 0');
+  assert.equal(out.costPreservedAfterMainReload, 450000, 'External Main DB reload preserves Finance Vault project costs');
+  assert.equal(out.snapRateZero, true, 'cloneSyncSnapshot strips financials so 3-way merge never falsely detects zeroed disk diffs');
+  assert.equal(out.mergedEngRate, 790, 'Finance Vault 3-way merge keeps local dayRate edit');
+  assert.equal(out.mergedDesRate, 880, 'Finance Vault 3-way merge pulls teammate dayRate edit');
+  assert.equal(out.wrotePbs, true, 'PBS writes encrypted file to shared folder');
+  assert.equal(out.pbsHasTypeAndWriteId, true, 'Encrypted PBS file includes top-level type and writeId for cloud drift absorption');
+  assert.equal(out.queuedWhenBusy, true, 'PBS writeToFolder queues concurrent edits in saveQueued instead of dropping them');
+  assert.equal(out.finReencrypted, true, 'Main Admin password rotation re-encrypts separate Finance Vault on disk');
+  assert.equal(out.pbsRotatedCount, 1, 'Main Admin password rotation re-encrypts PBS folder files on disk');
+  assert.equal(out.finDecryptsWithNewPw, true, 'Rotated Finance Vault decrypts cleanly with new Admin password');
+  assert.equal(out.pbsDecryptsWithNewPw, true, 'Rotated PBS file decrypts cleanly with new Admin password');
+});
+
+test('Users Management & RBAC fixes: liveDB targeting, Edit & Disable/Enable, custom permission restore, immediate disk write & revocation guard', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    liveDB = createSampleDemoDB();
+    liveDB.accessControl.adminName = 'Chief Admin';
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.autoSaveToFile = false; // Explicitly OFF to verify User Management STILL persists immediately to disk!
+
+    let diskWrites = 0;
+    let diskRaw = '';
+    const adminPw = 'AdminUsers#2026!';
+    ppSyncPassphrase = adminPw;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Chief Admin');
+
+    const mockFileHandle = {
+      name: 'users_test.json',
+      getFile: async () => ({ name: 'users_test.json', lastModified: 10000, text: async () => diskRaw || JSON.stringify(await encryptPulsePlanData(liveDB, adminPw)) }),
+      createWritable: async () => ({
+        write: async (t) => { diskRaw = t; diskWrites++; },
+        close: async () => {},
+      }),
+    };
+    linkedFileHandle = mockFileHandle;
+    rememberedFileHandle = mockFileHandle;
+    lastKnownFileModified = 10000;
+    lastSyncedSnapshot = cloneSyncSnapshot(liveDB);
+
+    // 1. Enter What-If mode and create a user -> MUST persist to liveDB AND flush to disk even with autoSaveToFile=false!
+    enterWhatIfMode();
+    const createdInWhatIf = await auth.createOrUpdateUserAccount({
+      name: 'Sofia Conti',
+      roleTitle: 'Systems Lead',
+      isAdmin: true,
+      permissions: { tabs: { matrix: true, health: false, data: false, sync: false }, finance: false },
+      tempPassword: 'SofiaTemp#123',
+      mustChangePassword: false,
+    });
+    discardWhatIfMode();
+    const persistedInLiveAfterDiscard = liveDB.accessControl.users.some(u => u.id === createdInWhatIf.id);
+    const wroteToDiskDespiteAutoSaveOff = diskWrites >= 1;
+
+    // 2. Revoking Admin rights restores Sofia's original custom permissions (Matrix only, NO Finance)!
+    const sofiaRec = liveDB.accessControl.users.find(u => u.id === createdInWhatIf.id);
+    sofiaRec.isAdmin = false;
+    ppSyncPassphrase = '';
+    await auth.authenticateInMemoryAccount(sofiaRec.id, 'SofiaTemp#123');
+    const sofiaRestoredMatrix = auth.ppCanAccessTab('matrix');
+    const sofiaRestoredHealth = auth.ppCanAccessTab('health');
+    const sofiaRestoredFin = auth.ppCanAccessFinance();
+
+    // 3. Switch back to Admin -> Edit Sofia's Name & Role, reject duplicate/Admin name
+    await auth.authenticateInMemoryAccount('__ADMIN__', adminPw);
+    let adminNameRejected = false;
+    try {
+      await auth.updateUserAccountDetails(sofiaRec.id, { name: 'Chief Admin', roleTitle: 'Lead' });
+    } catch (_e) { adminNameRejected = true; }
+    await auth.updateUserAccountDetails(sofiaRec.id, { name: 'Sofia Rossi', roleTitle: 'Principal Systems Lead' });
+    const renamedOk = sofiaRec.name === 'Sofia Rossi' && sofiaRec.roleTitle === 'Principal Systems Lead';
+
+    // 4. Disable Sofia -> verify she cannot sign in AND live session is immediately revoked on reload
+    await auth.toggleUserAccountEnabled(sofiaRec.id, false);
+    let disabledLoginRejected = false;
+    try {
+      await auth.authenticateInMemoryAccount(sofiaRec.id, 'SofiaTemp#123');
+    } catch (_e) { disabledLoginRejected = true; }
+
+    // Re-enable Sofia, sign her in, then simulate Admin disabling her in loaded DB -> ppSyncAuthAfterDbLoad returns { revoked: true }
+    await auth.toggleUserAccountEnabled(sofiaRec.id, true);
+    await auth.authenticateInMemoryAccount(sofiaRec.id, 'SofiaTemp#123');
+    const revokedDbCopy = JSON.parse(JSON.stringify(liveDB));
+    revokedDbCopy.accessControl.users.find(u => u.id === sofiaRec.id).enabled = false;
+    const syncAuthRes = auth.ppSyncAuthAfterDbLoad(revokedDbCopy);
+    const revokedReturnedTrue = syncAuthRes && syncAuthRes.revoked === true;
+
+    // 5. Reject setting arbitrary Admin password when ppSyncPassphrase is empty but ac.users exist
+    liveDB = revokedDbCopy;
+    ppSyncPassphrase = '';
+    let arbitraryAdminPwBlocked = false;
+    try {
+      await auth.authenticateInMemoryAccount('__ADMIN__', 'AttackerPw#999!');
+    } catch (_e) { arbitraryAdminPwBlocked = true; }
+
+    // Cleanup
+    linkedFileHandle = null;
+    rememberedFileHandle = null;
+    ppSyncPassphrase = '';
+    ui.autoSaveToFile = true;
+    auth.ppApplyAuthenticatedSession('open');
+
+    return {
+      persistedInLiveAfterDiscard, wroteToDiskDespiteAutoSaveOff,
+      sofiaRestoredMatrix, sofiaRestoredHealth, sofiaRestoredFin,
+      adminNameRejected, renamedOk, disabledLoginRejected,
+      revokedReturnedTrue, arbitraryAdminPwBlocked,
+    };
+  })()`, ctx);
+
+  assert.equal(out.persistedInLiveAfterDiscard, true, 'User created during What-If mode targets liveDB and survives What-If discard');
+  assert.equal(out.wroteToDiskDespiteAutoSaveOff, true, 'User CRUD flushes immediately to linked file even when autoSaveToFile is OFF');
+  assert.equal(out.sofiaRestoredMatrix, true, 'Revoking Admin preserves custom Matrix tab access');
+  assert.equal(out.sofiaRestoredHealth, false, 'Revoking Admin restores custom restricted Health tab');
+  assert.equal(out.sofiaRestoredFin, false, 'Revoking Admin restores custom restricted Finance access');
+  assert.equal(out.adminNameRejected, true, 'Renaming user to Main Administrator display name is rejected');
+  assert.equal(out.renamedOk, true, 'Inline user Edit updates display name and role cleanly');
+  assert.equal(out.disabledLoginRejected, true, 'Disabled user is blocked from signing in');
+  assert.equal(out.revokedReturnedTrue, true, 'ppSyncAuthAfterDbLoad signals { revoked: true } when active user is disabled remotely');
+  assert.equal(out.arbitraryAdminPwBlocked, true, 'Cannot overwrite master key with arbitrary Admin password when team users already exist');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

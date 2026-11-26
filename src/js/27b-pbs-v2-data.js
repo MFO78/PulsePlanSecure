@@ -153,7 +153,14 @@
   }
 
   /* ---------- Browser cache (all projects' PBS docs) ---------- */
+  function shouldSuppressPbsStorage() {
+    if (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage()) return true;
+    if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return true;
+    return false;
+  }
+
   function loadCache() {
+    if (shouldSuppressPbsStorage()) return {};
     try {
       const raw = typeof safeGetStorage === 'function' ? safeGetStorage(CACHE_KEY) : localStorage.getItem(CACHE_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
@@ -165,6 +172,11 @@
 
   function saveCache(cache) {
     try {
+      if (shouldSuppressPbsStorage()) {
+        if (typeof safeRemoveStorage === 'function') safeRemoveStorage(CACHE_KEY);
+        else if (typeof localStorage !== 'undefined') localStorage.removeItem(CACHE_KEY);
+        return;
+      }
       const raw = JSON.stringify(cache || {});
       if (typeof safeSetStorage === 'function') safeSetStorage(CACHE_KEY, raw);
       else localStorage.setItem(CACHE_KEY, raw);
@@ -194,8 +206,10 @@
     if (pass && e.encrypt) {
       const envelope = await e.encrypt(doc, pass);
       if (envelope) {
+        const outEnv = { ...envelope, type: 'pulseplan-pbs' };
+        if (doc && doc.meta && doc.meta.lastWriteId) outEnv.writeId = String(doc.meta.lastWriteId);
         if (e.touch) e.touch();
-        return { text: JSON.stringify(envelope, null, 2), encrypted: true };
+        return { text: JSON.stringify(outEnv, null, 2), encrypted: true };
       }
     }
     if (requireEncryption) {
@@ -207,7 +221,7 @@
   }
 
   /* Returns { doc, wasEncrypted }. */
-  async function decodePbsFromText(rawText, project, env, userName) {
+  async function decodePbsFromText(rawText, project, env, userName, opts = {}) {
     const e = env || defaultEnv();
     let parsed;
     try {
@@ -219,7 +233,7 @@
     if (parsed && parsed.format === e.format) {
       wasEncrypted = true;
       let pass = e.getPassphrase();
-      if (!pass && e.promptPassphrase) pass = await e.promptPassphrase();
+      if (!pass && !opts.silentPrompt && e.promptPassphrase) pass = await e.promptPassphrase();
       if (!pass) throw new Error('Decryption cancelled: passphrase required.');
       const plain = await e.decrypt(parsed, pass);
       if (plain == null) throw new Error('Encryption engine unavailable in this environment.');

@@ -31,13 +31,14 @@
   }
 
   function persistAppChanges() {
-    if (typeof persistActiveDB === 'function') persistActiveDB();
-    else if (typeof saveLocalState === 'function') saveLocalState();
-    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
   }
 
   function loadPeople() {
+    if (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage()) {
+      return [];
+    }
     try {
       const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PEOPLE_KEY) : localStorage.getItem(PEOPLE_KEY);
       const parsed = raw ? JSON.parse(raw) : [];
@@ -47,18 +48,28 @@
     }
   }
 
-  function savePeople() {
+  function savePeople(persistToDb = true) {
     try {
-      const raw = JSON.stringify(peopleList);
-      if (typeof safeSetStorage === 'function') safeSetStorage(PEOPLE_KEY, raw);
-      else localStorage.setItem(PEOPLE_KEY, raw);
+      const suppressPlain = typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage();
+      if (suppressPlain) {
+        try { localStorage.removeItem(PEOPLE_KEY); } catch (_e) {}
+      } else {
+        const raw = JSON.stringify(peopleList);
+        if (typeof safeSetStorage === 'function') safeSetStorage(PEOPLE_KEY, raw);
+        else localStorage.setItem(PEOPLE_KEY, raw);
+      }
       const db = getDb();
       if (db && typeof db === 'object') db.peopleDirectory = peopleList.slice();
+      if (persistToDb && typeof touchDBAndSave === 'function') touchDBAndSave();
+      if (persistToDb && typeof window !== 'undefined' && typeof window.ppRefreshTeamAccessSetupCard === 'function') {
+        window.ppRefreshTeamAccessSetupCard();
+      }
     } catch (_e) {}
   }
 
   function seedPeopleFromProjects() {
     const db = getDb();
+    if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
     const existingNames = new Map(peopleList.map(p => [p.name.trim().toLowerCase(), p]));
     let changed = false;
     if (db && Array.isArray(db.peopleDirectory) && db.peopleDirectory.length > 0) {
@@ -99,13 +110,17 @@
         }
       }
     });
-    if (changed) savePeople();
+    if (changed) savePeople(false);
   }
 
   if (typeof window !== 'undefined') {
     window.ppGetPeopleDirectory = function () {
       seedPeopleFromProjects();
       return peopleList.slice();
+    };
+    window.ppResetPeopleDirectoryMemory = function () {
+      peopleList = [];
+      try { localStorage.removeItem(PEOPLE_KEY); } catch (_e) {}
     };
   }
 
@@ -246,11 +261,22 @@
     });
 
     card.querySelectorAll('[data-pp-del-person]').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-pp-del-person');
+        const target = peopleList.find(p => p.id === id);
+        if (!target) return;
+        const ok = typeof ppConfirmAction === 'function'
+          ? await ppConfirmAction({
+              title: 'Delete Person from Directory',
+              message: `Remove "${target.name}" (${target.role}) from the Project Owners & Technical Leads directory?`,
+              confirmLabel: 'Delete Person',
+            })
+          : true;
+        if (!ok) return;
         peopleList = peopleList.filter(p => p.id !== id);
         savePeople();
         renderPeopleDirectorySection();
+        toast(`Deleted ${target.name} from directory.`, 'info');
       });
     });
 
@@ -330,7 +356,7 @@
     const patterns = {
       projects: /openProjectModal\(\s*['"]([^'"]+)['"]\s*\)/,
       departments: /openDeptModal\(\s*['"]([^'"]+)['"]\s*\)|deleteDept\(\s*['"]([^'"]+)['"]\s*\)/,
-      milestones: /openMilestoneModal\(\s*['"]([^'"]+)['"]\s*\)|deleteMilestone\(\s*['"]([^'"]+)['"]\s*\)/,
+      milestones: /openMilestoneModal\(\s*['"]([^'"]+)['"]\s*\)|deleteMilestone(?:FromModal)?\(\s*['"]([^'"]+)['"]\s*\)/,
       holidays: /deleteHoliday\(\s*['"]([^'"]+)['"]\s*\)|openHolidayModal\(\s*['"]([^'"]+)['"]\s*\)/,
     };
     const re = patterns[listKey];
@@ -375,12 +401,19 @@
     const delBtn = container.querySelector(`[data-pp-bulk-del="${listKey}"]`);
     if (delBtn && !delBtn.__ppWired) {
       delBtn.__ppWired = true;
-      delBtn.addEventListener('click', () => {
+      delBtn.addEventListener('click', async () => {
         const ids = getChecked();
         if (!ids.size) return;
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-          if (!window.confirm(`Delete ${ids.size} selected item(s)?`)) return;
-        }
+        const ok = typeof ppConfirmAction === 'function'
+          ? await ppConfirmAction({
+              title: `Delete ${ids.size} Selected ${listKey}`,
+              message: `Permanently delete ${ids.size} selected item${ids.size === 1 ? '' : 's'} from ${listKey}${listKey === 'projects' || listKey === 'departments' ? ' along with their linked allocations, notes, and overrides' : ''}?`,
+              confirmLabel: `Delete ${ids.size} Item${ids.size === 1 ? '' : 's'}`,
+            })
+          : (typeof window !== 'undefined' && typeof window.confirm === 'function'
+              ? window.confirm(`Delete ${ids.size} selected item(s)?`)
+              : true);
+        if (!ok) return;
         onDelete(ids);
       });
     }
@@ -452,24 +485,54 @@
       (ids) => {
         const db = getDb();
         if (!Array.isArray(db[dbCollectionKey])) return;
+        if (typeof pushUndoState === 'function') pushUndoState(`Bulk delete ${ids.size} ${listKey}`);
         db[dbCollectionKey] = db[dbCollectionKey].filter(item => !ids.has(String(item.id)));
-        if (dbCollectionKey === 'projects' && Array.isArray(db.allocations)) {
-          db.allocations = db.allocations.filter(a => !ids.has(String(a.projectId)));
+        if (dbCollectionKey === 'projects') {
+          if (db.allocations && typeof db.allocations === 'object') {
+            Object.keys(db.allocations).forEach(k => { if (ids.has(String(k.split('::')[1]))) delete db.allocations[k]; });
+          }
+          if (db.comments && typeof db.comments === 'object') {
+            Object.keys(db.comments).forEach(k => { if (ids.has(String(k.split('::')[1]))) delete db.comments[k]; });
+          }
+          if (Array.isArray(db.milestones)) {
+            db.milestones = db.milestones.filter(m => !ids.has(String(m.projectId)));
+          }
+          if (typeof ui !== 'undefined' && ids.has(String(ui.filterProj))) ui.filterProj = 'all';
+          if (typeof ui !== 'undefined' && ids.has(String(ui.spotlightProjId))) ui.spotlightProjId = '';
+        } else if (dbCollectionKey === 'departments') {
+          if (db.allocations && typeof db.allocations === 'object') {
+            Object.keys(db.allocations).forEach(k => { if (ids.has(String(k.split('::')[0]))) delete db.allocations[k]; });
+          }
+          if (db.comments && typeof db.comments === 'object') {
+            Object.keys(db.comments).forEach(k => { if (ids.has(String(k.split('::')[0]))) delete db.comments[k]; });
+          }
+          if (db.capacityOverrides && typeof db.capacityOverrides === 'object') {
+            Object.keys(db.capacityOverrides).forEach(k => { if (ids.has(String(k.split('::')[0]))) delete db.capacityOverrides[k]; });
+          }
+          if (typeof ui !== 'undefined' && ids.has(String(ui.filterDept))) ui.filterDept = 'all';
         }
-        persistAppChanges();
-        toast(`Deleted ${ids.size} ${listKey} item(s).`, 'success');
+        if (typeof recordChange === 'function') recordChange('Setup', `Bulk deleted ${ids.size} ${listKey} item(s)`);
+        else persistAppChanges();
+        if (typeof renderAll === 'function') renderAll();
+        toast(`Deleted ${ids.size} ${listKey} item(s).`, 'success', { undoable: true });
       },
       allowArchive ? (ids) => {
         const db = getDb();
+        if (typeof pushUndoState === 'function') pushUndoState(`Bulk archive ${ids.size} project(s)`);
         (db.projects || []).forEach(p => { if (ids.has(String(p.id))) p.archived = true; });
-        persistAppChanges();
-        toast(`Archived ${ids.size} project(s).`, 'success');
+        if (typeof recordChange === 'function') recordChange('Project', `Archived ${ids.size} project(s)`);
+        else persistAppChanges();
+        if (typeof renderAll === 'function') renderAll();
+        toast(`Archived ${ids.size} project(s).`, 'success', { undoable: true });
       } : null,
       allowArchive ? (ids) => {
         const db = getDb();
+        if (typeof pushUndoState === 'function') pushUndoState(`Bulk unarchive ${ids.size} project(s)`);
         (db.projects || []).forEach(p => { if (ids.has(String(p.id))) p.archived = false; });
-        persistAppChanges();
-        toast(`Unarchived ${ids.size} project(s).`, 'success');
+        if (typeof recordChange === 'function') recordChange('Project', `Unarchived ${ids.size} project(s)`);
+        else persistAppChanges();
+        if (typeof renderAll === 'function') renderAll();
+        toast(`Unarchived ${ids.size} project(s).`, 'success', { undoable: true });
       } : null
     );
   }

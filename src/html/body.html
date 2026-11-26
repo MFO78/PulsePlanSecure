@@ -210,7 +210,7 @@
           <span id="whatIfDeltaSummary" class="font-medium">Testing changes on a temporary clone of your Live DB — shared file untouched.</span>
         </div>
         <div class="flex items-center gap-1.5">
-          <button type="button" onclick="discardWhatIfMode()" class="px-2.5 py-1 rounded-lg bg-white border border-violet-300 hover:bg-violet-100 text-violet-900 font-semibold transition">Discard</button>
+          <button type="button" onclick="confirmDiscardWhatIfMode()" class="px-2.5 py-1 rounded-lg bg-white border border-violet-300 hover:bg-violet-100 text-violet-900 font-semibold transition">Discard</button>
           <button type="button" onclick="commitWhatIfToLive()" class="px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold transition">Commit to Live</button>
         </div>
       </div>
@@ -1231,7 +1231,7 @@
               <button type="button" onclick="copyDebugReport()" class="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold transition">Copy Debug Log</button>
               <button type="button" onclick="triggerJsonImportPicker()" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-semibold transition">Fallback Import JSON</button>
               <button type="button" onclick="resetPwaCacheAndReload()" class="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold transition">Clear App Cache &amp; Reload</button>
-              <button type="button" onclick="clearDebugLog()" class="px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:underline text-[11px] font-semibold">Clear</button>
+              <button type="button" onclick="confirmClearDebugLog()" class="px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:underline text-[11px] font-semibold">Clear</button>
             </div>
           </div>
           <pre id="syncDebugLogOutput" class="p-3 rounded-xl bg-slate-900 text-slate-100 font-mono text-[11px] leading-relaxed max-h-60 overflow-y-auto whitespace-pre-line break-words"></pre>
@@ -1445,7 +1445,7 @@
           <span class="truncate">Copy Executive Briefing</span>
           <span class="text-xs text-indigo-700 shrink-0">Email / Slack</span>
         </button>
-        <button type="button" onclick="document.getElementById('mobileQuickAddSheet').close(); openSnapshotModal();"
+        <button id="mobileQuickSaveSnapBtn" type="button" onclick="document.getElementById('mobileQuickAddSheet').close(); openSnapshotModal();"
           class="w-full min-h-[48px] px-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-800 font-bold text-sm flex items-center justify-between gap-2 transition">
           <span class="truncate">Save Baseline Snapshot</span>
           <span class="text-xs text-slate-500 shrink-0">Freeze plan</span>
@@ -1455,7 +1455,7 @@
           <span class="truncate">Export Colorful PDF Report</span>
           <span class="text-xs text-rose-600 shrink-0">A4 PDF</span>
         </button>
-        <button type="button" onclick="document.getElementById('mobileQuickAddSheet').close(); downloadJsonBackup();"
+        <button id="mobileQuickShareJsonBtn" type="button" onclick="document.getElementById('mobileQuickAddSheet').close(); downloadJsonBackup();"
           class="w-full min-h-[48px] px-4 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-sm flex items-center justify-between gap-2 transition">
           <span class="truncate">Share / Backup JSON File</span>
           <span class="text-xs text-slate-500 shrink-0">Drive / Files</span>

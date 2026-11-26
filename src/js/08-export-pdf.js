@@ -10,18 +10,28 @@
       const includeSnaps = document.getElementById('chkExportIncludeSnapshots')?.checked ?? true;
       const exportPayload = includeSnaps ? db : { ...db, snapshots: [] };
 
-      const jsonStr = JSON.stringify(exportPayload, null, 2);
-      const fname = `pulseplan_${ui.demoMode ? 'demo' : 'live'}_${new Date().toISOString().slice(0, 10)}.json`;
-      const outcome = await shareOrDownloadFile(new Blob([jsonStr], { type: 'application/json' }), fname, 'application/json', 'PulsePlan Roadmap Database');
+      const hasEncKey = !ui.demoMode && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8 && typeof encryptPulsePlanData === 'function';
+      let jsonStr = '';
+      let fname = `pulseplan_${ui.demoMode ? 'demo' : 'live'}_${new Date().toISOString().slice(0, 10)}.json`;
+      if (hasEncKey) {
+        if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
+        const envelope = await encryptPulsePlanData(JSON.parse(JSON.stringify(exportPayload)), ppSyncPassphrase);
+        jsonStr = JSON.stringify(envelope, null, 2);
+        fname = `pulseplan_encrypted_${new Date().toISOString().slice(0, 10)}.json`;
+      } else {
+        jsonStr = JSON.stringify(exportPayload, null, 2);
+      }
+
+      const outcome = await shareOrDownloadFile(new Blob([jsonStr], { type: 'application/json' }), fname, 'application/json', hasEncKey ? 'PulsePlan Encrypted Roadmap Database' : 'PulsePlan Roadmap Database');
       if (outcome === 'cancelled') return;
 
       recordDumpEvent(
         'JSON',
         fname,
         jsonStr.length,
-        `${db.departments.length} depts, ${db.projects.length} projs${includeSnaps ? `, ${db.snapshots.length} snaps` : ' (no snaps)'}`
+        `${hasEncKey ? 'AES-256-GCM · ' : ''}${db.departments.length} depts, ${db.projects.length} projs${includeSnaps ? `, ${db.snapshots.length} snaps` : ' (no snaps)'}`
       );
-      showToast(`${outcome === 'shared' ? 'JSON shared' : 'JSON saved'} (${formatBytes(jsonStr.length)})`, 'success');
+      showToast(`${outcome === 'shared' ? 'JSON shared' : 'JSON saved'}${hasEncKey ? ' (AES-256-GCM)' : ''} (${formatBytes(jsonStr.length)})`, 'success');
     }
 
     function triggerJsonImportPicker() {
@@ -49,6 +59,11 @@
         type: file?.type || null,
       });
       if (!file) return;
+      const wasLocked = typeof ppIsSessionLocked === 'function' && ppIsSessionLocked();
+      if (!wasLocked && !ui.demoMode && linkedFileHandle && typeof ppHasAdminAccess === 'function' && !ppHasAdminAccess()) {
+        showToast('Only an Administrator can overwrite a connected shared database via Import JSON.', 'warning');
+        return;
+      }
       const t0 = Date.now();
       const reader = new FileReader();
       reader.onabort = () => {
@@ -61,11 +76,19 @@
       };
       reader.onload = async () => {
         let migrated = null;
+        let isEncryptedImport = false;
         try {
           let rawText = String(reader.result || '').replace(/^\uFEFF/, '');
           ppDebug('INFO', 'JSON FileReader onload', { name: file.name, chars: rawText.length, elapsedMs: Date.now() - t0 });
           if (!rawText.trim()) {
             throw new Error('File is empty (0 bytes — if on OneDrive/Google Drive, ensure it is downloaded offline)');
+          }
+          if (typeof PP_ENC_FORMAT === 'string' && rawText.includes(PP_ENC_FORMAT)) {
+            isEncryptedImport = true;
+          }
+          if (isEncryptedImport && ui.demoMode) {
+            showToast('Exit Demo Mode first before importing an encrypted database.', 'warning');
+            return;
           }
           if (typeof ppResolveEncryptedJsonText === 'function') {
             rawText = await ppResolveEncryptedJsonText(rawText, { fileName: file.name, isSilentAutoReload: false });
@@ -87,14 +110,35 @@
           showToast(`Could not open "${file.name}": ${e?.message || 'invalid JSON'}.`, 'error');
           return;
         }
+
+        // Ask confirmation before replacing an existing non-empty workspace (skip when unlocking from lock screen or empty DB)
+        const targetDb = ui.demoMode ? demoDB : liveDB;
+        const hasExisting = !wasLocked && Boolean(targetDb && ((targetDb.departments || []).length > 0 || (targetDb.projects || []).length > 0));
+        if (hasExisting && typeof ppConfirmAction === 'function') {
+          const linkedWarn = (!ui.demoMode && linkedFileHandle)
+            ? `\n\nThis will also overwrite your connected shared file "${linkedFileHandle.name}".`
+            : '';
+          const ok = await ppConfirmAction({
+            title: 'Replace Current Database?',
+            message: `Import "${file.name}" (${migrated.departments.length} depts, ${migrated.projects.length} projects) and replace your current ${ui.demoMode ? 'Demo' : 'Live'} database?${linkedWarn}`,
+            confirmLabel: 'Replace & Import',
+            tone: 'danger',
+          });
+          if (!ok) return;
+        }
+
         try {
+          if (!ui.demoMode && typeof window !== 'undefined' && typeof window.ppResetFinanceVaultForDbSwitch === 'function') {
+            window.ppResetFinanceVaultForDbSwitch();
+          }
           ui.whatIfMode = false;
           whatIfDB = null;
           if (ui.demoMode) demoDB = migrated;
           else liveDB = migrated;
           clearUndoHistory();
           if (typeof ppSyncAuthAfterDbLoad === 'function') {
-            ppSyncAuthAfterDbLoad(migrated);
+            const authRes = ppSyncAuthAfterDbLoad(migrated);
+            if (authRes && authRes.revoked) return;
           }
           let shifted = false;
           try {
@@ -102,10 +146,16 @@
           } catch (hErr) {
             ppDebug('WARN', 'Horizon alignment error after import', { name: hErr?.name, message: hErr?.message });
           }
+          if (isEncryptedImport && typeof ppMarkSecureSessionFlag === 'function') {
+            ppMarkSecureSessionFlag(file.name, true);
+          }
           touchDBAndSave();
           renderAll();
           if (typeof ppCheckForcedPasswordChange === 'function') {
             setTimeout(() => ppCheckForcedPasswordChange(), 120);
+          }
+          if (!ui.demoMode && typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+            window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: false }).catch(() => {});
           }
           const allocCount = Object.keys(migrated.allocations).length;
           ppDebug('INFO', 'JSON import completed & rendered', { name: file.name, shifted, elapsedMs: Date.now() - t0 });

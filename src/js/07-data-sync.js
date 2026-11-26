@@ -243,7 +243,9 @@
       const autoPruneOnSave = Boolean(document.getElementById('setAutoPruneOnSave').checked);
       db.settings.retention = { maxDumpHistory, maxChangeLog, maxSnapshots, autoPruneOnSave };
 
-      setActiveUserName(document.getElementById('setUserName').value || 'Project Mgr', false);
+      if (!(typeof ppIsNamedUser === 'function' && ppIsNamedUser())) {
+        setActiveUserName(document.getElementById('setUserName').value || 'Project Mgr', false);
+      }
       if (autoPruneOnSave) enforceRollingHistory(db);
 
       recordChange('Settings', `Updated units (${db.settings.daysPerWeek}d/wk, ${db.settings.hoursPerDay}h/d), 3-level FTE (${basis}), & rolling limits (${maxDumpHistory}/${maxChangeLog}/${maxSnapshots})`);
@@ -304,11 +306,30 @@
       const wks = enumerateIsoWeekSpan(startWk, endWk).filter(wk => Object.prototype.hasOwnProperty.call(db.capacityOverrides || {}, `${deptId}::${wk}`));
       if (wks.length === 0) return;
       const baseFte = Number(dept?.defaultCapacity) || 0;
+      const spanTxt = `${startWk}${endWk !== startWk ? ' → ' + endWk : ''}`;
       pushUndoState(`Reset ${dept?.code || deptId} capacity override (${startWk})`);
       wks.forEach(wk => { delete db.capacityOverrides[`${deptId}::${wk}`]; });
-      recordChange('Capacity', `Reset [${dept?.code || deptId}] variable capacity override (${startWk}${endWk !== startWk ? ' → ' + endWk : ''}) back to base ${baseFte} FTE`);
+      recordChange('Capacity', `Reset [${dept?.code || deptId}] variable capacity override (${spanTxt}) back to base ${baseFte} FTE`);
       renderAll();
       showToast(`Reset ${wks.length} week${wks.length === 1 ? '' : 's'} to base ${baseFte} FTE`, 'info', { undoable: true });
+    }
+
+    function confirmResetCapacityOverrideSpan(deptId, startWk, endWk, onAfter = null) {
+      const db = getActiveDB();
+      const dept = db.departments.find(d => d.id === deptId);
+      const wks = enumerateIsoWeekSpan(startWk, endWk).filter(wk => Object.prototype.hasOwnProperty.call(db.capacityOverrides || {}, `${deptId}::${wk}`));
+      if (wks.length === 0) return;
+      const baseFte = Number(dept?.defaultCapacity) || 0;
+      const spanTxt = `${startWk}${endWk !== startWk ? ' → ' + endWk : ''}`;
+      openConfirmModal(
+        'Reset Capacity Override',
+        `Delete ${wks.length} variable capacity week${wks.length === 1 ? '' : 's'} for [${dept?.code || deptId}] (${spanTxt}) and revert to base ${baseFte} FTE?`,
+        'Reset Override',
+        () => {
+          resetCapacityOverrideSpan(deptId, startWk, endWk);
+          if (typeof onAfter === 'function') onAfter();
+        }
+      );
     }
 
     function editCompanyOverrideGroup(startWk, endWk, pctFactor, deptIdsCsv = '') {
@@ -325,7 +346,8 @@
         ? (db.departments || []).filter(d => targetIdSet.has(d.id))
         : (db.departments || []);
       let removed = 0;
-      pushUndoState(`Reset company-wide override (${startWk}${endWk !== startWk ? ' → ' + endWk : ''})`);
+      const spanTxt = `${startWk}${endWk !== startWk ? ' → ' + endWk : ''}`;
+      pushUndoState(`Reset company-wide override (${spanTxt})`);
       targetDepts.forEach(d => {
         wks.forEach(wk => {
           const key = `${d.id}::${wk}`;
@@ -336,9 +358,33 @@
         });
       });
       if (removed === 0) return;
-      recordChange('Capacity', `Reset company-wide capacity override (${startWk}${endWk !== startWk ? ' → ' + endWk : ''}, ${wks.length} wk${wks.length === 1 ? '' : 's'}) across ${targetDepts.length} department(s)`);
+      recordChange('Capacity', `Reset company-wide capacity override (${spanTxt}, ${wks.length} wk${wks.length === 1 ? '' : 's'}) across ${targetDepts.length} department(s)`);
       renderAll();
       showToast(`Reset company-wide override (${wks.length} wk${wks.length === 1 ? '' : 's'}) for ${targetDepts.length} department${targetDepts.length === 1 ? '' : 's'}`, 'info', { undoable: true });
+    }
+
+    function confirmResetCompanyOverrideGroup(startWk, endWk, deptIdsCsv = '') {
+      const db = getActiveDB();
+      const wks = enumerateIsoWeekSpan(startWk, endWk);
+      if (wks.length === 0) return;
+      const targetIdSet = deptIdsCsv ? new Set(String(deptIdsCsv).split(',').filter(Boolean)) : null;
+      const targetDepts = targetIdSet
+        ? (db.departments || []).filter(d => targetIdSet.has(d.id))
+        : (db.departments || []);
+      let existingCount = 0;
+      targetDepts.forEach(d => {
+        wks.forEach(wk => {
+          if (Object.prototype.hasOwnProperty.call(db.capacityOverrides || {}, `${d.id}::${wk}`)) existingCount++;
+        });
+      });
+      if (existingCount === 0) return;
+      const spanTxt = `${startWk}${endWk !== startWk ? ' → ' + endWk : ''}`;
+      openConfirmModal(
+        'Reset Company-Wide Override',
+        `Delete company-wide capacity overrides (${spanTxt}, ${wks.length} week${wks.length === 1 ? '' : 's'}) across ${targetDepts.length} department${targetDepts.length === 1 ? '' : 's'} (${existingCount} entries)?`,
+        'Reset All',
+        () => resetCompanyOverrideGroup(startWk, endWk, deptIdsCsv)
+      );
     }
 
     function toggleOverrideGroup(groupId) {
@@ -499,7 +545,7 @@
               <td class="px-3.5 py-2.5 text-right whitespace-nowrap">${formatDeltaBadge(entry.totalDeltaFte)}</td>
               <td class="px-3.5 py-2.5 text-right space-x-2 whitespace-nowrap">
                 <button type="button" onclick="editCompanyOverrideGroup('${entry.startWk}', '${entry.endWk}', ${entry.pctFactor}, '${deptIdsAttr}')" class="text-indigo-600 hover:underline font-semibold">Edit %</button>
-                <button type="button" onclick="resetCompanyOverrideGroup('${entry.startWk}', '${entry.endWk}', '${deptIdsAttr}')" class="text-amber-700 hover:underline font-semibold">Reset All</button>
+                <button type="button" onclick="confirmResetCompanyOverrideGroup('${entry.startWk}', '${entry.endWk}', '${deptIdsAttr}')" class="text-amber-700 hover:underline font-semibold">Reset All</button>
               </td>
             </tr>`;
 
@@ -524,7 +570,7 @@
               <td class="px-3.5 py-2 text-right whitespace-nowrap">${formatDeltaBadge(it.deltaFte)}</td>
               <td class="px-3.5 py-2 text-right space-x-2 whitespace-nowrap">
                 <button type="button" onclick="editCapacityOverrideSpan('${it.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-indigo-600 hover:underline font-semibold">Edit</button>
-                <button type="button" onclick="resetCapacityOverrideSpan('${it.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-amber-700 hover:underline font-semibold">Reset</button>
+                <button type="button" onclick="confirmResetCapacityOverrideSpan('${it.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-amber-700 hover:underline font-semibold">Reset</button>
               </td>
             </tr>`).join('');
 
@@ -556,7 +602,7 @@
             <td class="px-3.5 py-2.5 text-right whitespace-nowrap">${formatDeltaBadge(entry.deltaFte)}</td>
             <td class="px-3.5 py-2.5 text-right space-x-2 whitespace-nowrap">
               <button type="button" onclick="editCapacityOverrideSpan('${entry.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-indigo-600 hover:underline font-semibold">Edit</button>
-              <button type="button" onclick="resetCapacityOverrideSpan('${entry.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-amber-700 hover:underline font-semibold">Reset</button>
+              <button type="button" onclick="confirmResetCapacityOverrideSpan('${entry.deptId}', '${entry.startWk}', '${entry.endWk}')" class="text-amber-700 hover:underline font-semibold">Reset</button>
             </td>
           </tr>`;
       }).join('');
@@ -766,14 +812,21 @@
 
     function clearLinkedFilePathFromModal(fileName) {
       const name = String(fileName || '').trim();
-      if (name && ui.linkedFilePaths && ui.linkedFilePaths[name]) {
-        delete ui.linkedFilePaths[name];
-        persistUIPrefs();
-      }
-      closeModal();
-      renderSyncTab();
-      updateSyncStatusUI();
-      showToast('Cleared saved file path', 'info');
+      openConfirmModal(
+        'Clear Saved File Path',
+        `Remove the remembered folder path display for "${name || 'this file'}" on this device?`,
+        'Clear Path',
+        () => {
+          if (name && ui.linkedFilePaths && ui.linkedFilePaths[name]) {
+            delete ui.linkedFilePaths[name];
+            persistUIPrefs();
+          }
+          closeModal();
+          renderSyncTab();
+          updateSyncStatusUI();
+          showToast('Cleared saved file path', 'info');
+        }
+      );
     }
 
     async function openSharedDatabaseFile() {
@@ -937,13 +990,19 @@
       const backupName = `${safeBase}_backup_${stamp}.json`;
 
       let jsonStr = '';
+      const hasEncKey = !ui.demoMode && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8 && typeof encryptPulsePlanData === 'function';
       if (linkedFileHandle && (ui.demoMode || ui.whatIfMode)) {
         try {
           const f = await linkedFileHandle.getFile();
-          jsonStr = await f.text();
+          jsonStr = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(f) : await f.text();
         } catch (e) {
-          jsonStr = JSON.stringify(liveDB, null, 2);
+          jsonStr = hasEncKey
+            ? JSON.stringify(await encryptPulsePlanData(JSON.parse(JSON.stringify(liveDB)), ppSyncPassphrase), null, 2)
+            : JSON.stringify(liveDB, null, 2);
         }
+      } else if (hasEncKey) {
+        const envelope = await encryptPulsePlanData(JSON.parse(JSON.stringify(db)), ppSyncPassphrase);
+        jsonStr = JSON.stringify(envelope, null, 2);
       } else {
         jsonStr = JSON.stringify(db, null, 2);
       }
@@ -1017,6 +1076,51 @@
       }
     }
 
+    function isConnectionLostError(err) {
+      if (!err) return false;
+      const name = String(err.name || '');
+      const msg = String(err.message || '').toLowerCase();
+      if ([
+        'NotFoundError',
+        'NotReadableError',
+        'NotAllowedError',
+        'SecurityError',
+        'InvalidStateError',
+        'NoModificationAllowedError',
+        'TimeoutError',
+      ].includes(name)) return true;
+      if (
+        msg.includes('timed out') ||
+        msg.includes('not found') ||
+        msg.includes('disconnected') ||
+        msg.includes('permission') ||
+        msg.includes('passphrase changed') ||
+        msg.includes('session locked')
+      ) return true;
+      return false;
+    }
+
+    async function handleDatabaseConnectionLost(detail = '', fileName = '', warnType = 'missing') {
+      const targetName = String(fileName || linkedFileHandle?.name || rememberedFileHandle?.name || '');
+      ppDebug('WARN', 'Database connection lost — clearing local data and locking workspace', { targetName, warnType, detail });
+      linkedFileHandle = null;
+      saveQueued = false;
+      if (saveDebounceTimer) {
+        clearTimeout(saveDebounceTimer);
+        saveDebounceTimer = null;
+      }
+      stopFilePolling();
+      setSyncWarning(warnType === 'permission' ? 'permission' : 'missing', targetName);
+      if (typeof ppSignOutAndLockSession === 'function') {
+        await ppSignOutAndLockSession('connection_lost', {
+          fileName: targetName,
+          detail: detail || `Connection to "${targetName || 'shared database'}" was lost.`,
+          skipFlush: true,
+          skipEnvelope: true,
+        });
+      }
+    }
+
     async function autoReconnectSyncFile() {
       ppDebug('INFO', 'autoReconnectSyncFile check', {
         hasFsApi: supportsFileSystemAccess(),
@@ -1047,6 +1151,9 @@
             return;
           } else {
             setSyncWarning('permission', rememberedFileHandle.name);
+            if (typeof ppReadSecureSessionFlag === 'function' && ppReadSecureSessionFlag()?.protected && typeof ppEnterInitialLockedGate === 'function') {
+              ppEnterInitialLockedGate(rememberedFileHandle.name, 'reconnect_required');
+            }
             return;
           }
         }
@@ -1054,6 +1161,10 @@
         ppDebug('WARN', 'autoReconnectSyncFile failed', { name: e?.name, message: e?.message });
         if (e && (e.name === 'NotFoundError' || e.name === 'NotReadableError')) {
           setSyncWarning('missing', rememberedFileHandle.name);
+          if (typeof ppReadSecureSessionFlag === 'function' && ppReadSecureSessionFlag()?.protected) {
+            await handleDatabaseConnectionLost(`Database "${rememberedFileHandle.name}" is unreachable or disconnected.`, rememberedFileHandle.name, 'missing');
+            return;
+          }
           showToast(`Warning: Sync file "${rememberedFileHandle.name}" is missing or disconnected.`, 'error');
           return;
         }
@@ -1089,7 +1200,7 @@
 
       if (syncWarningState.type === 'missing') {
         banner.className = 'border-t border-rose-200 bg-rose-50 text-rose-900 px-4 py-2';
-        msgEl.innerHTML = `<strong>Sync File Not Found:</strong> "${name}" could not be accessed (file moved, renamed, or drive disconnected). Changes are saved locally only.`;
+        msgEl.innerHTML = `<strong>Sync File Not Found:</strong> "${name}" could not be accessed (file moved, renamed, or drive disconnected). Reconnect and re-enter your password to resume.`;
         actionsEl.innerHTML = `
           <button type="button" onclick="openSharedDatabaseFile()" class="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold transition">Locate / Relink File</button>
           <button type="button" onclick="createSharedDatabaseFile()" class="px-2.5 py-1 rounded-lg bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-semibold transition">Create New</button>
@@ -1113,6 +1224,8 @@
 
     async function attachAndLoadFileHandle(handle, isAutoReconnect = false, isSilentAutoReload = false) {
       const tStart = Date.now();
+      const wasActiveLinkedHandle = Boolean(linkedFileHandle && (linkedFileHandle === handle || linkedFileHandle.name === handle?.name));
+      const isSwitchingFile = Boolean(!isSilentAutoReload && linkedFileHandle && linkedFileHandle !== handle && linkedFileHandle.name !== handle?.name);
       ppDebug('INFO', 'attachAndLoadFileHandle start', {
         name: handle?.name,
         isAutoReconnect,
@@ -1136,18 +1249,26 @@
         });
       } catch (e) {
         ppDebug('ERROR', 'handle.getFile failed', { name: e?.name, message: e?.message, elapsedMs: Date.now() - tStart });
+        const warnType = (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) ? 'permission' : 'missing';
+        if (isSilentAutoReload || wasActiveLinkedHandle || (typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage())) {
+          await handleDatabaseConnectionLost(e?.message || `Could not read "${handle?.name || 'database'}"`, handle?.name || '', warnType);
+          return;
+        }
         linkedFileHandle = null;
-        if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
-          setSyncWarning('permission', handle.name);
-          if (!isSilentAutoReload) showToast(`Permission required to read "${handle.name}". Click Reconnect or choose the file again.`, 'warning');
-        } else {
-          setSyncWarning('missing', handle.name);
-          if (!isSilentAutoReload) showToast(`Could not read "${handle.name}": ${e?.message || e?.name || 'file unreachable'}.`, 'error');
+        setSyncWarning(warnType, handle.name);
+        if (!isSilentAutoReload) {
+          showToast(
+            warnType === 'permission'
+              ? `Permission required to read "${handle.name}". Click Reconnect or choose the file again.`
+              : `Could not read "${handle.name}": ${e?.message || e?.name || 'file unreachable'}.`,
+            warnType === 'permission' ? 'warning' : 'error'
+          );
         }
         return;
       }
 
       isReloadingFromFile = true;
+      let wasEncryptedFile = false;
       try {
         let migrated = null;
         try {
@@ -1159,6 +1280,7 @@
             15000,
             'Reading file contents timed out after 15s'
           )).replace(/^\uFEFF/, '');
+          wasEncryptedFile = typeof PP_ENC_FORMAT === 'string' && rawText.includes(PP_ENC_FORMAT);
           if (typeof ppResolveEncryptedJsonText === 'function') {
             rawText = await ppResolveEncryptedJsonText(rawText, { fileName: handle.name, isSilentAutoReload });
           }
@@ -1190,6 +1312,20 @@
           });
         } catch (err) {
           ppDebug('ERROR', 'Sync file parse/migrate error', { name: err?.name, message: err?.message });
+          const isAuthOrLockErr = wasEncryptedFile && (
+            isSilentAutoReload ||
+            isAutoReconnect ||
+            wasActiveLinkedHandle ||
+            /cancelled|passphrase|locked/i.test(String(err?.message || ''))
+          );
+          if (isAuthOrLockErr) {
+            if (isSilentAutoReload || /passphrase changed|session locked/i.test(String(err?.message || ''))) {
+              await handleDatabaseConnectionLost(err?.message || 'Sign in again to access this encrypted database.', handle.name, 'permission');
+            } else if (typeof ppEnterInitialLockedGate === 'function' && (isAutoReconnect || (typeof ppReadSecureSessionFlag === 'function' && ppReadSecureSessionFlag()?.protected))) {
+              ppEnterInitialLockedGate(handle.name, 'reconnect_required');
+            }
+            return;
+          }
           if (!isSilentAutoReload) {
             showToast(`Failed to open "${handle.name}": ${err?.message || 'invalid JSON'}`, 'error');
           }
@@ -1197,13 +1333,28 @@
         }
 
         try {
+          if (isSwitchingFile) {
+            if (typeof window !== 'undefined' && typeof window.ppResetFinanceVaultForDbSwitch === 'function') {
+              window.ppResetFinanceVaultForDbSwitch();
+            }
+            if (typeof window !== 'undefined' && typeof window.ppClearPbsMemoryAndStopSync === 'function') {
+              window.ppClearPbsMemoryAndStopSync();
+            }
+            if (typeof window !== 'undefined' && typeof window.ppResetPeopleDirectoryMemory === 'function') {
+              window.ppResetPeopleDirectoryMemory();
+            }
+          }
+
           liveDB = migrated;
           ui.demoMode = false;
           ui.whatIfMode = false;
           whatIfDB = null;
           clearUndoHistory();
           if (typeof ppSyncAuthAfterDbLoad === 'function') {
-            ppSyncAuthAfterDbLoad(liveDB);
+            const authRes = ppSyncAuthAfterDbLoad(liveDB);
+            if (authRes && authRes.revoked) {
+              return;
+            }
           }
 
           let shifted = false;
@@ -1231,8 +1382,16 @@
           pendingAutoReload = false;
           syncWarningState = { type: null, fileName: '', dismissed: false };
           document.getElementById('externalUpdateBanner')?.classList.add('hidden');
-          safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+          if (wasEncryptedFile && typeof ppMarkSecureSessionFlag === 'function') {
+            ppMarkSecureSessionFlag(handle.name, true);
+          }
+          ppPersistLiveDBCacheSafe(liveDB);
           startFilePolling();
+
+          // On silent external reload, immediately re-apply/re-poll unlocked Finance Vault BEFORE rendering so costs never flash 0 or get wiped!
+          if (isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppOnMainDbReloadedForFinance === 'function') {
+            await window.ppOnMainDbReloadedForFinance(liveDB).catch(() => {});
+          }
 
           try {
             renderAll();
@@ -1262,12 +1421,15 @@
             saveRememberedHandle(handle);
           }
 
-          // Automatically open the linked Finance Vault if its path/handle is remembered and the user has Finance access
-          if (typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+          // Automatically open the linked Finance Vault & reconnect PBS folder if remembered and authorized
+          if (!isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
             window.ppTryAutoOpenFinanceVault({
-              allowPermissionPrompt: !isAutoReconnect && !isSilentAutoReload,
+              allowPermissionPrompt: !isAutoReconnect,
               silent: isSilentAutoReload,
             }).catch(() => {});
+          }
+          if (!isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppTryAutoReconnectPbsFolder === 'function') {
+            window.ppTryAutoReconnectPbsFolder({ allowPrompt: false }).catch(() => {});
           }
         } catch (postErr) {
           ppDebug('ERROR', 'Post-load attach error', { name: postErr?.name, message: postErr?.message });
@@ -1279,21 +1441,46 @@
     }
 
     function unlinkSharedFile() {
-      linkedFileHandle = null;
-      linkedFileDetectedPath = '';
-      rememberedFileHandle = null;
-      lastKnownFileModified = 0;
-      lastWrittenId = '';
-      lastSyncedSnapshot = null;
-      saveQueued = false;
-      pendingAutoReload = false;
-      stopFilePolling();
-      clearRememberedHandle();
-      document.getElementById('externalUpdateBanner').classList.add('hidden');
-      setSyncWarning('unlinked', '');
-      renderSyncTab();
-      updateSyncStatusUI();
-      showToast('Unlinked shared file — continuing in browser storage', 'info');
+      const targetName = linkedFileHandle?.name || rememberedFileHandle?.name || 'the connected file';
+      const isProtected = typeof ppShouldSuppressPlaintextStorage === 'function' && ppShouldSuppressPlaintextStorage();
+      openConfirmModal(
+        'Unlink Shared Database File?',
+        isProtected
+          ? `Disconnect "${targetName}"? Because this workspace is protected, all local data will be cleared from screen and memory until you reconnect and re-enter your password.`
+          : `Disconnect "${targetName}" and stop automatic file sync?`,
+        'Unlink & Disconnect',
+        async () => {
+          if (isProtected && typeof ppSignOutAndLockSession === 'function') {
+            await ppSignOutAndLockSession('unlinked', { fileName: targetName, skipFlush: false, skipEnvelope: true });
+          }
+          linkedFileHandle = null;
+          linkedFileDetectedPath = '';
+          rememberedFileHandle = null;
+          lastKnownFileModified = 0;
+          lastWrittenId = '';
+          lastSyncedSnapshot = null;
+          saveQueued = false;
+          pendingAutoReload = false;
+          stopFilePolling();
+          clearRememberedHandle();
+          if (typeof window !== 'undefined' && typeof window.ppResetFinanceVaultForDbSwitch === 'function') {
+            window.ppResetFinanceVaultForDbSwitch();
+          }
+          if (typeof window !== 'undefined' && typeof window.ppClearPbsMemoryAndStopSync === 'function') {
+            window.ppClearPbsMemoryAndStopSync();
+          }
+          document.getElementById('externalUpdateBanner')?.classList.add('hidden');
+          setSyncWarning('unlinked', '');
+          if (isProtected && typeof ppRefreshLockedScreenUI === 'function') {
+            ppRefreshLockedScreenUI();
+            showToast(`Unlinked "${targetName}" and cleared local data.`, 'info');
+            return;
+          }
+          renderSyncTab();
+          updateSyncStatusUI();
+          showToast('Unlinked shared file — continuing in browser storage', 'info');
+        }
+      );
     }
 
     /* ---------- Serialized Write Queue & 3-Way Buffered Auto-Merge Helpers ---------- */
@@ -1301,7 +1488,7 @@
     function cloneSyncSnapshot(db) {
       if (!db || typeof db !== 'object') return null;
       try {
-        return JSON.parse(JSON.stringify({
+        const snap = JSON.parse(JSON.stringify({
           meta: db.meta || {},
           settings: db.settings || {},
           departments: db.departments || [],
@@ -1316,6 +1503,12 @@
           peopleDirectory: db.peopleDirectory || [],
           accessControl: db.accessControl || { version: 1, adminName: 'Administrator', users: [] },
         }));
+        // Always strip Finance Vault fields from Main DB sync snapshot so 3-way merge matches stripped disk file!
+        if (snap.settings?.financeVault?.enabled) {
+          (snap.departments || []).forEach(d => { if (d) d.dayRate = 0; });
+          (snap.projects || []).forEach(p => { if (p) p.budgetCost = 0; });
+        }
+        return snap;
       } catch (e) {
         return null;
       }
@@ -1498,6 +1691,8 @@
 
     function scheduleAutoSaveToFile() {
       if (!linkedFileHandle || !ui.autoSaveToFile || ui.demoMode) return;
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
+      if (typeof ppIsSigningOut === 'function' && ppIsSigningOut()) return;
       // Serialized write-buffer: if a write is already in flight, queue one coalesced follow-up write instead of racing
       if (isSavingToFile) {
         saveQueued = true;
@@ -1512,28 +1707,51 @@
       }, 600);
     }
 
-    async function writeDBToLinkedFile({ forceOverwrite = false } = {}) {
-      if (!linkedFileHandle || ui.demoMode) return;
+    async function writeDBToLinkedFile({ forceOverwrite = false, allowWhileSigningOut = false } = {}) {
+      if (!linkedFileHandle || ui.demoMode) return { ok: false, skipped: true };
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return { ok: false, locked: true };
+      if (!allowWhileSigningOut && typeof ppIsSigningOut === 'function' && ppIsSigningOut()) return { ok: false, signingOut: true };
       if (isSavingToFile) {
         saveQueued = true;
-        return;
+        return { ok: false, queued: true };
       }
       isSavingToFile = true;
       let didConflict = false;
       let autoMergedFrom = null;
+      let connectionLost = false;
       try {
-        // Pre-write guard: ignore our own cloud-drive timestamp drift, auto-merge disjoint edits, and only halt on real collisions
+        // Pre-write guard: ignore our own cloud-drive timestamp drift, auto-merge disjoint edits, enforce revocation, and only halt on real collisions
         if (!forceOverwrite && lastKnownFileModified) {
-          const diskFile = await linkedFileHandle.getFile();
+          const diskFile = await withTimeout(
+            linkedFileHandle.getFile(),
+            10000,
+            'Reading linked file before save timed out'
+          );
           if (diskFile.lastModified > lastKnownFileModified + 500) {
             let extMeta = { lastModifiedBy: 'a teammate', revision: '?' };
             let diskDB = null;
             let parsed = null;
+            let decryptError = null;
             try {
-              parsed = JSON.parse((await diskFile.text()).replace(/^\uFEFF/, ''));
+              const rawDisk = (typeof ppReadRawFileText === 'function'
+                ? await ppReadRawFileText(diskFile)
+                : await diskFile.text()).replace(/^\uFEFF/, '');
+              const resolvedDisk = typeof ppResolveEncryptedJsonText === 'function'
+                ? await ppResolveEncryptedJsonText(rawDisk, { fileName: linkedFileHandle.name, isSilentAutoReload: true })
+                : rawDisk;
+              parsed = JSON.parse(resolvedDisk);
               if (parsed && parsed.meta) extMeta = parsed.meta;
               diskDB = normalizeAndMigrateDB(parsed);
-            } catch (parseErr) {}
+            } catch (parseErr) {
+              decryptError = parseErr;
+            }
+
+            if (decryptError && /passphrase changed|session locked/i.test(String(decryptError.message || ''))) {
+              connectionLost = true;
+              saveQueued = false;
+              await handleDatabaseConnectionLost(decryptError.message, linkedFileHandle.name, 'permission');
+              return { ok: false, connectionLost: true };
+            }
 
             const isOurOwnWrite = Boolean(parsed?.meta?.lastWriteId && lastWrittenId && parsed.meta.lastWriteId === lastWrittenId);
             const isIdenticalToBase = Boolean(!isOurOwnWrite && diskDB && lastSyncedSnapshot && areDBDataEqual(diskDB, lastSyncedSnapshot));
@@ -1545,8 +1763,26 @@
               });
               lastKnownFileModified = diskFile.lastModified;
             } else {
+              // Enforce live user revocation BEFORE merging/writing so a deleted/disabled user can never write back to disk!
+              if (diskDB && typeof ppGetAuthSession === 'function') {
+                const sess = ppGetAuthSession();
+                if (sess && sess.mode === 'user' && sess.userId) {
+                  const diskUser = (diskDB.accessControl?.users || []).find(u => u && u.id === sess.userId);
+                  if (!diskUser || diskUser.enabled === false) {
+                    saveQueued = false;
+                    didConflict = true;
+                    if (typeof ppSignOutAndLockSession === 'function') {
+                      await ppSignOutAndLockSession('revoked', { skipFlush: true, skipEnvelope: true });
+                    }
+                    return { ok: false, revoked: true };
+                  }
+                }
+              }
+
+              // Compare stripped local clone against stripped base & disk so Finance Vault overlays NEVER cause false conflicts or zero out rates!
+              const localForMerge = cloneSyncSnapshot(liveDB) || liveDB;
               const mergeRes = (diskDB && lastSyncedSnapshot)
-                ? tryThreeWayAutoMerge(lastSyncedSnapshot, liveDB, diskDB)
+                ? tryThreeWayAutoMerge(lastSyncedSnapshot, localForMerge, diskDB)
                 : { ok: false, reason: 'no-base', conflicts: [] };
 
               if (mergeRes.ok) {
@@ -1557,7 +1793,18 @@
                   by: extMeta.lastModifiedBy,
                 });
                 liveDB = mergeRes.mergedDB;
-                safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+                if (typeof ppSyncAuthAfterDbLoad === 'function') {
+                  const authRes = ppSyncAuthAfterDbLoad(liveDB);
+                  if (authRes && authRes.revoked) {
+                    saveQueued = false;
+                    didConflict = true;
+                    return { ok: false, revoked: true };
+                  }
+                }
+                if (typeof window !== 'undefined' && typeof window.ppReapplyFinanceOverlayAfterMainReload === 'function') {
+                  window.ppReapplyFinanceOverlayAfterMainReload(liveDB);
+                }
+                ppPersistLiveDBCacheSafe(liveDB);
                 lastKnownFileModified = diskFile.lastModified;
                 autoMergedFrom = {
                   by: extMeta.lastModifiedBy || 'shared file',
@@ -1573,11 +1820,14 @@
                 didConflict = true;
                 saveQueued = false;
                 updateSyncStatusUI('conflict');
-                openSyncConflictModal(extMeta, diskFile.lastModified, diskDB);
-                return;
+                openSyncConflictModal(extMeta, diskFile.lastModified, diskDB, mergeRes.conflicts || []);
+                return { ok: false, conflict: true };
               }
             }
           }
+        }
+        if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) {
+          return { ok: false, locked: true };
         }
         if (getRetentionSettings(liveDB).autoPruneOnSave) {
           enforceRollingHistory(liveDB);
@@ -1587,10 +1837,11 @@
         liveDB.meta.lastWriteId = writeId;
         liveDB.meta.lastClientId = SESSION_CLIENT_ID;
 
+        const payloadToWrite = JSON.stringify(liveDB, null, 2);
         const writable = await linkedFileHandle.createWritable();
-        await writable.write(JSON.stringify(liveDB, null, 2));
+        await writable.write(payloadToWrite);
         await writable.close();
-        const file = await linkedFileHandle.getFile();
+        const file = await withTimeout(linkedFileHandle.getFile(), 10000, 'Post-write stat timed out');
         lastKnownFileModified = file.lastModified;
         lastWrittenId = writeId;
         lastSyncedSnapshot = cloneSyncSnapshot(liveDB);
@@ -1603,22 +1854,30 @@
         } else if (ui.activeTab === 'sync') {
           renderSyncTab();
         }
+        return { ok: true };
       } catch (e) {
         console.warn('Auto-save failed:', e);
-        if (e && (e.name === 'NotFoundError' || e.name === 'NotReadableError')) {
-          const missingName = linkedFileHandle.name;
-          linkedFileHandle = null;
+        if (isConnectionLostError(e)) {
+          connectionLost = true;
           saveQueued = false;
-          stopFilePolling();
-          setSyncWarning('missing', missingName);
-          showToast(`Sync file "${missingName}" is no longer reachable! Saved locally only.`, 'error');
-          return;
+          const warnType = (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) ? 'permission' : 'missing';
+          const missingName = linkedFileHandle?.name || rememberedFileHandle?.name || '';
+          await handleDatabaseConnectionLost(
+            `Sync connection to "${missingName || 'shared database'}" failed during save (${e?.name || 'Error'}). Local data was cleared until you reconnect and sign in.`,
+            missingName,
+            warnType
+          );
+          return { ok: false, connectionLost: true, error: e };
         }
+        saveQueued = false;
         updateSyncStatusUI('error');
-        showToast('Auto-save to linked file failed. Check file permissions.', 'error');
+        showToast(`Auto-save to linked file failed (${e?.message || 'check file permissions'}).`, 'error');
+        return { ok: false, error: e };
       } finally {
         isSavingToFile = false;
-        if (!didConflict && saveQueued && linkedFileHandle && ui.autoSaveToFile && !ui.demoMode) {
+        const lockedNow = typeof ppIsSessionLocked === 'function' && ppIsSessionLocked();
+        const signingOutNow = typeof ppIsSigningOut === 'function' && ppIsSigningOut();
+        if (!didConflict && !connectionLost && !lockedNow && !signingOutNow && saveQueued && linkedFileHandle && ui.autoSaveToFile && !ui.demoMode) {
           saveQueued = false;
           if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
           saveDebounceTimer = setTimeout(() => {
@@ -1631,8 +1890,10 @@
 
     async function forceOverwriteLinkedFile() {
       closeModal();
-      await writeDBToLinkedFile({ forceOverwrite: true });
-      showToast('Kept your local changes and updated the shared sync file', 'success');
+      const res = await writeDBToLinkedFile({ forceOverwrite: true });
+      if (res && res.ok) {
+        showToast('Kept your local changes and updated the shared sync file', 'success');
+      }
     }
 
     function startFilePolling() {
@@ -1654,17 +1915,31 @@
     }
 
     async function checkExternalFileUpdates() {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
+      if (typeof ppIsSigningOut === 'function' && ppIsSigningOut()) return;
       if (!linkedFileHandle || ui.demoMode || isSavingToFile || isReloadingFromFile || saveDebounceTimer || saveQueued) return;
       try {
-        const file = await linkedFileHandle.getFile();
+        const file = await withTimeout(
+          linkedFileHandle.getFile(),
+          10000,
+          'Checking linked database timed out (drive may be offline)'
+        );
         if (lastKnownFileModified && file.lastModified > lastKnownFileModified + 500) {
           let parsed = null;
           let diskDB = null;
           try {
-            const text = await file.text();
-            parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
+            const rawText = (typeof ppReadRawFileText === 'function'
+              ? await ppReadRawFileText(file)
+              : await file.text()).replace(/^\uFEFF/, '');
+            const text = typeof ppResolveEncryptedJsonText === 'function'
+              ? await ppResolveEncryptedJsonText(rawText, { fileName: linkedFileHandle.name, isSilentAutoReload: true })
+              : rawText;
+            parsed = JSON.parse(text);
             diskDB = normalizeAndMigrateDB(parsed);
           } catch (parseErr) {
+            if (/passphrase changed|session locked/i.test(String(parseErr?.message || ''))) {
+              await handleDatabaseConnectionLost(parseErr.message, linkedFileHandle.name, 'permission');
+            }
             return;
           }
 
@@ -1679,7 +1954,21 @@
             return;
           }
 
-          if (ui.autoReloadFromFile) {
+          // Check immediate revocation even when autoReloadFromFile is OFF or a modal / What-If sandbox is open!
+          if (diskDB && typeof ppGetAuthSession === 'function') {
+            const sess = ppGetAuthSession();
+            if (sess && sess.mode === 'user' && sess.userId) {
+              const fresh = (diskDB.accessControl?.users || []).find(u => u && u.id === sess.userId);
+              if (!fresh || fresh.enabled === false) {
+                if (typeof ppSignOutAndLockSession === 'function') {
+                  await ppSignOutAndLockSession('revoked', { skipFlush: true, skipEnvelope: true });
+                }
+                return;
+              }
+            }
+          }
+
+          if (ui.autoReloadFromFile && !ui.whatIfMode) {
             if (isModalOpen()) {
               pendingAutoReload = true;
               const who = parsed.meta?.lastModifiedBy || 'a teammate';
@@ -1693,24 +1982,34 @@
             const who = parsed.meta?.lastModifiedBy || 'a teammate';
             const when = new Date(file.lastModified).toLocaleTimeString();
             document.getElementById('externalUpdateMsg').textContent =
-              `New update in "${linkedFileHandle.name}" saved by ${who} at ${when} (Rev ${parsed.meta?.revision || '?'}).`;
+              `New update in "${linkedFileHandle.name}" saved by ${who} at ${when} (Rev ${parsed.meta?.revision || '?'})${ui.whatIfMode ? ' — exit or commit What-If to reload.' : '.'}`;
             document.getElementById('externalUpdateBanner').classList.remove('hidden');
           }
         }
       } catch (e) {
-        if (e && (e.name === 'NotFoundError' || e.name === 'NotReadableError')) {
-          const missingName = linkedFileHandle.name;
-          linkedFileHandle = null;
-          stopFilePolling();
-          setSyncWarning('missing', missingName);
-          showToast(`Warning: Sync file "${missingName}" was disconnected or deleted.`, 'error');
+        if (isConnectionLostError(e)) {
+          const missingName = linkedFileHandle?.name || rememberedFileHandle?.name || '';
+          const warnType = (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) ? 'permission' : 'missing';
+          await handleDatabaseConnectionLost(
+            `Database "${missingName || 'shared file'}" was disconnected or became unreachable (${e?.name || 'Error'}). Local data was cleared until you reconnect and sign in.`,
+            missingName,
+            warnType
+          );
         }
       }
     }
 
     async function reloadFromLinkedFile() {
       if (!linkedFileHandle) return;
-      document.getElementById('externalUpdateBanner').classList.add('hidden');
+      if (ui.whatIfMode && whatIfDB && typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: 'Reload Latest & Discard What-If?',
+          message: 'Reloading the latest database from disk will discard your temporary What-If sandbox edits. Continue?',
+          confirmLabel: 'Reload Latest',
+        });
+        if (!ok) return;
+      }
+      document.getElementById('externalUpdateBanner')?.classList.add('hidden');
       await attachAndLoadFileHandle(linkedFileHandle, false, true);
     }
 
@@ -1853,9 +2152,9 @@
         snapBadge.textContent = `${metrics.unpinnedSnapCount}/${ret.maxSnapshots} unpinned${metrics.pinnedSnapCount ? ` • ${metrics.pinnedSnapCount} pinned` : ''}`;
       }
       const snapList = document.getElementById('snapshotsList');
-      if (db.snapshots.length === 0) {
+      if (snapList && db.snapshots.length === 0) {
         snapList.innerHTML = '<p class="text-xs text-slate-400 py-8 text-center">No snapshots saved yet. Tap "+ Save" to freeze a baseline.</p>';
-      } else {
+      } else if (snapList) {
         snapList.innerHTML = db.snapshots.map(s => `
           <div class="p-3.5 rounded-xl border ${s.pinned ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200 bg-slate-50/70'} flex flex-wrap items-start justify-between gap-2 text-xs">
             <div class="space-y-0.5 min-w-0 flex-1">
@@ -2003,6 +2302,14 @@
     }
 
     async function resetPwaCacheAndReload() {
+      if (typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: 'Clear App Cache & Reload?',
+          message: 'Unregister the offline app cache and reload the page? Any unsaved dialog edits or temporary What-If sandbox changes will be lost.',
+          confirmLabel: 'Clear Cache & Reload',
+        });
+        if (!ok) return;
+      }
       ppDebug('INFO', 'User triggered Clear App Cache & Reload');
       try {
         if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -2055,9 +2362,8 @@
       if (archBtn) archBtn.classList.toggle('hidden', totalWillPrune === 0);
     }
 
-    function compactDatabaseNow() {
+    function executeCompactDatabaseNow(limits) {
       const db = getActiveDB();
-      const limits = readSyncRetentionLimitsFromUI();
       db.settings.retention = limits;
       const res = enforceRollingHistory(db, { dryRun: false, limits });
       touchDBAndSave();
@@ -2071,18 +2377,53 @@
       showToast(msg, 'success');
     }
 
+    function compactDatabaseNow() {
+      const db = getActiveDB();
+      const limits = readSyncRetentionLimitsFromUI();
+      const dry = enforceRollingHistory(db, { dryRun: true, limits });
+      const totalWillPrune = dry.prunedLog + dry.prunedSnaps + dry.prunedDumps + dry.orphansRemoved;
+      if (totalWillPrune > 0 && typeof openConfirmModal === 'function') {
+        const parts = [];
+        if (dry.prunedSnaps) parts.push(`${dry.prunedSnaps} unpinned snapshot(s)`);
+        if (dry.prunedLog) parts.push(`${dry.prunedLog} change log entry(ies)`);
+        if (dry.prunedDumps) parts.push(`${dry.prunedDumps} dump record(s)`);
+        if (dry.orphansRemoved) parts.push(`${dry.orphansRemoved} orphan key(s)`);
+        openConfirmModal(
+          'Compact & Prune Database?',
+          `Permanently delete ${parts.join(', ')} (~${formatBytes(dry.savedBytes)})? This cannot be undone.`,
+          'Compact & Delete',
+          () => executeCompactDatabaseNow(limits)
+        );
+        return;
+      }
+      executeCompactDatabaseNow(limits);
+    }
+
     async function archiveAndPruneHistory() {
       const db = getActiveDB();
       const limits = readSyncRetentionLimitsFromUI();
       const dry = enforceRollingHistory(db, { dryRun: true, limits });
+      const totalWillPrune = dry.prunedLog + dry.prunedSnaps + dry.prunedDumps + dry.orphansRemoved;
+      if (totalWillPrune > 0 && typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: 'Archive & Prune Retired History?',
+          message: `Export ${dry.prunedSnaps} snapshot(s), ${dry.prunedLog} change log entry(ies), and ${dry.prunedDumps} dump record(s) to an archive file, then permanently prune them from the active database?`,
+          confirmLabel: 'Archive & Prune',
+          tone: 'amber',
+        });
+        if (!ok) return;
+      }
       if (dry.retiredArchive) {
-        const archiveJson = JSON.stringify(dry.retiredArchive, null, 2);
-        const fname = `pulseplan_retired_history_${new Date().toISOString().slice(0, 10)}.json`;
+        const hasEnc = !ui.demoMode && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8 && typeof encryptPulsePlanData === 'function';
+        const archiveJson = hasEnc
+          ? JSON.stringify(await encryptPulsePlanData(dry.retiredArchive, ppSyncPassphrase), null, 2)
+          : JSON.stringify(dry.retiredArchive, null, 2);
+        const fname = `pulseplan_retired_history_${hasEnc ? 'enc_' : ''}${new Date().toISOString().slice(0, 10)}.json`;
         const outcome = await shareOrDownloadFile(new Blob([archiveJson], { type: 'application/json' }), fname, 'application/json', 'PulsePlan Retired History Archive');
         if (outcome === 'cancelled') return;
-        recordDumpEvent('ARCHIVE', fname, archiveJson.length, `Archived ${dry.prunedSnaps} snaps, ${dry.prunedLog} logs, ${dry.prunedDumps} dumps`);
+        recordDumpEvent('ARCHIVE', fname, archiveJson.length, `${hasEnc ? 'AES-256-GCM · ' : ''}Archived ${dry.prunedSnaps} snaps, ${dry.prunedLog} logs, ${dry.prunedDumps} dumps`);
       }
-      compactDatabaseNow();
+      executeCompactDatabaseNow(limits);
     }
 
     function clearDumpHistory() {

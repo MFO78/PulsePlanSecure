@@ -843,6 +843,16 @@
       }
     }
 
+    function ppSanitizeChangeLogSummary(summary) {
+      const txt = String(summary || '');
+      if (typeof ppCanAccessFinance === 'function' && !ppCanAccessFinance()) {
+        if (/(€|\$|£|day\s*rate|dayrate|budget\s*cost|budgetcost|cost\s*budget|\/d\b|\bcost\b|\brate\b)/i.test(txt)) {
+          return txt.replace(/,?\s*[€$£]\s*[\d,.]+(?:\/d)?/gi, ' [Finance Restricted]');
+        }
+      }
+      return txt;
+    }
+
     function renderChangeLog() {
       const db = getActiveDB();
       const ret = getRetentionSettings(db);
@@ -850,14 +860,16 @@
       if (countBadge) countBadge.textContent = `${(db.changeLog || []).length} / ${ret.maxChangeLog} max`;
 
       const q = (document.getElementById('changeLogSearch')?.value || '').trim().toLowerCase();
-      const filtered = (db.changeLog || []).filter(item =>
-        !q ||
-        item.summary.toLowerCase().includes(q) ||
-        item.type.toLowerCase().includes(q) ||
-        item.user.toLowerCase().includes(q)
-      );
+      const filtered = (db.changeLog || []).filter(item => {
+        const safeSummary = ppSanitizeChangeLogSummary(item.summary);
+        return !q ||
+          safeSummary.toLowerCase().includes(q) ||
+          item.type.toLowerCase().includes(q) ||
+          item.user.toLowerCase().includes(q);
+      });
 
       const container = document.getElementById('changeLogTable');
+      if (!container) return;
       if (filtered.length === 0) {
         container.innerHTML = '<p class="text-xs text-slate-400 py-4 text-center">No matching changes recorded yet.</p>';
         return;
@@ -880,7 +892,7 @@
                 <td class="px-3 py-2 text-slate-500 whitespace-nowrap font-mono text-[11px]">${new Date(l.timestamp).toLocaleString()}</td>
                 <td class="px-3 py-2 font-semibold text-slate-700 whitespace-nowrap">${escapeHtml(l.user)}</td>
                 <td class="px-3 py-2"><span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-[10px]">${escapeHtml(l.type)}</span></td>
-                <td class="px-3 py-2 text-slate-800">${escapeHtml(l.summary)}</td>
+                <td class="px-3 py-2 text-slate-800">${escapeHtml(ppSanitizeChangeLogSummary(l.summary))}</td>
               </tr>`).join('')}
           </tbody>
         </table>`;

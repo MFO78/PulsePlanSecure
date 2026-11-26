@@ -30,7 +30,12 @@
   const isOpen = () => Boolean(ui.dialog && ui.dialog.open);
   const q = (sel) => (ui.dialog ? ui.dialog.querySelector(sel) : null);
   const attr = (name, val) => `[${name}="${CSS.escape(String(val))}"]`;
-  const askOk = (msg) => (typeof globalThis.confirm === 'function' ? globalThis.confirm(msg) : true);
+  const askConfirm = async ({ title = 'Confirm Action', message = '', confirmLabel = 'Confirm', tone = 'danger' } = {}) => {
+    if (typeof ppConfirmAction === 'function') {
+      return ppConfirmAction({ title, message, confirmLabel, tone });
+    }
+    return typeof globalThis.confirm === 'function' ? globalThis.confirm(message) : true;
+  };
   const safe = (fn) => (...args) => Promise.resolve().then(() => fn(...args)).catch(err => C().toast((err && err.message) || 'Action failed.', 'error'));
   const doc = () => C().state.activeDoc;
   const project = () => C().getProject(C().state.activeProjectId);
@@ -349,14 +354,20 @@
     commit(summary, attr('data-pbs-row', id));
   }
 
-  function deleteItem(id) {
+  async function deleteItem(id) {
     const d = doc();
     const item = d.items.find(i => i.id === id);
     if (!item) return;
     const ids = new Set([id]);
     (function walk(pid) { T().getChildren(d, pid).forEach(c => { ids.add(c.id); walk(c.id); }); })(id);
     const n = ids.size - 1;
-    if (!askOk(`Delete "${item.name}"${n ? ` and its ${n} sub-item${n === 1 ? '' : 's'}` : ''}?`)) return;
+    const ok = await askConfirm({
+      title: 'Delete PBS Deliverable?',
+      message: `Delete "${item.name}"${n ? ` and its ${n} sub-item${n === 1 ? '' : 's'}` : ''}? You can undo this with Ctrl+Z.`,
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
     pushUndo(`Delete ${item.code} ${item.name}`);
     d.items = d.items.filter(i => !ids.has(i.id));
     ids.forEach(x => ui.collapsedIds.delete(x));
@@ -379,10 +390,16 @@
     commit(`${label} PBS item ${item.code} ${item.name}`);
   }
 
-  function renumberItems() {
+  async function renumberItems() {
     const d = doc();
     if (!d || d.items.length < 2) return;
-    if (!askOk('Re-sequence all PBS item codes (1, 1.1, 1.2...) to match the current tree hierarchy? You can undo this with Ctrl+Z.')) return;
+    const ok = await askConfirm({
+      title: 'Renumber PBS Hierarchy?',
+      message: 'Re-sequence all PBS item codes (1, 1.1, 1.2...) to match the current tree hierarchy? You can undo this with Ctrl+Z.',
+      confirmLabel: 'Renumber Codes',
+      tone: 'warning',
+    });
+    if (!ok) return;
     const snap = JSON.stringify(d.items);
     const { changed } = T().renumberTree(d);
     if (!changed) { C().toast('All PBS codes are already in sequential order.', 'info'); return; }
@@ -467,6 +484,7 @@
   /* ---------- Files, exports, clone ---------- */
   async function readFileText(file) {
     if (file.size > MAX_FILE_BYTES) throw new Error('File is too large (limit 2 MB).');
+    if (typeof ppReadRawFileText === 'function') return ppReadRawFileText(file);
     return file.text();
   }
 
@@ -483,7 +501,15 @@
   async function loadJson(file) {
     const d = doc();
     const { doc: loaded, wasEncrypted } = await D().decodePbsFromText(await readFileText(file), project(), undefined, C().getUserName());
-    if (d.items.length && !askOk(`Replace the ${d.items.length} existing items with ${loaded.items.length} items from "${file.name}"?`)) return;
+    if (d.items.length) {
+      const ok = await askConfirm({
+        title: 'Replace Existing PBS Items?',
+        message: `Replace the ${d.items.length} existing items with ${loaded.items.length} items from "${file.name}"?`,
+        confirmLabel: 'Replace PBS',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     pushUndo(`Load ${file.name}`);
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
@@ -502,7 +528,15 @@
     const { items, warnings } = IO().parsePbsCsv(await readFileText(file), C().getDb());
     if (!items.length) { C().toast('No PBS rows found in that CSV file.', 'warning'); return; }
     if (items.length > MAX_IMPORT_ITEMS) { C().toast(`CSV has too many rows (limit ${MAX_IMPORT_ITEMS}).`, 'warning'); return; }
-    if (d.items.length && !askOk(`Append ${items.length} imported items to the ${d.items.length} existing items?`)) return;
+    if (d.items.length) {
+      const ok = await askConfirm({
+        title: 'Append Imported CSV Items?',
+        message: `Append ${items.length} imported items to the ${d.items.length} existing items?`,
+        confirmLabel: 'Append Items',
+        tone: 'primary',
+      });
+      if (!ok) return;
+    }
     pushUndo(`Import ${items.length} CSV items`);
     d.items.push(...items);
     ui.notices = [`Imported ${items.length} item${items.length === 1 ? '' : 's'} from ${file.name}.`, ...warnings];
@@ -556,14 +590,22 @@
     openPrintFallback(model);
   }
 
-  function cloneFrom(srcId) {
+  async function cloneFrom(srcId) {
     const d = doc();
     const src = C().getCache()[srcId];
     const sp = C().getProject(srcId);
     if (!src || !Array.isArray(src.items) || !src.items.length) { C().toast('That project has no PBS items to clone.', 'warning'); render(); return; }
     const items = IO().cloneItems(src).map(it => ({ ...it, maturity: 'Draft' }));
     const label = sp ? `[${sp.code || sp.id}] ${sp.name}` : srcId;
-    if (d.items.length && !askOk(`Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links, procurement status and spare availability are not copied.`)) { render(); return; }
+    if (d.items.length) {
+      const ok = await askConfirm({
+        title: 'Clone PBS Items?',
+        message: `Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links, procurement status and spare availability are not copied.`,
+        confirmLabel: 'Clone Items',
+        tone: 'primary',
+      });
+      if (!ok) { render(); return; }
+    }
     pushUndo(`Clone from ${label}`);
     d.items.push(...items);
     syncPopulatedColGroups(false);
@@ -574,27 +616,51 @@
   async function conflictMerge() {
     const S = C().state;
     if (!S.conflictRemoteDoc) return;
+    const diff = D().computeConflictDiff(S.activeDoc, S.conflictRemoteDoc);
+    const ok = await askConfirm({
+      title: 'Merge Remote PBS Changes?',
+      message: `Keep all local items (local wins on ${diff.modifiedBoth.length} item${diff.modifiedBoth.length === 1 ? '' : 's'} modified on both sides) and append ${diff.addedRemote.length} new remote item${diff.addedRemote.length === 1 ? '' : 's'}?`,
+      confirmLabel: 'Merge & Save',
+      tone: 'warning',
+    });
+    if (!ok) return;
     pushUndo('Merge sync conflict');
     const remoteModified = S.conflictRemoteModified;
-    const added = D().computeConflictDiff(S.activeDoc, S.conflictRemoteDoc).addedRemote.length;
+    const added = diff.addedRemote.length;
     C().replaceDoc(D().mergeConflictDocs(S.activeDoc, S.conflictRemoteDoc), S.activeWasEncrypted);
     S.activeFileModified = remoteModified;
-    await C().writeToFolder(false);
-    C().logChange(`Merged ${added} remote item${added === 1 ? '' : 's'} after sync conflict (local wins on edits to the same item)`);
+    const saved = await C().writeToFolder(true);
+    if (saved) {
+      C().logChange(`Merged ${added} remote item${added === 1 ? '' : 's'} after sync conflict (local wins on edits to the same item)`);
+    }
     syncPopulatedColGroups(false);
     render();
   }
   async function conflictLoad() {
-    if (!askOk('Discard your unsaved local changes and load the shared folder version?')) return;
+    const ok = await askConfirm({
+      title: 'Discard Local PBS Changes?',
+      message: 'Discard your unsaved local changes and load the shared folder version?',
+      confirmLabel: 'Discard & Load Shared',
+      tone: 'danger',
+    });
+    if (!ok) return;
     pushUndo('Load shared folder');
     await C().syncFromFolder({});
     syncPopulatedColGroups(true);
     render();
   }
   async function conflictOverwrite() {
-    if (!askOk('Overwrite the shared folder file with your local version? Remote changes will be lost.')) return;
-    await C().writeToFolder(true);
-    C().logChange('Overwrote shared folder PBS with local version after sync conflict');
+    const ok = await askConfirm({
+      title: 'Overwrite Shared PBS File?',
+      message: 'Overwrite the shared folder file with your local version? Remote changes from teammates will be lost.',
+      confirmLabel: 'Overwrite Shared File',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    const saved = await C().writeToFolder(true);
+    if (saved) {
+      C().logChange('Overwrote shared folder PBS with local version after sync conflict');
+    }
     render();
   }
 
@@ -606,7 +672,7 @@
     ppPbsRedoBtn: () => redo(),
     ppPbsExpandAllBtn: () => setAllCollapsed(false),
     ppPbsCollapseAllBtn: () => setAllCollapsed(true),
-    ppPbsRenumberBtn: () => renumberItems(),
+    ppPbsRenumberBtn: safe(renumberItems),
     ppPbsColsMainBtn: () => setMainOnlyCols(),
     ppPbsColsAllBtn: () => showAllUsedCols(),
     ppPbsLinkFolderBtn: safe(async () => { await C().linkFolder(); render(); }),
@@ -643,7 +709,7 @@
     if (d.pbsMove) return moveItem(d.pbsId, d.pbsMove);
     if (d.pbsAddChild) return openForm(null, d.pbsAddChild);
     if (d.pbsEdit) return openForm(d.pbsEdit, null);
-    if (d.pbsDel) return deleteItem(d.pbsDel);
+    if (d.pbsDel) return safe(deleteItem)(d.pbsDel);
     const fn = BUTTONS[t.id];
     if (fn) fn();
   }
@@ -670,7 +736,7 @@
     } else if (t.id === 'ppPbsFilterHeritage') { ui.filter.heritage = t.value; render();
     } else if (t.id === 'ppPbsFilterProc') { ui.filter.procStatus = t.value; render();
     } else if (t.id === 'ppPbsFilterFlag') { ui.filter.flag = t.value; render();
-    } else if (t.id === 'ppPbsCloneSelect' && t.value) { cloneFrom(t.value); }
+    } else if (t.id === 'ppPbsCloneSelect' && t.value) { safe(cloneFrom)(t.value); }
   }
 
   function onInput(e) {
@@ -737,9 +803,19 @@
     const core = C();
     const S = core.state;
     core.stopPolling();
+    const lockedOrSigningOut = (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked())
+      || (typeof ppIsSigningOut === 'function' && ppIsSigningOut());
+    if (lockedOrSigningOut) {
+      if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
+      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.undoStack = []; ui.redoStack = [];
+      return;
+    }
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
     if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
-    if (S.dirHandle && S.syncStatusText === 'Saving...' && !S.conflictRemoteText) await core.writeToFolder(false);
+    if (S.dirHandle && (S.syncStatusText === 'Saving...' || S.saveQueued) && !S.conflictRemoteText) {
+      S.saveQueued = false;
+      await core.writeToFolder(false);
+    }
     ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.undoStack = []; ui.redoStack = [];
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
@@ -747,6 +823,7 @@
   function closeDialog() { if (ui.dialog && ui.dialog.open) ui.dialog.close(); }
 
   async function open(projectId) {
+    if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
     const core = C();
     if (!core.openSession(projectId)) { core.toast('Project not found.', 'error'); return; }
     ensureDialog();
@@ -762,7 +839,7 @@
     hooks.onBadges = () => { if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh(); };
     if (!ui.dialog.open) ui.dialog.showModal();
     render();
-    await core.initFolder();
+    await core.initFolder({ allowPrompt: true });
     syncPopulatedColGroups(true);
     render();
   }

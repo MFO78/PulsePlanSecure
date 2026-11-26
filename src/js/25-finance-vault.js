@@ -1,6 +1,6 @@
 /* Isolated Dual-File Finance Vault: Separate AES-256-GCM encrypted file for Day Rates & Project Costs,
  * encrypted using the unified session Administrator key (unlocked internally by authorized user login) — no second password needed.
- * Persists Finance DB path in the main DB (db.settings.financeVault) and remembers file/folder handles in IndexedDB for automatic open. */
+ * Persists Finance DB path in the main DB (db.settings.financeVault), polls & 3-way merges teammate updates, and remembers file/folder handles in IndexedDB. */
 (function ppFinanceVaultModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
@@ -9,6 +9,8 @@
   const SPLIT_FLAG_KEY = 'pulseplan_finance_split_enabled_v1';
   const FIN_HANDLE_KEY = 'finance_vault_handle';
   const FIN_DIR_KEY = 'finance_dir_handle';
+  const FIN_POLL_MS = 15000;
+  const FIN_IO_TIMEOUT_MS = 10000;
   const FIN_LOG_RE = /(€|\$|£|day\s*rate|dayrate|budget\s*cost|budgetcost|cost\s*budget|\brate\b|\bcost\b|\bbudget\b)/i;
 
   const state = {
@@ -20,7 +22,16 @@
     fileName: 'pulseplan-finance.enc.json',
     filePath: '',
     lastPayload: null,
+    lastSavedJson: '',
+    lastKnownModified: 0,
+    lastWriteId: '',
+    explicitEmptyAllowed: false,
     autoSaveTimer: null,
+    pollTimer: null,
+    isSaving: false,
+    saveQueued: false,
+    isPolling: false,
+    lastError: '',
     legacyPendingRaw: null,
   };
 
@@ -39,10 +50,22 @@
     } catch (_e) {}
   }
 
-  function getDb() {
-    if (typeof getActiveDB === 'function') return getActiveDB();
+  function getLiveDbRef() {
     if (typeof liveDB !== 'undefined' && liveDB) return liveDB;
+    if (typeof getActiveDB === 'function') return getActiveDB();
     return { departments: [], projects: [], settings: {} };
+  }
+
+  function isNonLiveMode() {
+    return Boolean(typeof ui !== 'undefined' && (ui.demoMode || ui.whatIfMode));
+  }
+
+  function isSessionLocked() {
+    return typeof ppIsSessionLocked === 'function' && ppIsSessionLocked();
+  }
+
+  function isSigningOut() {
+    return typeof ppIsSigningOut === 'function' && ppIsSigningOut();
   }
 
   function getSessionMasterKey() {
@@ -68,8 +91,35 @@
       .replace(/'/g, '&#39;');
   }
 
+  function withFinTimeout(promise, ms = FIN_IO_TIMEOUT_MS, label = 'Finance Vault file operation timed out') {
+    let timer = null;
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const e = new Error(label);
+          e.name = 'TimeoutError';
+          reject(e);
+        }, ms);
+      }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+  }
+
+  function isFinConnectionError(err) {
+    if (!err) return false;
+    if (typeof isConnectionLostError === 'function' && isConnectionLostError(err)) return true;
+    const name = String(err.name || '');
+    const msg = String(err.message || '').toLowerCase();
+    return ['NotFoundError', 'NotReadableError', 'NotAllowedError', 'SecurityError', 'InvalidStateError', 'NoModificationAllowedError', 'TimeoutError'].includes(name)
+      || msg.includes('permission') || msg.includes('not found') || msg.includes('timed out') || msg.includes('disconnected');
+  }
+
+  function generateFinWriteId() {
+    return `fin_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
   /* ---------- Main DB Finance Path Metadata ---------- */
-  function getMainDbFinanceMeta(db = getDb()) {
+  function getMainDbFinanceMeta(db = getLiveDbRef()) {
     const raw = db && db.settings && db.settings.financeVault && typeof db.settings.financeVault === 'object'
       ? db.settings.financeVault
       : {};
@@ -105,7 +155,7 @@
   }
 
   function syncFinanceMetaToMainDb(fileName, explicitPath = '') {
-    const db = getDb();
+    const db = getLiveDbRef();
     if (!db || typeof db !== 'object') return;
     if (!db.settings || typeof db.settings !== 'object') db.settings = {};
     const cleanName = String(fileName || state.fileName || 'pulseplan-finance.enc.json').trim();
@@ -123,7 +173,6 @@
     state.fileName = cleanName;
     state.filePath = resolvedPath;
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
-    else if (typeof saveLiveDB === 'function') saveLiveDB();
   }
 
   /* ---------- IndexedDB Handle Persistence (File + Optional Shared Folder) ---------- */
@@ -146,7 +195,7 @@
     if (!handle) return;
     let db = null;
     try {
-      db = await openVaultHandleIDB();
+      db = await withFinTimeout(openVaultHandleIDB(), 5000, 'IDB open timed out');
       await new Promise((resolve, reject) => {
         const tx = db.transaction('file_handles', 'readwrite');
         tx.oncomplete = () => resolve();
@@ -161,10 +210,28 @@
     }
   }
 
+  async function deleteHandleFromIDB(key) {
+    let db = null;
+    try {
+      db = await withFinTimeout(openVaultHandleIDB(), 5000, 'IDB open timed out');
+      await new Promise((resolve) => {
+        const tx = db.transaction('file_handles', 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+        tx.objectStore('file_handles').delete(key);
+      });
+    } catch (_e) {
+      // Non-fatal
+    } finally {
+      try { if (db) db.close(); } catch (_e) {}
+    }
+  }
+
   async function loadHandleFromIDB(key) {
     let db = null;
     try {
-      db = await openVaultHandleIDB();
+      db = await withFinTimeout(openVaultHandleIDB(), 5000, 'IDB open timed out');
       return await new Promise((resolve) => {
         const tx = db.transaction('file_handles', 'readonly');
         const req = tx.objectStore('file_handles').get(key);
@@ -204,7 +271,7 @@
     );
   }
 
-  async function encryptFinancePayload(payload, password) {
+  async function encryptFinancePayload(payload, password, writeId = '') {
     if (!password || password.length < 6) {
       throw new Error('Active encryption key is required to encrypt the Finance Vault.');
     }
@@ -213,7 +280,7 @@
     const key = await deriveAesKey(password, salt, PBKDF2_ITERS);
     const plainBytes = new TextEncoder().encode(JSON.stringify(payload));
     const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainBytes);
-    return JSON.stringify({
+    const envelope = {
       type: 'pulseplan-finance-vault',
       version: VAULT_VERSION,
       unifiedMasterKey: true,
@@ -224,7 +291,9 @@
       iv: toBase64(iv),
       data: toBase64(new Uint8Array(cipherBuf)),
       updatedAt: new Date().toISOString(),
-    }, null, 2);
+    };
+    if (writeId) envelope.writeId = writeId;
+    return JSON.stringify(envelope, null, 2);
   }
 
   async function decryptFinancePayload(rawJson, password) {
@@ -240,17 +309,26 @@
     return JSON.parse(new TextDecoder().decode(plainBuf));
   }
 
-  /* ---------- Exact Financial Schema (dayRate & budgetCost) + ChangeLog Redaction ---------- */
+  function extractWriteIdFromRaw(rawJson) {
+    try {
+      const env = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+      return String(env?.writeId || '');
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  /* ---------- Exact Financial Schema (dayRate & budgetCost), 3-Way Merge + ChangeLog Redaction ---------- */
   function extractFinancialsFromDb(db) {
     const deptRates = {};
-    (db.departments || []).forEach(d => {
+    (db?.departments || []).forEach(d => {
       if (d && d.id && Number(d.dayRate) > 0) {
         deptRates[d.id] = { dayRate: Number(d.dayRate) };
       }
     });
 
     const projectCosts = {};
-    (db.projects || []).forEach(p => {
+    (db?.projects || []).forEach(p => {
       if (p && p.id && Number(p.budgetCost) > 0) {
         projectCosts[p.id] = { budgetCost: Number(p.budgetCost) };
       }
@@ -259,23 +337,111 @@
     return { deptRates, projectCosts, exportedAt: new Date().toISOString() };
   }
 
+  function canonicalFinanceJson(payload) {
+    const deptRates = {};
+    const projectCosts = {};
+    Object.keys(payload?.deptRates || {}).sort().forEach(k => {
+      const v = Number(payload.deptRates[k]?.dayRate || 0);
+      if (v > 0) deptRates[k] = v;
+    });
+    Object.keys(payload?.projectCosts || {}).sort().forEach(k => {
+      const v = Number(payload.projectCosts[k]?.budgetCost || 0);
+      if (v > 0) projectCosts[k] = v;
+    });
+    return JSON.stringify({ deptRates, projectCosts });
+  }
+
+  function hasNonEmptyFinancials(payload) {
+    return Object.keys(payload?.deptRates || {}).some(k => Number(payload.deptRates[k]?.dayRate || 0) > 0)
+      || Object.keys(payload?.projectCosts || {}).some(k => Number(payload.projectCosts[k]?.budgetCost || 0) > 0);
+  }
+
+  function cloneFinancePayload(payload) {
+    const deptRates = {};
+    const projectCosts = {};
+    Object.entries(payload?.deptRates || {}).forEach(([k, v]) => {
+      const n = Number(v?.dayRate || 0);
+      if (n > 0) deptRates[k] = { dayRate: n };
+    });
+    Object.entries(payload?.projectCosts || {}).forEach(([k, v]) => {
+      const n = Number(v?.budgetCost || 0);
+      if (n > 0) projectCosts[k] = { budgetCost: n };
+    });
+    return { deptRates, projectCosts, exportedAt: payload?.exportedAt || new Date().toISOString() };
+  }
+
   function mergeFinancialsIntoDb(db, payload) {
-    if (!payload || typeof payload !== 'object') return;
+    if (!db || !payload || typeof payload !== 'object') return;
     const deptRates = payload.deptRates || {};
     const projectCosts = payload.projectCosts || {};
     (db.departments || []).forEach(d => {
-      if (d && d.id && deptRates[d.id] !== undefined) {
-        d.dayRate = Number(deptRates[d.id].dayRate) || 0;
-      }
+      if (!d || !d.id) return;
+      d.dayRate = deptRates[d.id] !== undefined ? (Number(deptRates[d.id].dayRate) || 0) : 0;
     });
     (db.projects || []).forEach(p => {
-      if (p && p.id && projectCosts[p.id] !== undefined) {
-        p.budgetCost = Number(projectCosts[p.id].budgetCost) || 0;
-      }
+      if (!p || !p.id) return;
+      p.budgetCost = projectCosts[p.id] !== undefined ? (Number(projectCosts[p.id].budgetCost) || 0) : 0;
     });
   }
 
+  function mergeFinancePayloadsThreeWay(basePayload, localPayload, diskPayload) {
+    const base = basePayload || { deptRates: {}, projectCosts: {} };
+    const local = localPayload || { deptRates: {}, projectCosts: {} };
+    const disk = diskPayload || { deptRates: {}, projectCosts: {} };
+    const merged = { deptRates: {}, projectCosts: {}, exportedAt: new Date().toISOString() };
+    const conflicts = [];
+
+    const deptIds = new Set([
+      ...Object.keys(base.deptRates || {}),
+      ...Object.keys(local.deptRates || {}),
+      ...Object.keys(disk.deptRates || {}),
+    ]);
+    deptIds.forEach(id => {
+      const bVal = Number(base.deptRates?.[id]?.dayRate || 0);
+      const lVal = Number(local.deptRates?.[id]?.dayRate || 0);
+      const dVal = Number(disk.deptRates?.[id]?.dayRate || 0);
+      let chosen = lVal;
+      if (lVal === dVal) chosen = lVal;
+      else if (lVal === bVal) chosen = dVal;
+      else if (dVal === bVal) chosen = lVal;
+      else {
+        chosen = lVal;
+        conflicts.push(`dept:${id}`);
+      }
+      if (chosen > 0) merged.deptRates[id] = { dayRate: chosen };
+    });
+
+    const projIds = new Set([
+      ...Object.keys(base.projectCosts || {}),
+      ...Object.keys(local.projectCosts || {}),
+      ...Object.keys(disk.projectCosts || {}),
+    ]);
+    projIds.forEach(id => {
+      const bVal = Number(base.projectCosts?.[id]?.budgetCost || 0);
+      const lVal = Number(local.projectCosts?.[id]?.budgetCost || 0);
+      const dVal = Number(disk.projectCosts?.[id]?.budgetCost || 0);
+      let chosen = lVal;
+      if (lVal === dVal) chosen = lVal;
+      else if (lVal === bVal) chosen = dVal;
+      else if (dVal === bVal) chosen = lVal;
+      else {
+        chosen = lVal;
+        conflicts.push(`project:${id}`);
+      }
+      if (chosen > 0) merged.projectCosts[id] = { budgetCost: chosen };
+    });
+
+    const mergedJson = canonicalFinanceJson(merged);
+    return {
+      merged,
+      conflicts,
+      changedLocal: mergedJson !== canonicalFinanceJson(local),
+      changedDisk: mergedJson !== canonicalFinanceJson(disk),
+    };
+  }
+
   function stripFinancialsFromDb(db) {
+    if (!db || typeof db !== 'object') return;
     (db.departments || []).forEach(d => {
       if (d) d.dayRate = 0;
     });
@@ -293,35 +459,54 @@
     }
   }
 
-  /* ---------- Hard Cryptographic Gate: Strip Financials Before Main Encryption ---------- */
+  function isMainDbObject(obj) {
+    return Boolean(obj && typeof obj === 'object' && (Array.isArray(obj.departments) || Array.isArray(obj.projects)));
+  }
+
+  function getStrippedCloneForMainSync(db) {
+    if (!isMainDbObject(db)) return db;
+    const dbFinMeta = getMainDbFinanceMeta(db);
+    if (state.splitMode || dbFinMeta.enabled) {
+      const cleanClone = JSON.parse(JSON.stringify(db));
+      stripFinancialsFromDb(cleanClone);
+      return cleanClone;
+    }
+    return db;
+  }
+
+  /* ---------- Hard Cryptographic Gate: Strip Financials ONLY Before Main DB Encryption ---------- */
   if (typeof encryptPulsePlanData === 'function') {
     const nativeEncryptMain = encryptPulsePlanData;
     encryptPulsePlanData = async function (dbObj, passphrase) {
-      const dbFinMeta = getMainDbFinanceMeta(dbObj);
-      if ((state.splitMode || dbFinMeta.enabled) && dbObj && typeof dbObj === 'object') {
-        const cleanClone = JSON.parse(JSON.stringify(dbObj));
-        stripFinancialsFromDb(cleanClone);
-        if (state.unlocked && canAccessFinance()) scheduleFinanceAutoSync();
-        return nativeEncryptMain.call(this, cleanClone, passphrase);
+      if (isMainDbObject(dbObj)) {
+        const dbFinMeta = getMainDbFinanceMeta(dbObj);
+        if (state.splitMode || dbFinMeta.enabled) {
+          const cleanClone = JSON.parse(JSON.stringify(dbObj));
+          stripFinancialsFromDb(cleanClone);
+          return nativeEncryptMain.call(this, cleanClone, passphrase);
+        }
       }
       return nativeEncryptMain.call(this, dbObj, passphrase);
     };
   }
 
   async function writeStrippedMainFileNow() {
-    const db = getDb();
+    const db = getLiveDbRef();
     stripFinancialsFromDb(db);
-    if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) {
-      const writable = await linkedFileHandle.createWritable();
-      await writable.write(JSON.stringify(db, null, 2));
-      await writable.close();
+    if (typeof whatIfDB !== 'undefined' && whatIfDB) stripFinancialsFromDb(whatIfDB);
+    if (typeof touchDBAndSave === 'function') touchDBAndSave();
+    if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+      await writeDBToLinkedFile({ forceOverwrite: true });
     }
-    if (typeof saveLiveDB === 'function') saveLiveDB();
-    else if (typeof persistDB === 'function') persistDB();
-    else if (typeof saveState === 'function') saveState();
   }
 
-  /* ---------- File I/O + Auto-Sync + Automatic Open from Stored Path/Handle ---------- */
+  /* ---------- File I/O, Serialized Auto-Sync, Polling & Disconnect Safety ---------- */
+  async function readRawFileInfoFromHandle(handle) {
+    const file = await withFinTimeout(handle.getFile(), FIN_IO_TIMEOUT_MS, 'Finance Vault read timed out');
+    const text = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(file) : await file.text();
+    return { text, lastModified: Number(file?.lastModified || 0), name: file?.name || handle?.name || '' };
+  }
+
   async function saveEncryptedFinanceFile(encryptedText, pickNewFile) {
     if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
       if (pickNewFile || !state.fileHandle) {
@@ -332,11 +517,17 @@
         });
         state.fileName = state.fileHandle.name || state.fileName;
         state.pendingReconnectHandle = null;
-        saveHandleInIDB(FIN_HANDLE_KEY, state.fileHandle);
+        await saveHandleInIDB(FIN_HANDLE_KEY, state.fileHandle);
       }
-      const writable = await state.fileHandle.createWritable();
+      const writable = await withFinTimeout(state.fileHandle.createWritable(), FIN_IO_TIMEOUT_MS, 'Finance Vault write timed out');
       await writable.write(encryptedText);
       await writable.close();
+      try {
+        const f = await state.fileHandle.getFile();
+        state.lastKnownModified = Number(f?.lastModified || Date.now());
+      } catch (_e) {
+        state.lastKnownModified = Date.now();
+      }
       return state.fileName;
     }
     const blob = new Blob([encryptedText], { type: 'application/json' });
@@ -349,41 +540,333 @@
     return a.download;
   }
 
-  async function autoSyncFinanceFile() {
+  function handleFinanceConnectionLost(reason, err) {
+    const lostHandle = state.fileHandle;
+    const isPermErr = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    stopFinancePolling();
+    clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = null;
+    state.fileHandle = null;
+    state.pendingReconnectHandle = isPermErr ? (lostHandle || state.pendingReconnectHandle) : null;
+    state.lastError = err?.message || String(reason || 'connection_lost');
+    lockFinanceVaultSilently(true);
+    if (typeof clearUndoHistory === 'function') clearUndoHistory();
+    if (typeof renderAll === 'function') renderAll();
+    if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
+    const detailMsg = reason === 'key_changed'
+      ? 'Finance Vault encryption key changed on disk — financials cleared until re-unlocked.'
+      : 'Finance Vault connection lost — financial figures cleared from memory until reconnected.';
+    toast(detailMsg, 'warning');
+  }
+
+  function stopFinancePolling() {
+    if (state.pollTimer) {
+      clearInterval(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function startFinancePolling() {
+    stopFinancePolling();
+    if (!state.unlocked || !state.fileHandle || !canAccessFinance()) return;
+    if (typeof setInterval !== 'function') return;
+    state.pollTimer = setInterval(() => {
+      pollFinanceVaultNow({ silent: true });
+    }, FIN_POLL_MS);
+  }
+
+  async function autoSyncFinanceFile({ immediate = false, allowWhileSigningOut = false } = {}) {
     const masterKey = getSessionMasterKey();
-    if (!state.unlocked || !masterKey || !state.fileHandle || !canAccessFinance()) return;
+    if (!state.unlocked || !masterKey || !state.fileHandle || !canAccessFinance()) {
+      return { ok: false, skipped: true };
+    }
+    if (!allowWhileSigningOut && (isSessionLocked() || isSigningOut() || isNonLiveMode())) {
+      return { ok: false, skipped: true };
+    }
+    if (state.isSaving) {
+      state.saveQueued = true;
+      return { ok: false, queued: true };
+    }
+
+    clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = null;
+    state.isSaving = true;
+    state.saveQueued = false;
+
     try {
-      const db = getDb();
-      const payload = extractFinancialsFromDb(db);
-      const encText = await encryptFinancePayload(payload, masterKey);
-      const writable = await state.fileHandle.createWritable();
+      const db = getLiveDbRef();
+      let payloadToWrite = extractFinancialsFromDb(db);
+      const localJson = canonicalFinanceJson(payloadToWrite);
+
+      // Guard: never accidentally wipe a non-empty Finance Vault on disk with empty values
+      // unless the user explicitly cleared rates down to 0 during this session.
+      if (!hasNonEmptyFinancials(payloadToWrite) && hasNonEmptyFinancials(state.lastPayload) && !state.explicitEmptyAllowed) {
+        mergeFinancialsIntoDb(db, state.lastPayload);
+        return { ok: false, preventedWipe: true };
+      }
+
+      if (!immediate && localJson === state.lastSavedJson) {
+        return { ok: true, unchanged: true };
+      }
+
+      // Pre-write disk check & 3-way merge to avoid overwriting teammate updates
+      let mergedRemoteIntoLocal = false;
+      if (typeof state.fileHandle.getFile === 'function') {
+        const diskInfo = await readRawFileInfoFromHandle(state.fileHandle);
+        if (diskInfo.lastModified > 0 && state.lastKnownModified > 0 && diskInfo.lastModified > state.lastKnownModified + 500) {
+          const diskWriteId = extractWriteIdFromRaw(diskInfo.text);
+          if (diskWriteId && diskWriteId === state.lastWriteId) {
+            state.lastKnownModified = diskInfo.lastModified;
+          } else {
+            let diskPayload;
+            try {
+              diskPayload = await decryptFinancePayload(diskInfo.text, masterKey);
+            } catch (decErr) {
+              handleFinanceConnectionLost('key_changed', decErr);
+              return { ok: false, error: decErr };
+            }
+            const mergeRes = mergeFinancePayloadsThreeWay(state.lastPayload || {}, payloadToWrite, diskPayload);
+            payloadToWrite = mergeRes.merged;
+            if (mergeRes.changedLocal) {
+              mergeFinancialsIntoDb(db, payloadToWrite);
+              mergedRemoteIntoLocal = true;
+            }
+          }
+        }
+      }
+
+      if (!allowWhileSigningOut && (isSessionLocked() || !state.unlocked)) {
+        return { ok: false, aborted: true };
+      }
+
+      const writeId = generateFinWriteId();
+      const encText = await encryptFinancePayload(payloadToWrite, masterKey, writeId);
+      const writable = await withFinTimeout(state.fileHandle.createWritable(), FIN_IO_TIMEOUT_MS, 'Finance Vault write timed out');
       await writable.write(encText);
       await writable.close();
-      state.lastPayload = payload;
-    } catch (_e) {}
+
+      state.lastWriteId = writeId;
+      state.lastPayload = cloneFinancePayload(payloadToWrite);
+      state.lastSavedJson = canonicalFinanceJson(payloadToWrite);
+      state.explicitEmptyAllowed = false;
+      state.lastError = '';
+
+      if (typeof state.fileHandle.getFile === 'function') {
+        try {
+          const postFile = await state.fileHandle.getFile();
+          state.lastKnownModified = Number(postFile?.lastModified || Date.now());
+        } catch (_e) {
+          state.lastKnownModified = Date.now();
+        }
+      } else {
+        state.lastKnownModified = Date.now();
+      }
+
+      if (mergedRemoteIntoLocal && typeof renderAll === 'function') {
+        renderAll();
+        toast('Finance Vault merged external updates before saving.', 'info');
+      }
+      return { ok: true, mergedRemoteIntoLocal };
+    } catch (err) {
+      state.lastError = err?.message || String(err);
+      if (isFinConnectionError(err)) {
+        handleFinanceConnectionLost('write_error', err);
+      } else {
+        toast(`Finance Vault sync failed: ${state.lastError}`, 'error');
+      }
+      return { ok: false, error: err };
+    } finally {
+      state.isSaving = false;
+      if (state.saveQueued && state.unlocked && !isSessionLocked() && !isSigningOut()) {
+        state.saveQueued = false;
+        scheduleFinanceAutoSync(250);
+      }
+    }
   }
 
-  function scheduleFinanceAutoSync() {
-    if (!state.unlocked || !state.fileHandle || !canAccessFinance()) return;
+  function scheduleFinanceAutoSync(delayMs = 700) {
+    if (!state.unlocked || !state.fileHandle || !canAccessFinance() || isSessionLocked() || isNonLiveMode()) return;
     clearTimeout(state.autoSaveTimer);
-    state.autoSaveTimer = setTimeout(autoSyncFinanceFile, 800);
+    state.autoSaveTimer = setTimeout(() => {
+      state.autoSaveTimer = null;
+      autoSyncFinanceFile();
+    }, delayMs);
   }
 
-  async function readRawTextFromHandle(handle) {
-    const file = await handle.getFile();
-    return typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(file) : await file.text();
+  async function pollFinanceVaultNow({ forceRead = false, silent = true } = {}) {
+    const masterKey = getSessionMasterKey();
+    if (!state.unlocked || !masterKey || !state.fileHandle || !canAccessFinance()) return { updated: false };
+    if (isSessionLocked() || isSigningOut() || isNonLiveMode()) return { updated: false };
+    if (state.isPolling || state.isSaving || state.saveQueued || (!forceRead && state.autoSaveTimer)) {
+      return { updated: false };
+    }
+    if (typeof state.fileHandle.getFile !== 'function') return { updated: false };
+
+    state.isPolling = true;
+    try {
+      const diskInfo = await readRawFileInfoFromHandle(state.fileHandle);
+      if (!forceRead && state.lastKnownModified > 0 && diskInfo.lastModified <= state.lastKnownModified + 500) {
+        return { updated: false };
+      }
+
+      const diskWriteId = extractWriteIdFromRaw(diskInfo.text);
+      if (!forceRead && diskWriteId && diskWriteId === state.lastWriteId) {
+        state.lastKnownModified = Math.max(state.lastKnownModified, diskInfo.lastModified);
+        return { updated: false };
+      }
+
+      let diskPayload;
+      try {
+        diskPayload = await decryptFinancePayload(diskInfo.text, masterKey);
+      } catch (decErr) {
+        handleFinanceConnectionLost('key_changed', decErr);
+        return { updated: false, error: decErr };
+      }
+
+      // Re-check auth & lock state after async decryption
+      if (isSessionLocked() || !state.unlocked || !canAccessFinance() || getSessionMasterKey() !== masterKey) {
+        return { updated: false };
+      }
+
+      const db = getLiveDbRef();
+      const localPayload = extractFinancialsFromDb(db);
+      const mergeRes = mergeFinancePayloadsThreeWay(state.lastPayload || {}, localPayload, diskPayload);
+
+      mergeFinancialsIntoDb(db, mergeRes.merged);
+      state.lastPayload = cloneFinancePayload(mergeRes.merged);
+      state.lastKnownModified = Number(diskInfo.lastModified || Date.now());
+      state.lastError = '';
+
+      if (mergeRes.changedDisk) {
+        // Local had unsaved edits merged with external disk edits -> flush merged result back
+        state.lastSavedJson = canonicalFinanceJson(diskPayload);
+        scheduleFinanceAutoSync(200);
+      } else {
+        state.lastSavedJson = canonicalFinanceJson(mergeRes.merged);
+      }
+
+      if (mergeRes.changedLocal) {
+        if (typeof renderAll === 'function') renderAll();
+        updateHeaderPill();
+        if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
+        if (!silent) toast(`Finance Vault updated from ${state.fileName}.`, 'info');
+      }
+      return { updated: mergeRes.changedLocal, merged: mergeRes.merged };
+    } catch (err) {
+      state.lastError = err?.message || String(err);
+      if (isFinConnectionError(err)) {
+        handleFinanceConnectionLost('poll_error', err);
+      }
+      return { updated: false, error: err };
+    } finally {
+      state.isPolling = false;
+    }
   }
 
+  /* ---------- Lifecycle Hooks Called by 02-state.js, 07-data-sync.js, 29b-user-auth-rbac.js ---------- */
+  function onMainDbSavedForFinance(db) {
+    if (!state.unlocked || !state.fileHandle || !canAccessFinance()) return;
+    if (isSessionLocked() || isSigningOut() || isNonLiveMode()) return;
+    const targetDb = db || getLiveDbRef();
+    const current = extractFinancialsFromDb(targetDb);
+    const currentJson = canonicalFinanceJson(current);
+    if (currentJson !== state.lastSavedJson) {
+      if (!hasNonEmptyFinancials(current) && hasNonEmptyFinancials(state.lastPayload)) {
+        // User actively edited liveDB to zero out rates/budgets
+        state.explicitEmptyAllowed = true;
+      }
+      scheduleFinanceAutoSync(700);
+    }
+  }
+
+  function reapplyFinanceOverlayAfterMainReload(db) {
+    if (!state.unlocked || !canAccessFinance() || isSessionLocked()) return;
+    const targetDb = db || getLiveDbRef();
+    if (state.lastPayload && targetDb) {
+      mergeFinancialsIntoDb(targetDb, state.lastPayload);
+    }
+  }
+
+  async function onMainDbReloadedForFinance(db) {
+    const targetDb = db || getLiveDbRef();
+    if (!canAccessFinance() || isSessionLocked()) {
+      stripFinancialsFromDb(targetDb);
+      return { reloaded: false };
+    }
+    const meta = getMainDbFinanceMeta(targetDb);
+    if (meta.fileName) state.fileName = meta.fileName;
+    if (meta.filePath) state.filePath = meta.filePath;
+    if (meta.enabled) saveSplitFlag(true);
+
+    if (state.unlocked) {
+      // Immediately restore cached financial overlay so liveDB is NEVER transiently zeroed
+      if (state.lastPayload) {
+        mergeFinancialsIntoDb(targetDb, state.lastPayload);
+      }
+      if (state.fileHandle) {
+        await pollFinanceVaultNow({ forceRead: true, silent: true });
+      }
+      return { reloaded: true };
+    }
+    if (meta.enabled) {
+      return tryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: true });
+    }
+    return { reloaded: false };
+  }
+
+  async function flushFinanceVaultIfDirty() {
+    // Wait briefly if a Finance save is already in progress
+    const waitStart = Date.now();
+    while (state.isSaving && Date.now() - waitStart < 4500) {
+      await new Promise(r => setTimeout(r, 60));
+    }
+    if (!state.unlocked || !state.fileHandle || !canAccessFinance() || isNonLiveMode()) {
+      return { flushed: false };
+    }
+    const current = extractFinancialsFromDb(getLiveDbRef());
+    const currentJson = canonicalFinanceJson(current);
+    if (state.autoSaveTimer || state.saveQueued || currentJson !== state.lastSavedJson) {
+      clearTimeout(state.autoSaveTimer);
+      state.autoSaveTimer = null;
+      const res = await autoSyncFinanceFile({ immediate: true, allowWhileSigningOut: true });
+      return { flushed: Boolean(res?.ok), res };
+    }
+    return { flushed: false, clean: true };
+  }
+
+  function resetFinanceVaultForDbSwitch() {
+    stopFinancePolling();
+    clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = null;
+    state.unlocked = false;
+    state.fileHandle = null;
+    state.pendingReconnectHandle = null;
+    state.lastPayload = null;
+    state.lastSavedJson = '';
+    state.lastKnownModified = 0;
+    state.lastWriteId = '';
+    state.explicitEmptyAllowed = false;
+    state.isSaving = false;
+    state.saveQueued = false;
+    state.isPolling = false;
+    state.lastError = '';
+    state.legacyPendingRaw = null;
+    const meta = getMainDbFinanceMeta(getLiveDbRef());
+    state.fileName = meta.fileName || 'pulseplan-finance.enc.json';
+    state.filePath = meta.filePath || '';
+    saveSplitFlag(Boolean(meta.enabled));
+    closeFinanceVaultModal();
+    updateHeaderPill();
+  }
+
+  /* ---------- Pick, Auto-Open & Unlock ---------- */
   async function pickAndReadFinanceFile() {
     if (typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function') {
       const [handle] = await window.showOpenFilePicker({
         types: [{ description: 'PulsePlan Encrypted Finance Vault', accept: { 'application/json': ['.json'] } }],
       });
-      state.fileHandle = handle;
-      state.pendingReconnectHandle = null;
-      state.fileName = handle.name || state.fileName;
-      saveHandleInIDB(FIN_HANDLE_KEY, handle);
-      return readRawTextFromHandle(handle);
+      const info = await readRawFileInfoFromHandle(handle);
+      return { handle, raw: info.text, lastModified: info.lastModified, fileName: handle.name || info.name || state.fileName };
     }
     return new Promise((resolve, reject) => {
       const inp = document.createElement('input');
@@ -392,27 +875,36 @@
       inp.onchange = async () => {
         const f = inp.files && inp.files[0];
         if (!f) return reject(new Error('No file selected.'));
-        state.fileName = f.name;
         const txt = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(f) : await f.text();
-        resolve(txt);
+        resolve({ handle: null, raw: txt, lastModified: Number(f.lastModified || 0), fileName: f.name });
       };
       inp.click();
     });
   }
 
   async function unlockFromResolvedHandle(handle, key, { silent = true } = {}) {
-    const raw = await readRawTextFromHandle(handle);
-    const payload = await decryptFinancePayload(raw, key);
-    const curDb = getDb();
+    const info = await readRawFileInfoFromHandle(handle);
+    const payload = await decryptFinancePayload(info.text, key);
+    // Re-check auth/lock after async crypto so a mid-decrypt sign-out cannot re-populate liveDB!
+    if (isSessionLocked() || !canAccessFinance()) {
+      return { opened: false, aborted: true };
+    }
+    const curDb = getLiveDbRef();
     mergeFinancialsIntoDb(curDb, payload);
     saveSplitFlag(true);
     state.fileHandle = handle;
     state.pendingReconnectHandle = null;
-    state.fileName = handle.name || state.fileName;
+    state.fileName = handle.name || info.name || state.fileName;
     state.unlocked = true;
-    state.lastPayload = payload;
+    state.lastPayload = cloneFinancePayload(payload);
+    state.lastSavedJson = canonicalFinanceJson(payload);
+    state.lastKnownModified = info.lastModified;
+    state.lastWriteId = extractWriteIdFromRaw(info.text);
+    state.explicitEmptyAllowed = false;
+    state.lastError = '';
     state.legacyPendingRaw = null;
-    saveHandleInIDB(FIN_HANDLE_KEY, handle);
+    await saveHandleInIDB(FIN_HANDLE_KEY, handle);
+    startFinancePolling();
     if (typeof renderAll === 'function') renderAll();
     updateHeaderPill();
     if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
@@ -428,19 +920,28 @@
       const q = await handle.queryPermission({ mode: 'readwrite' });
       if (q === 'granted') return 'granted';
       if (allowPrompt && typeof handle.requestPermission === 'function') {
-        return handle.requestPermission({ mode: 'readwrite' });
+        try {
+          return await handle.requestPermission({ mode: 'readwrite' });
+        } catch (err) {
+          // SecurityError when called outside user gesture -> treat as prompt needed
+          if (err && err.name === 'SecurityError') return 'prompt';
+          throw err;
+        }
       }
       return q;
     }
     return 'granted';
   }
 
-  async function tryAutoOpenFinanceVault({ allowPermissionPrompt = false, silent = true } = {}) {
-    const key = getSessionMasterKey();
-    if (!key || !canAccessFinance() || state.unlocked) {
-      return { opened: state.unlocked, needsPermission: false };
+  async function tryAutoOpenFinanceVault({ allowPermissionPrompt = false, silent = true, explicitKey = '' } = {}) {
+    const key = (typeof explicitKey === 'string' && explicitKey.length >= 8) ? explicitKey : getSessionMasterKey();
+    if (!key || !canAccessFinance() || isSessionLocked()) {
+      return { opened: false, needsPermission: false };
     }
-    const db = getDb();
+    if (state.unlocked) {
+      return { opened: true, needsPermission: false, fileName: state.fileName };
+    }
+    const db = getLiveDbRef();
     const meta = getMainDbFinanceMeta(db);
     if (meta.fileName) state.fileName = meta.fileName;
     if (meta.filePath) state.filePath = meta.filePath;
@@ -453,7 +954,6 @@
     // 1. Try in-memory handle or remembered file handle in IndexedDB
     let candidate = state.fileHandle || await loadHandleFromIDB(FIN_HANDLE_KEY);
     if (candidate && meta.fileName && candidate.name && candidate.name !== meta.fileName) {
-      // Name differs from main DB's linked Finance Vault; try directory lookup first
       candidate = null;
     }
 
@@ -508,14 +1008,19 @@
   }
 
   function lockFinanceVaultSilently(stripInMemory = true) {
+    stopFinancePolling();
     clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = null;
     const wasUnlocked = state.unlocked;
     state.unlocked = false;
     state.lastPayload = null;
+    state.lastSavedJson = '';
+    state.explicitEmptyAllowed = false;
     state.legacyPendingRaw = null;
-    const db = getDb();
+    const db = getLiveDbRef();
     if (stripInMemory && db && (wasUnlocked || state.splitMode || getMainDbFinanceMeta(db).enabled)) {
       stripFinancialsFromDb(db);
+      if (typeof whatIfDB !== 'undefined' && whatIfDB) stripFinancialsFromDb(whatIfDB);
     }
     closeFinanceVaultModal();
     updateHeaderPill();
@@ -565,7 +1070,7 @@
   function updateHeaderPill() {
     injectStyles();
     let btn = document.getElementById('ppFinanceVaultBtn');
-    const allowed = canAccessFinance();
+    const allowed = canAccessFinance() && !isSessionLocked();
     if (!allowed) {
       if (btn) btn.style.display = 'none';
       return;
@@ -609,7 +1114,7 @@
   }
 
   function openFinanceVaultModal() {
-    if (!canAccessFinance()) {
+    if (!canAccessFinance() || isSessionLocked()) {
       toast('Financial data access is restricted by your Administrator.', 'warning');
       return;
     }
@@ -619,7 +1124,7 @@
     const isAdmin = typeof ppHasAdminAccess === 'function'
       ? ppHasAdminAccess()
       : (typeof ppIsStandardUser !== 'function' || !ppIsStandardUser());
-    const db = getDb();
+    const db = getLiveDbRef();
     const meta = getMainDbFinanceMeta(db);
     if (meta.fileName) state.fileName = meta.fileName;
     if (meta.filePath) state.filePath = meta.filePath;
@@ -629,6 +1134,9 @@
     const costCount = Object.keys(finSummary.projectCosts).length;
     const supportsDirPicker = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
     const hasReconnect = !state.unlocked && Boolean(state.pendingReconnectHandle);
+    const nonLiveNotice = isNonLiveMode()
+      ? `<div class="pp-fin-banner pp-fin-warn"><strong>${ui.demoMode ? 'Demo Sandbox Active' : 'What-If Mode Active'}:</strong> Finance Vault actions apply to your Live Database. Exit ${ui.demoMode ? 'Demo' : 'What-If'} mode before modifying financial files.</div>`
+      : '';
 
     const bg = document.createElement('div');
     bg.id = 'ppFinVaultModalBg';
@@ -645,11 +1153,13 @@
           <button type="button" id="ppFinCloseTopBtn" aria-label="Close Finance Vault" style="border:none;background:transparent;font-size:20px;line-height:1;color:var(--text-muted,#64748b);cursor:pointer;padding:.2rem .4rem;flex-shrink:0">&times;</button>
         </div>
 
+        ${nonLiveNotice}
+
         ${masterKey ? `
           <div class="pp-fin-banner pp-fin-ok">
             <strong>Unified Session Key Active:</strong> Protected automatically with the Administrator AES-256-GCM encryption key — no separate finance password needed.
             ${state.unlocked
-              ? `<div style="margin-top:.25rem">Active financial records: <strong>${rateCount}</strong> dept rate${rateCount === 1 ? '' : 's'}, <strong>${costCount}</strong> project cost budget${costCount === 1 ? '' : 's'}.</div>`
+              ? `<div style="margin-top:.25rem">Active live financial records: <strong>${rateCount}</strong> dept rate${rateCount === 1 ? '' : 's'}, <strong>${costCount}</strong> project cost budget${costCount === 1 ? '' : 's'}${state.fileHandle ? ' · Live sync &amp; polling active' : ' · Manual file export'}.</div>`
               : `<div style="margin-top:.25rem">File stays separate from the main roadmap database (${meta.enabled || state.splitMode ? 'linked in Main DB' : 'ready to split'}).</div>`}
           </div>
         ` : `
@@ -657,6 +1167,12 @@
             <strong>Administrator Encryption Key Not Active:</strong> Set the workspace Administrator password first so both the main database and the separate Finance Vault encrypt seamlessly with the same master key.
           </div>
         `}
+
+        ${state.lastError ? `
+          <div class="pp-fin-banner pp-fin-warn">
+            <strong>Last Sync Notice:</strong> ${esc(state.lastError)}
+          </div>
+        ` : ''}
 
         <div class="pp-fin-banner" style="margin-top:.65rem">
           <div style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--text-faint,#64748b)">
@@ -692,8 +1208,8 @@
             : (!state.unlocked
                 ? `${hasReconnect ? `<button type="button" id="ppFinReconnectBtn" class="pp-fin-btn pp-fin-btn-emerald">Reconnect Remembered File</button>` : ''}
                    <button type="button" id="ppFinUnlockBtn" class="pp-fin-btn ${hasReconnect ? '' : 'pp-fin-btn-emerald'}">Open &amp; Unlock Finance File</button>
-                   ${isAdmin ? `<button type="button" id="ppFinSplitBtn" class="pp-fin-btn pp-fin-btn-primary">Create Separate File &amp; Strip Main DB</button>` : ''}`
-                : `<button type="button" id="ppFinSaveBtn" class="pp-fin-btn pp-fin-btn-primary">Save Finance File Now</button>
+                   ${isAdmin && !isNonLiveMode() ? `<button type="button" id="ppFinSplitBtn" class="pp-fin-btn pp-fin-btn-primary">Create Separate File &amp; Strip Main DB</button>` : ''}`
+                : `${!isNonLiveMode() ? `<button type="button" id="ppFinSaveBtn" class="pp-fin-btn pp-fin-btn-primary">Sync Finance File Now</button>` : ''}
                    <button type="button" id="ppFinLockBtn" class="pp-fin-btn pp-fin-btn-rose">Lock &amp; Clear Financials</button>`)}
           <button type="button" id="ppFinCloseBtn" class="pp-fin-btn" style="margin-left:auto">Close</button>
         </div>
@@ -705,12 +1221,15 @@
     bg.querySelector('#ppFinCloseTopBtn')?.addEventListener('click', closeFinanceVaultModal);
     bg.querySelector('#ppFinCloseBtn')?.addEventListener('click', closeFinanceVaultModal);
 
-    bg.querySelector('#ppFinSavePathBtn')?.addEventListener('click', () => {
+    bg.querySelector('#ppFinSavePathBtn')?.addEventListener('click', async () => {
       const val = (bg.querySelector('#ppFinPathInput')?.value || '').trim().replace(/^["']|["']$/g, '');
       if (!val) return toast('Enter a Finance Vault filename or path.', 'warning');
       const parts = val.split(/[\\/]/).filter(Boolean);
       const fname = parts.length ? parts[parts.length - 1] : val;
       syncFinanceMetaToMainDb(fname, val);
+      if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+        await writeDBToLinkedFile();
+      }
       if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
       toast(`Saved Finance Vault path in main database (${fname}).`, 'success');
     });
@@ -720,6 +1239,11 @@
         const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
         state.dirHandle = dirHandle;
         await saveHandleInIDB(FIN_DIR_KEY, dirHandle);
+        if (!state.unlocked) {
+          state.fileHandle = null;
+          state.pendingReconnectHandle = null;
+          await deleteHandleFromIDB(FIN_HANDLE_KEY);
+        }
         toast(`Linked shared folder "${dirHandle.name}" for automatic Finance Vault lookup.`, 'success');
         if (!state.unlocked && getSessionMasterKey()) {
           const res = await tryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: false });
@@ -749,24 +1273,36 @@
     bg.querySelector('#ppFinSplitBtn')?.addEventListener('click', async () => {
       const key = getSessionMasterKey();
       if (!key) return toast('Enable Administrator encryption first.', 'warning');
+      if (isNonLiveMode()) return toast('Exit Demo/What-If mode before splitting the Finance Vault.', 'warning');
+      if (typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: 'Create Separate Finance Vault & Strip Main DB?',
+          message: 'Department Day Rates and Project Cost Budgets will be written to a separate encrypted Finance Vault file and stripped from the main roadmap database on disk.',
+          confirmLabel: 'Split & Strip Main DB',
+          tone: 'warning',
+        });
+        if (!ok) return;
+      }
       try {
-        const curDb = getDb();
+        const curDb = getLiveDbRef();
         const payload = extractFinancialsFromDb(curDb);
-        const encText = await encryptFinancePayload(payload, key);
+        const writeId = generateFinWriteId();
+        const encText = await encryptFinancePayload(payload, key, writeId);
         const savedName = await saveEncryptedFinanceFile(encText, true);
         const typedPath = (bg.querySelector('#ppFinPathInput')?.value || '').trim();
         saveSplitFlag(true);
         state.unlocked = true;
-        state.lastPayload = payload;
-        // Record Finance Vault path inside the main database BEFORE stripping & saving
+        state.lastPayload = cloneFinancePayload(payload);
+        state.lastSavedJson = canonicalFinanceJson(payload);
+        state.lastWriteId = writeId;
+        state.explicitEmptyAllowed = false;
+        state.lastError = '';
+        // Record Finance Vault path inside the main database & flush through unified write pipeline
         syncFinanceMetaToMainDb(savedName, typedPath && typedPath.endsWith(savedName) ? typedPath : '');
-        const cleanClone = JSON.parse(JSON.stringify(curDb));
-        stripFinancialsFromDb(cleanClone);
-        if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) {
-          const writable = await linkedFileHandle.createWritable();
-          await writable.write(JSON.stringify(cleanClone, null, 2));
-          await writable.close();
+        if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+          await writeDBToLinkedFile({ forceOverwrite: true });
         }
+        startFinancePolling();
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
@@ -782,18 +1318,32 @@
       const key = getSessionMasterKey();
       if (!key) return toast('Sign in with an encrypted session first.', 'warning');
       try {
-        const raw = await pickAndReadFinanceFile();
+        const picked = await pickAndReadFinanceFile();
         try {
-          const payload = await decryptFinancePayload(raw, key);
-          const curDb = getDb();
+          const payload = await decryptFinancePayload(picked.raw, key);
+          if (isSessionLocked() || !canAccessFinance()) return;
+          const curDb = getLiveDbRef();
           mergeFinancialsIntoDb(curDb, payload);
           saveSplitFlag(true);
+          state.fileHandle = picked.handle;
+          state.pendingReconnectHandle = null;
+          state.fileName = picked.fileName || state.fileName;
           state.unlocked = true;
-          state.lastPayload = payload;
+          state.lastPayload = cloneFinancePayload(payload);
+          state.lastSavedJson = canonicalFinanceJson(payload);
+          state.lastKnownModified = picked.lastModified;
+          state.lastWriteId = extractWriteIdFromRaw(picked.raw);
+          state.explicitEmptyAllowed = false;
+          state.lastError = '';
           state.legacyPendingRaw = null;
+          if (picked.handle) await saveHandleInIDB(FIN_HANDLE_KEY, picked.handle);
           if (isAdmin) {
             syncFinanceMetaToMainDb(state.fileName, '');
+            if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+              await writeDBToLinkedFile();
+            }
           }
+          startFinancePolling();
           if (typeof renderAll === 'function') renderAll();
           updateHeaderPill();
           if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
@@ -801,9 +1351,10 @@
           toast(`Finance Vault unlocked & remembered for auto-open (${state.fileName}).`, 'success');
         } catch (_decErr) {
           let parsedEnv = null;
-          try { parsedEnv = JSON.parse(raw); } catch (_e) {}
+          try { parsedEnv = JSON.parse(picked.raw); } catch (_e) {}
           if (parsedEnv && parsedEnv.type === 'pulseplan-finance-vault') {
-            state.legacyPendingRaw = raw;
+            state.legacyPendingRaw = picked.raw;
+            state.legacyPendingPick = picked;
             const wrap = bg.querySelector('#ppFinLegacyMigrateWrap');
             if (wrap) wrap.style.display = 'block';
             bg.querySelector('#ppFinLegacyPwInput')?.focus();
@@ -823,19 +1374,40 @@
       if (!legacyPw || !state.legacyPendingRaw || !key) return;
       try {
         const payload = await decryptFinancePayload(state.legacyPendingRaw, legacyPw);
-        const curDb = getDb();
+        const picked = state.legacyPendingPick || {};
+        const curDb = getLiveDbRef();
         mergeFinancialsIntoDb(curDb, payload);
         saveSplitFlag(true);
+        state.fileHandle = picked.handle || state.fileHandle;
+        state.fileName = picked.fileName || state.fileName;
         state.unlocked = true;
-        state.lastPayload = payload;
+        state.lastPayload = cloneFinancePayload(payload);
+        state.lastSavedJson = canonicalFinanceJson(payload);
+        state.explicitEmptyAllowed = false;
         state.legacyPendingRaw = null;
-        if (isAdmin) syncFinanceMetaToMainDb(state.fileName, '');
+        state.legacyPendingPick = null;
+        if (state.fileHandle) await saveHandleInIDB(FIN_HANDLE_KEY, state.fileHandle);
         if (state.fileHandle && typeof state.fileHandle.createWritable === 'function') {
-          const migratedText = await encryptFinancePayload(payload, key);
+          const writeId = generateFinWriteId();
+          const migratedText = await encryptFinancePayload(payload, key, writeId);
           const writable = await state.fileHandle.createWritable();
           await writable.write(migratedText);
           await writable.close();
+          state.lastWriteId = writeId;
+          try {
+            const f = await state.fileHandle.getFile();
+            state.lastKnownModified = Number(f?.lastModified || Date.now());
+          } catch (_e) {
+            state.lastKnownModified = Date.now();
+          }
         }
+        if (isAdmin) {
+          syncFinanceMetaToMainDb(state.fileName, '');
+          if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+            await writeDBToLinkedFile();
+          }
+        }
+        startFinancePolling();
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
         if (typeof ppRefreshSyncHubUI === 'function') ppRefreshSyncHubUI();
@@ -849,13 +1421,27 @@
     bg.querySelector('#ppFinSaveBtn')?.addEventListener('click', async () => {
       const key = getSessionMasterKey();
       if (!key) return toast('Active encryption key required to save.', 'error');
+      if (isNonLiveMode()) return toast('Exit Demo/What-If mode before saving the Finance Vault.', 'warning');
       try {
-        const curDb = getDb();
+        if (state.fileHandle) {
+          const res = await autoSyncFinanceFile({ immediate: true });
+          if (res?.ok) {
+            if (isAdmin) syncFinanceMetaToMainDb(state.fileName, '');
+            closeFinanceVaultModal();
+            toast(`Synced separate Finance Vault (${state.fileName}).`, 'success');
+          }
+          return;
+        }
+        const curDb = getLiveDbRef();
         const payload = extractFinancialsFromDb(curDb);
-        const encText = await encryptFinancePayload(payload, key);
+        const writeId = generateFinWriteId();
+        const encText = await encryptFinancePayload(payload, key, writeId);
         const savedName = await saveEncryptedFinanceFile(encText, false);
-        state.lastPayload = payload;
+        state.lastPayload = cloneFinancePayload(payload);
+        state.lastSavedJson = canonicalFinanceJson(payload);
+        state.lastWriteId = writeId;
         if (isAdmin) syncFinanceMetaToMainDb(savedName, '');
+        startFinancePolling();
         closeFinanceVaultModal();
         toast(`Updated separate Finance Vault (${savedName}).`, 'success');
       } catch (err) {
@@ -865,9 +1451,19 @@
     });
 
     bg.querySelector('#ppFinLockBtn')?.addEventListener('click', async () => {
+      if (typeof ppConfirmAction === 'function') {
+        const ok = await ppConfirmAction({
+          title: 'Lock Finance Vault & Clear Financials?',
+          message: 'Any unsaved financial edits will first be synced to the Finance Vault file, then Day Rates and Project Cost Budgets will be cleared from active memory until unlocked again.',
+          confirmLabel: 'Lock & Clear Financials',
+          tone: 'danger',
+        });
+        if (!ok) return;
+      }
       try {
-        state.unlocked = false;
-        state.lastPayload = null;
+        await flushFinanceVaultIfDirty();
+        lockFinanceVaultSilently(true);
+        if (typeof clearUndoHistory === 'function') clearUndoHistory();
         await writeStrippedMainFileNow();
         if (typeof renderAll === 'function') renderAll();
         updateHeaderPill();
@@ -880,22 +1476,45 @@
     });
   }
 
-  async function reencryptFinanceVaultNow(explicitKey) {
+  async function reencryptFinanceVaultNow(explicitKey, previousKey = '') {
     const key = (typeof explicitKey === 'string' && explicitKey.length >= 8) ? explicitKey : getSessionMasterKey();
-    if (!state.unlocked || !key) {
-      return { unlocked: state.unlocked, reencryptedOnDisk: false, needsManualDownload: false, fileName: state.fileName };
+    const meta = getMainDbFinanceMeta(getLiveDbRef());
+    if (!key) {
+      return { unlocked: state.unlocked, reencryptedOnDisk: false, needsManualDownload: false, needsAttention: Boolean(meta.enabled), fileName: state.fileName };
     }
-    const db = getDb();
+    // If Finance Vault is linked but currently locked, attempt seamless open with previousKey before rotating!
+    if (!state.unlocked && (meta.enabled || state.splitMode) && previousKey) {
+      await tryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: true, explicitKey: previousKey });
+    }
+    if (!state.unlocked) {
+      return {
+        unlocked: false,
+        reencryptedOnDisk: false,
+        needsManualDownload: false,
+        needsAttention: Boolean(meta.enabled || state.splitMode),
+        fileName: meta.fileName || state.fileName,
+      };
+    }
+    const db = getLiveDbRef();
     const payload = extractFinancialsFromDb(db);
-    state.lastPayload = payload;
+    state.lastPayload = cloneFinancePayload(payload);
+    state.lastSavedJson = canonicalFinanceJson(payload);
     if (state.fileHandle && typeof state.fileHandle.createWritable === 'function') {
-      const encText = await encryptFinancePayload(payload, key);
-      const writable = await state.fileHandle.createWritable();
+      const writeId = generateFinWriteId();
+      const encText = await encryptFinancePayload(payload, key, writeId);
+      const writable = await withFinTimeout(state.fileHandle.createWritable(), FIN_IO_TIMEOUT_MS, 'Finance Vault re-encryption timed out');
       await writable.write(encText);
       await writable.close();
-      return { unlocked: true, reencryptedOnDisk: true, needsManualDownload: false, fileName: state.fileName };
+      state.lastWriteId = writeId;
+      try {
+        const f = await state.fileHandle.getFile();
+        state.lastKnownModified = Number(f?.lastModified || Date.now());
+      } catch (_e) {
+        state.lastKnownModified = Date.now();
+      }
+      return { unlocked: true, reencryptedOnDisk: true, needsManualDownload: false, needsAttention: false, fileName: state.fileName };
     }
-    return { unlocked: true, reencryptedOnDisk: false, needsManualDownload: true, fileName: state.fileName };
+    return { unlocked: true, reencryptedOnDisk: false, needsManualDownload: true, needsAttention: true, fileName: state.fileName };
   }
 
   function getFinanceVaultStatus() {
@@ -913,6 +1532,8 @@
       hasPendingReconnect: Boolean(!state.unlocked && state.pendingReconnectHandle),
       hasSessionKey: Boolean(getSessionMasterKey()),
       canAccess: canAccessFinance(),
+      isPolling: Boolean(state.pollTimer),
+      lastError: state.lastError,
     };
   }
 
@@ -932,6 +1553,13 @@
     window.ppReencryptFinanceVaultNow = reencryptFinanceVaultNow;
     window.ppTryAutoOpenFinanceVault = tryAutoOpenFinanceVault;
     window.ppReconnectFinanceVault = reconnectFinanceVault;
+    window.ppOnMainDbSavedForFinance = onMainDbSavedForFinance;
+    window.ppOnMainDbReloadedForFinance = onMainDbReloadedForFinance;
+    window.ppReapplyFinanceOverlayAfterMainReload = reapplyFinanceOverlayAfterMainReload;
+    window.ppGetStrippedCloneForMainSync = getStrippedCloneForMainSync;
+    window.ppFlushFinanceVaultIfDirty = flushFinanceVaultIfDirty;
+    window.ppResetFinanceVaultForDbSwitch = resetFinanceVaultForDbSwitch;
+    window.ppPollFinanceVaultNow = pollFinanceVaultNow;
   }
 
   if (typeof globalThis !== 'undefined') {
@@ -940,13 +1568,22 @@
       decryptFinancePayload,
       extractFinancialsFromDb,
       mergeFinancialsIntoDb,
+      mergeFinancePayloadsThreeWay,
       stripFinancialsFromDb,
+      getStrippedCloneForMainSync,
       getFinanceVaultStatus,
       lockFinanceVaultSilently,
       reencryptFinanceVaultNow,
       getMainDbFinanceMeta,
       syncFinanceMetaToMainDb,
       tryAutoOpenFinanceVault,
+      autoSyncFinanceFile,
+      pollFinanceVaultNow,
+      onMainDbSavedForFinance,
+      onMainDbReloadedForFinance,
+      reapplyFinanceOverlayAfterMainReload,
+      flushFinanceVaultIfDirty,
+      resetFinanceVaultForDbSwitch,
       setTestHandles: ({ fileHandle = null, dirHandle = null } = {}) => {
         state.fileHandle = fileHandle;
         state.dirHandle = dirHandle;

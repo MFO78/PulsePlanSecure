@@ -50,6 +50,7 @@
     let ppPassphraseResolver = null;
     let ppAutoLockMinutes = 30;
     let ppAutoLockTimer = null;
+    let ppLastActivityAt = Date.now();
     let ppOrigFileText = null;
 
     function ppBytesToBase64(bytes) {
@@ -137,15 +138,22 @@
 
     function ppBuildOuterAuthMetadata(dbObj) {
       const ac = dbObj && typeof dbObj === 'object' ? dbObj.accessControl : null;
-      if (!ac || !Array.isArray(ac.users)) return null;
-      const activeUsers = ac.users.filter(u =>
+      if (!ac || typeof ac !== 'object') return null;
+      const allUsers = Array.isArray(ac.users) ? ac.users : [];
+      const adminName = String(ac.adminName || 'Administrator').trim() || 'Administrator';
+      const activeUsers = allUsers.filter(u =>
         u && u.id && u.name && u.enabled !== false && !u.needsAdminKeyReset &&
         u.keySlot && u.keySlot.salt && u.keySlot.iv && u.keySlot.wrapped
       );
-      if (activeUsers.length === 0) return null;
+      const resetRequiredUsers = allUsers.filter(u =>
+        u && u.id && u.name && u.enabled !== false && (u.needsAdminKeyReset || !u.keySlot)
+      );
+      if (activeUsers.length === 0) {
+        return null;
+      }
       return {
         version: 1,
-        adminName: String(ac.adminName || 'Administrator').trim() || 'Administrator',
+        adminName,
         users: activeUsers.map(u => ({
           id: String(u.id),
           name: String(u.name),
@@ -159,6 +167,12 @@
             iv: String(u.keySlot.iv),
             wrapped: String(u.keySlot.wrapped),
           },
+        })),
+        resetRequiredUsers: resetRequiredUsers.map(u => ({
+          id: String(u.id),
+          name: String(u.name),
+          roleTitle: String(u.roleTitle || ''),
+          isAdmin: Boolean(u.isAdmin),
         })),
       };
     }
@@ -236,6 +250,9 @@
       if (!authUser || authUser.enabled === false) {
         throw new Error('This user account has been disabled or removed by the Administrator.');
       }
+      if (authUser.needsAdminKeyReset) {
+        throw new Error('Administrator reset your workspace key. Ask your Administrator for a new temporary password.');
+      }
       return { plainJson, masterPass, authRole: 'user', userRecord: authUser };
     }
 
@@ -256,7 +273,7 @@
       const bar = document.getElementById('ppStrengthBar');
       const lbl = document.getElementById('ppStrengthLabel');
       if (!bar || !lbl) return;
-      const st = ppEvaluatePassphraseStrength(pass);
+      const st = ppEvaluatePassphraseStrength(String(pass || '').trim());
       bar.style.width = st.pct + '%';
       bar.className = 'h-full rounded-full transition-all ' + st.color;
       lbl.textContent = st.label;
@@ -264,30 +281,45 @@
     }
 
     function ppGetCurrentDbRef() {
-      if (typeof getActiveDB === 'function') return getActiveDB();
-      if (typeof ui !== 'undefined' && ui.whatIfMode && typeof whatIfDB !== 'undefined' && whatIfDB) return whatIfDB;
-      if (typeof ui !== 'undefined' && ui.demoMode && typeof demoDB !== 'undefined' && demoDB) return demoDB;
+      // Auth & encryption operations always target liveDB (never ephemeral What-If or Demo sandboxes)
       if (typeof liveDB !== 'undefined' && liveDB) return liveDB;
+      if (typeof getActiveDB === 'function') return getActiveDB();
       return null;
     }
 
+    function ppTriggerInactivityLock() {
+      if (typeof ppSignOutAndLockSession === 'function') {
+        ppSignOutAndLockSession('inactivity');
+        return;
+      }
+      ppSyncPassphrase = '';
+      if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('inactivity');
+      updateSyncEncryptionBadges();
+      if (typeof showToast === 'function') {
+        showToast('Session locked after inactivity. Sign in again to read or write encrypted files.', 'info');
+      }
+    }
+
+    function ppCheckWallClockInactivityLock() {
+      if (!ppSyncPassphrase || ppAutoLockMinutes <= 0) return false;
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return false;
+      const elapsed = Date.now() - (ppLastActivityAt || Date.now());
+      if (elapsed >= ppAutoLockMinutes * 60 * 1000) {
+        ppTriggerInactivityLock();
+        return true;
+      }
+      return false;
+    }
+
     function resetPassphraseAutoLock() {
+      ppLastActivityAt = Date.now();
       if (ppAutoLockTimer) {
         clearTimeout(ppAutoLockTimer);
         ppAutoLockTimer = null;
       }
       if (ppSyncPassphrase && ppAutoLockMinutes > 0) {
         ppAutoLockTimer = setTimeout(() => {
-          if (typeof ppSignOutAndLockSession === 'function') {
-            ppSignOutAndLockSession('inactivity');
-            return;
-          }
-          ppSyncPassphrase = '';
-          if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('inactivity');
-          updateSyncEncryptionBadges();
-          if (typeof showToast === 'function') {
-            showToast('Session locked after inactivity. Sign in again to read or write encrypted files.', 'info');
-          }
+          ppTriggerInactivityLock();
         }, ppAutoLockMinutes * 60 * 1000);
       }
     }
@@ -452,6 +484,9 @@
           const shareFile = new File([jsonText], filename, { type: 'application/json' });
           if (navigator.canShare({ files: [shareFile] })) {
             await navigator.share({ files: [shareFile], title: 'PulsePlan Encrypted JSON' });
+            if (typeof recordDumpEvent === 'function') {
+              recordDumpEvent('JSON', filename, jsonText.length, `AES-256-GCM · ${(dbObj.departments || []).length} depts, ${(dbObj.projects || []).length} projs`);
+            }
             if (typeof showToast === 'function') showToast('Encrypted JSON shared (AES-256-GCM).', 'success');
             return;
           }
@@ -469,6 +504,9 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      if (typeof recordDumpEvent === 'function') {
+        recordDumpEvent('JSON', filename, jsonText.length, `AES-256-GCM · ${(dbObj.departments || []).length} depts, ${(dbObj.projects || []).length} projs`);
+      }
       if (typeof showToast === 'function') {
         showToast('Encrypted JSON saved (AES-256-GCM).', 'success');
       }
@@ -546,13 +584,25 @@
       if (typeof FileSystemFileHandle !== 'undefined' && FileSystemFileHandle.prototype && FileSystemFileHandle.prototype.createWritable && !FileSystemFileHandle.prototype.__ppCryptoWrapped) {
         const origCreateWritable = FileSystemFileHandle.prototype.createWritable;
         FileSystemFileHandle.prototype.createWritable = async function (...args) {
+          if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) {
+            throw new Error('Refused file write while workspace session is locked.');
+          }
           const writable = await origCreateWritable.apply(this, args);
           const origWrite = writable.write.bind(writable);
           writable.write = async function (data) {
-            if (ppSyncPassphrase && typeof data === 'string' && data.trim().startsWith('{')) {
+            if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) {
+              throw new Error('Refused file write while workspace session is locked.');
+            }
+            let rawStr = null;
+            if (typeof data === 'string') {
+              rawStr = data;
+            } else if (typeof Blob !== 'undefined' && data instanceof Blob && (!data.type || data.type.includes('json'))) {
+              try { rawStr = await data.text(); } catch (_e) {}
+            }
+            if (ppSyncPassphrase && typeof rawStr === 'string' && rawStr.trim().startsWith('{')) {
               try {
-                const parsed = JSON.parse(data);
-                if (parsed && parsed.format !== PP_ENC_FORMAT && parsed.type !== 'pulseplan-finance-vault' && (parsed.departments || parsed.projects)) {
+                const parsed = JSON.parse(rawStr);
+                if (parsed && parsed.format !== PP_ENC_FORMAT && parsed.type !== 'pulseplan-finance-vault' && parsed.type !== 'pulseplan-pbs' && (parsed.departments || parsed.projects)) {
                   resetPassphraseAutoLock();
                   const envelope = await encryptPulsePlanData(parsed, ppSyncPassphrase);
                   return origWrite(JSON.stringify(envelope, null, 2));
@@ -832,6 +882,8 @@
           const val = (document.getElementById('ppEncryptPassphrase')?.value || '').trim();
           const confVal = (document.getElementById('ppEncryptPassphraseConfirm')?.value || '').trim();
           const isDecryptPrompt = Boolean(ppPassphraseResolver);
+          const saveBtn = document.getElementById('ppEncryptSaveBtn');
+          const origBtnText = saveBtn ? saveBtn.textContent : '';
           const timeoutVal = parseInt(document.getElementById('ppEncryptAutoLock')?.value || '30', 10);
           ppAutoLockMinutes = isNaN(timeoutVal) ? 30 : timeoutVal;
 
@@ -854,64 +906,90 @@
             return;
           }
 
-          const prevPass = ppSyncPassphrase;
-          if (!isDecryptPrompt && prevPass) {
-            if (!curVal) {
-              setEncryptStatus('Enter your current Administrator password to change it.', true);
-              return;
-            }
-            if (curVal !== prevPass) {
-              setEncryptStatus('Current Administrator password is incorrect.', true);
-              return;
-            }
-            if (val === prevPass) {
-              setEncryptStatus('New Administrator password must be different from your current password.', true);
-              return;
-            }
-            try {
-              if (typeof ppChangeMainAdminPassword === 'function') {
-                const res = await ppChangeMainAdminPassword({ currentPassword: curVal, newPassword: val });
-                setEncryptStatus(
-                  res.resetUserCount > 0
-                    ? `Main Administrator password updated. ${res.resetUserCount} team user(s) flagged for password reset.`
-                    : 'Main Administrator password updated and workspace re-encrypted.',
-                  false
-                );
-                setTimeout(() => closeAndResolve(''), 550);
-                return;
-              }
-            } catch (err) {
-              setEncryptStatus(err?.message || 'Could not update Administrator password.', true);
-              return;
-            }
+          // For decryption prompts, resolve WITHOUT mutating ppSyncPassphrase until caller confirms decryption succeeds (fixes H5)
+          if (isDecryptPrompt) {
+            closeAndResolve(val);
+            return;
           }
 
-          ppSyncPassphrase = val;
-          resetPassphraseAutoLock();
-          if (!isDecryptPrompt) {
+          if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Encrypting...';
+          }
+
+          try {
+            const prevPass = ppSyncPassphrase;
+            if (prevPass) {
+              if (!curVal) {
+                setEncryptStatus('Enter your current Administrator password to change it.', true);
+                return;
+              }
+              if (curVal !== prevPass) {
+                setEncryptStatus('Current Administrator password is incorrect.', true);
+                return;
+              }
+              if (val === prevPass) {
+                setEncryptStatus('New Administrator password must be different from your current password.', true);
+                return;
+              }
+              if (typeof ppChangeMainAdminPassword === 'function') {
+                const res = await ppChangeMainAdminPassword({ currentPassword: curVal, newPassword: val });
+                const parts = ['Main Administrator password updated.'];
+                if (res.financeResult?.reencryptedOnDisk) parts.push('Finance Vault re-encrypted.');
+                else if (res.financeResult?.needsAttention) parts.push('Warning: Separate Finance Vault is locked and still uses the old password.');
+                if (res.pbsResult?.reencryptedCount > 0) parts.push(`${res.pbsResult.reencryptedCount} PBS file(s) re-encrypted.`);
+                else if (res.pbsResult?.needsAttention) parts.push('Warning: Linked PBS folder could not be re-encrypted automatically.');
+                if (res.resetUserCount > 0) parts.push(`${res.resetUserCount} team user(s) flagged for password reset.`);
+                setEncryptStatus(parts.join(' '), false);
+                if (typeof showToast === 'function') showToast(parts.join(' '), 'success');
+                setTimeout(() => {
+                  closeAndResolve('');
+                  if (res.resetUserCount > 0 && typeof ppOpenTeamAccessModal === 'function') {
+                    ppOpenTeamAccessModal();
+                  }
+                }, 600);
+                return;
+              }
+            }
+
+            ppSyncPassphrase = val;
+            resetPassphraseAutoLock();
             const curDb = ppGetCurrentDbRef();
-            if (prevPass && prevPass !== val && Array.isArray(curDb?.accessControl?.users) && curDb.accessControl.users.length > 0) {
+            // If re-enabling encryption on a DB that already has team users, flag existing user keySlots for reset so stale slots never masquerade as active (H2)
+            if (Array.isArray(curDb?.accessControl?.users) && curDb.accessControl.users.length > 0) {
               curDb.accessControl.users.forEach(u => {
-                if (u) {
+                if (u && (!prevPass || prevPass !== val)) {
                   u.keySlot = null;
                   u.needsAdminKeyReset = true;
                   u.mustChangePassword = true;
                 }
               });
             }
-            if (typeof touchDBAndSave === 'function') touchDBAndSave();
             if (typeof ppApplyAuthenticatedSession === 'function') {
               ppApplyAuthenticatedSession('admin', null, curDb?.accessControl?.adminName);
             }
-          }
-          updateSyncEncryptionBadges();
-          if (ppPassphraseResolver) {
-            closeAndResolve(val);
-          } else {
+            if (typeof ppMarkSecureSessionFlag === 'function') {
+              ppMarkSecureSessionFlag(typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name ? linkedFileHandle.name : '', true);
+            }
+            if (typeof touchDBAndSave === 'function') touchDBAndSave();
+            if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+              try { await writeDBToLinkedFile({ forceOverwrite: true }); } catch (_e) {}
+            }
+            if (typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+              window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: true }).catch(() => {});
+            }
+            updateSyncEncryptionBadges();
             setEncryptStatus('Administrator AES-256-GCM encryption enabled. Synced files, backups, and Finance Vault now encrypt automatically.', false);
             if (typeof showToast === 'function') showToast('Administrator AES-256-GCM encryption enabled.', 'success');
             if (typeof renderAll === 'function') renderAll();
             setTimeout(() => closeAndResolve(''), 550);
+          } catch (err) {
+            setEncryptStatus(err?.message || 'Could not update Administrator encryption settings.', true);
+          } finally {
+            if (saveBtn) {
+              saveBtn.disabled = false;
+              saveBtn.textContent = origBtnText || 'Save Changes';
+            }
           }
         };
 
@@ -920,13 +998,32 @@
           handleSave();
         });
 
-        document.getElementById('ppEncryptDisableBtn')?.addEventListener('click', () => {
+        document.getElementById('ppEncryptDisableBtn')?.addEventListener('click', async () => {
+          const curPass = ppSyncPassphrase;
+          const ok = typeof ppConfirmWithPassword === 'function'
+            ? await ppConfirmWithPassword({
+                title: 'Disable AES-256-GCM Encryption?',
+                message: 'Disabling encryption turns off multi-user access protection and writes future saves as standard unencrypted plaintext JSON. Enter the Main Administrator password to confirm.',
+                confirmLabel: 'Disable Encryption',
+                expectedPassword: curPass,
+                requireWord: 'DISABLE',
+              })
+            : (typeof ppConfirmAction === 'function'
+                ? await ppConfirmAction({
+                    title: 'Disable Encryption?',
+                    message: 'Future saves will write unencrypted plaintext JSON.',
+                    confirmLabel: 'Disable Encryption',
+                  })
+                : true);
+          if (!ok) return;
           ppSyncPassphrase = '';
           resetPassphraseAutoLock();
+          if (typeof ppClearSecureSessionFlag === 'function') ppClearSecureSessionFlag();
           if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('disabled');
           updateSyncEncryptionBadges();
-          setEncryptStatus('Encryption disabled for this session. New saves will write standard JSON.', false);
+          if (typeof showToast === 'function') showToast('Encryption disabled. Future saves will write standard plaintext JSON.', 'warning');
           if (typeof renderAll === 'function') renderAll();
+          closeAndResolve('');
         });
       }
 

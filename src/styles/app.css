@@ -2152,3 +2152,58 @@
       #modalCard.max-w-3xl { max-width: min(56rem, calc(100vw - 1.5rem)) !important; }
     }
 
+    /* Stacked Top-Layer Confirmation & Password Prompt Dialog */
+    dialog#ppConfirmDialog {
+      padding: 0;
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      border-radius: 1rem;
+      background: var(--surface-card, #ffffff);
+      color: var(--text-primary, #0f172a);
+      max-width: min(26rem, calc(100vw - 1.5rem));
+      width: 100%;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+      margin: auto;
+      overflow: hidden;
+    }
+    dialog#ppConfirmDialog::backdrop {
+      background: rgba(15, 23, 42, 0.56);
+      backdrop-filter: blur(3px);
+    }
+    html.dark dialog#ppConfirmDialog {
+      background: #1e293b;
+      color: #f1f5f9;
+      border-color: #334155;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    }
+    html.dark dialog#ppConfirmDialog .text-slate-900 { color: #f8fafc !important; }
+    html.dark dialog#ppConfirmDialog .text-slate-700 { color: #cbd5e1 !important; }
+    html.dark dialog#ppConfirmDialog .text-slate-600 { color: #cbd5e1 !important; }
+    html.dark dialog#ppConfirmDialog .border-slate-200 { border-color: #334155 !important; }
+    html.dark dialog#ppConfirmDialog .border-slate-100 { border-color: #334155 !important; }
+    html.dark dialog#ppConfirmDialog input {
+      background: #0f172a !important;
+      color: #f8fafc !important;
+      border-color: #475569 !important;
+    }
+
+    /* User Management Disabled & Inline Edit Panel */
+    .pp-user-card.is-disabled {
+      opacity: 0.72;
+      background: var(--surface-subtle, #f8fafc);
+      border-style: dashed;
+    }
+    .pp-user-edit-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      padding: 0.7rem 0.8rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border-subtle, #cbd5e1);
+      background: var(--surface-subtle, #f8fafc);
+    }
+    html.dark .pp-user-edit-panel {
+      background: rgba(15, 23, 42, 0.55);
+      border-color: #334155;
+    }
+
+

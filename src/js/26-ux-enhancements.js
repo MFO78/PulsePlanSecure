@@ -252,36 +252,7 @@
     });
   }
 
-  /* ---------- 5. Sync & Snapshots: Password-Gated Clear DB + Clear Plan (Keep Setup & Data) ---------- */
-  function verifyClearPassword(actionLabel) {
-    const hasAdmin = typeof ppHasAdminAccess === 'function'
-      ? ppHasAdminAccess()
-      : !(typeof ppIsStandardUser === 'function' && ppIsStandardUser());
-    if (!hasAdmin) {
-      toast('Administrator privileges are required for this action.', 'error');
-      return false;
-    }
-    const isDelegated = typeof ppIsDelegatedAdmin === 'function' && ppIsDelegatedAdmin();
-    const expected = (!isDelegated && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase) ? ppSyncPassphrase : '';
-    const promptMsg = expected
-      ? `Enter the Administrator Password to confirm: ${actionLabel}`
-      : `Type CLEAR to confirm: ${actionLabel}`;
-    const entered = typeof window !== 'undefined' && typeof window.prompt === 'function' ? window.prompt(promptMsg, '') : null;
-    if (entered === null) return false;
-    if (expected) {
-      if (entered !== expected) {
-        toast('Incorrect Administrator password. Clear operation cancelled.', 'error');
-        return false;
-      }
-      return true;
-    }
-    if (entered.trim().toUpperCase() !== 'CLEAR') {
-      toast('Confirmation text did not match CLEAR. Operation cancelled.', 'error');
-      return false;
-    }
-    return true;
-  }
-
+  /* ---------- 5. Sync & Snapshots: Masked Password-Gated Clear Plan (Keep Setup & Data) ---------- */
   function enhanceSyncClearButtons() {
     const syncTab = document.getElementById('tab-sync');
     if (!syncTab) return;
@@ -295,16 +266,6 @@
     if (!clearBtn) return;
     clearBtn.classList.toggle('hidden', isRestricted);
 
-    if (!clearBtn.__ppPwGuarded) {
-      clearBtn.__ppPwGuarded = true;
-      clearBtn.addEventListener('click', (ev) => {
-        if (!verifyClearPassword('Clear Current DB (deletes EVERYTHING)')) {
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-        }
-      }, true);
-    }
-
     let clearPlanBtn = document.getElementById('ppClearPlanOnlyBtn');
     if (!clearPlanBtn && clearBtn.parentElement) {
       clearPlanBtn = document.createElement('button');
@@ -312,19 +273,40 @@
       clearPlanBtn.type = 'button';
       clearPlanBtn.className = 'px-3 py-1.5 rounded-xl border border-amber-200 bg-white hover:bg-amber-50 text-amber-800 text-xs font-semibold transition cursor-pointer';
       clearPlanBtn.textContent = 'Clear Plan (Keep Setup & Data)';
-      clearPlanBtn.title = 'Clears allocations, overrides, notes, milestones, snapshots & logs while keeping Departments, Projects & Settings';
-      clearPlanBtn.addEventListener('click', () => {
-        if (!verifyClearPassword('Clear Plan Only (keeps Setup & Data)')) return;
+      clearPlanBtn.title = 'Clears allocations, overrides, notes, milestones, snapshots & logs while keeping Departments, Projects, Users & Settings';
+      clearPlanBtn.addEventListener('click', async () => {
+        const hasAdmin = typeof ppHasAdminAccess === 'function'
+          ? ppHasAdminAccess()
+          : !(typeof ppIsStandardUser === 'function' && ppIsStandardUser());
+        if (!hasAdmin) {
+          toast('Administrator privileges are required for this action.', 'error');
+          return;
+        }
+        const isDelegated = typeof ppIsDelegatedAdmin === 'function' && ppIsDelegatedAdmin();
+        const expectedPass = (!isDelegated && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8) ? ppSyncPassphrase : '';
+        const ok = typeof ppConfirmWithPassword === 'function'
+          ? await ppConfirmWithPassword({
+              title: 'Clear Plan Only (Keep Setup & Data)',
+              message: 'This will permanently clear all roadmap allocations, variable capacity overrides, notes, milestones, snapshots, and change log entries.\n\nYour Departments, Projects, People Directory, Team Users, and Settings will be preserved.',
+              confirmLabel: 'Clear Plan Only',
+              expectedPassword: expectedPass,
+              requireWord: 'CLEAR',
+            })
+          : false;
+        if (!ok) return;
+
         const db = getDb();
+        if (typeof pushUndoState === 'function') pushUndoState('Clear Plan Only');
         db.allocations = {};
         db.capacityOverrides = {};
         db.comments = {};
         db.milestones = [];
         db.snapshots = [];
         db.changeLog = [];
-        if (typeof saveLiveDB === 'function') saveLiveDB();
+        if (typeof recordChange === 'function') recordChange('Plan', 'Cleared roadmap plan, notes, milestones & snapshots (kept Setup & Data)');
+        else if (typeof touchDBAndSave === 'function') touchDBAndSave();
         if (typeof renderAll === 'function') renderAll();
-        toast('Cleared roadmap plan, notes, milestones & snapshots while preserving Setup & Data.', 'success');
+        toast('Cleared roadmap plan, notes, milestones & snapshots while preserving Setup & Data.', 'success', { undoable: true });
       });
       clearBtn.parentElement.insertBefore(clearPlanBtn, clearBtn);
     }

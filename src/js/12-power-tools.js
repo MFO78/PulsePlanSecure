@@ -535,16 +535,23 @@
       if (!deptId || pks.length === 0) return;
 
       const dept = db.departments.find(d => d.id === deptId);
-      pushUndoState(`Reset ${dept?.name || deptId} capacity`);
-      pks.forEach(pk => {
-        const wks = effectiveUnit === 'month' ? getWeeksInMonth(pk) : [pk];
-        wks.forEach(wk => { delete db.capacityOverrides[`${deptId}::${wk}`]; });
-      });
       const spanTxt = pks.length > 1 ? `${pks[0]} → ${pks[pks.length - 1]}` : pks[0];
-      recordChange('Capacity', `Reset ${dept?.name || deptId} capacity override (${spanTxt}) back to base`);
-      closeModal();
-      renderAll();
-      showToast(`Reset ${dept?.code || deptId} capacity to base ${dept?.defaultCapacity ?? ''} FTE`, 'info', { undoable: true });
+      openConfirmModal(
+        'Reset Capacity Overrides',
+        `Delete custom capacity overrides for "${dept?.name || deptId}" across ${spanTxt} and revert to base ${dept?.defaultCapacity ?? ''} FTE?`,
+        'Reset to Base',
+        () => {
+          pushUndoState(`Reset ${dept?.name || deptId} capacity`);
+          pks.forEach(pk => {
+            const wks = effectiveUnit === 'month' ? getWeeksInMonth(pk) : [pk];
+            wks.forEach(wk => { delete db.capacityOverrides[`${deptId}::${wk}`]; });
+          });
+          recordChange('Capacity', `Reset ${dept?.name || deptId} capacity override (${spanTxt}) back to base`);
+          closeModal();
+          renderAll();
+          showToast(`Reset ${dept?.code || deptId} capacity to base ${dept?.defaultCapacity ?? ''} FTE`, 'info', { undoable: true });
+        }
+      );
     }
 
     /* ---------- 14C. What-If Scenario Mode (Clone Live DB Safely) ---------- */
@@ -583,6 +590,10 @@
     }
 
     function enterWhatIfMode() {
+      if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+        showToast('What-If Sandbox is restricted to Administrators.', 'warning');
+        return;
+      }
       if (!liveDB) return;
       ui.demoMode = false;
       whatIfDB = JSON.parse(JSON.stringify(liveDB));
@@ -600,29 +611,55 @@
       showToast('What-If scenario discarded — Live DB restored', 'info');
     }
 
-    function commitWhatIfToLive() {
+    function confirmDiscardWhatIfMode() {
+      if (!ui.whatIfMode || !whatIfDB) {
+        discardWhatIfMode();
+        return;
+      }
+      openConfirmModal(
+        'Discard What-If Sandbox?',
+        'Exit What-If Mode and permanently discard all temporary sandbox edits? Your Live DB will remain unchanged.',
+        'Discard Sandbox',
+        () => discardWhatIfMode()
+      );
+    }
+
+    function commitWhatIfToLive({ skipConfirm = false } = {}) {
       if (!whatIfDB || !ui.whatIfMode) return;
+      const doCommit = () => {
+        const prevLiveSnapshot = captureUndoSnapshot(liveDB);
+        const preservedAccessControl = liveDB && liveDB.accessControl ? JSON.parse(JSON.stringify(liveDB.accessControl)) : null;
+        const preservedFinanceVault = liveDB && liveDB.settings?.financeVault ? JSON.parse(JSON.stringify(liveDB.settings.financeVault)) : null;
+        const preservedPbsFolder = liveDB && liveDB.settings?.pbsFolder ? JSON.parse(JSON.stringify(liveDB.settings.pbsFolder)) : null;
+        liveDB = JSON.parse(JSON.stringify(whatIfDB));
+        if (preservedAccessControl) liveDB.accessControl = preservedAccessControl;
+        if (!liveDB.settings) liveDB.settings = {};
+        if (preservedFinanceVault) liveDB.settings.financeVault = preservedFinanceVault;
+        if (preservedPbsFolder) liveDB.settings.pbsFolder = preservedPbsFolder;
+        ui.whatIfMode = false;
+        whatIfDB = null;
+        clearUndoHistory();
+        _undoStack.push({ label: 'Commit What-If Scenario', data: prevLiveSnapshot });
+        recordChange('Scenario', 'Committed What-If sandbox scenario to Live DB');
+        renderAll();
+        showToast('What-If scenario committed to Live DB', 'success', { undoable: true });
+      };
+      if (skipConfirm) {
+        doCommit();
+        return;
+      }
       openConfirmModal(
         'Commit What-If Scenario to Live DB',
         'Apply all changes from your What-If sandbox to the Live Company Database (and sync to any linked shared file)?',
         'Commit to Live',
-        () => {
-          const prevLiveSnapshot = captureUndoSnapshot(liveDB);
-          liveDB = JSON.parse(JSON.stringify(whatIfDB));
-          ui.whatIfMode = false;
-          whatIfDB = null;
-          clearUndoHistory();
-          _undoStack.push({ label: 'Commit What-If Scenario', data: prevLiveSnapshot });
-          recordChange('Scenario', 'Committed What-If sandbox scenario to Live DB');
-          renderAll();
-          showToast('What-If scenario committed to Live DB', 'success', { undoable: true });
-        }
+        doCommit,
+        { tone: 'primary' }
       );
     }
 
     function toggleWhatIfMode() {
       if (ui.whatIfMode && whatIfDB) {
-        discardWhatIfMode();
+        confirmDiscardWhatIfMode();
       } else {
         enterWhatIfMode();
       }
@@ -741,10 +778,21 @@
     }
 
     function deleteSavedViewPreset(id) {
-      const list = getSavedViews().filter(v => v.id !== id);
-      persistSavedViews(list);
-      openSavedViewsModal();
-      renderAll();
+      const views = getSavedViews();
+      const target = views.find(v => v.id === id);
+      if (!target) return;
+      openConfirmModal(
+        'Delete Saved View',
+        `Permanently delete saved view preset "${target.name}"?`,
+        'Delete View',
+        () => {
+          const list = getSavedViews().filter(v => v.id !== id);
+          persistSavedViews(list);
+          openSavedViewsModal();
+          renderAll();
+          showToast(`Deleted saved view "${target.name}"`, 'info');
+        }
+      );
     }
 
     /* ---------- 14E. Print Slide Export (Always Light Mode, Full-Width Fit) ---------- */

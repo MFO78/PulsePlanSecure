@@ -6,6 +6,7 @@
       DEMO_DB: 'pulseplan_demo_db_v2',
       UI_PREFS: 'pulseplan_ui_prefs_v2',
       SAVED_VIEWS: 'pulseplan_saved_views_v1',
+      SECURE_MODE: 'pulseplan_secure_mode_v1',
     };
 
     const IDB_NAME = 'pulseplan_handles_db';
@@ -123,6 +124,20 @@
       _debugLogEntries.length = 0;
       ppDebug('INFO', 'Debug log cleared by user');
       if (typeof renderSyncDebugPanel === 'function') renderSyncDebugPanel();
+    }
+
+    function confirmClearDebugLog() {
+      if (_debugLogEntries.length === 0) return;
+      if (typeof openConfirmModal === 'function') {
+        openConfirmModal(
+          'Clear Debug Log',
+          `Clear all ${_debugLogEntries.length} diagnostic log entries from this session?`,
+          'Clear Log',
+          () => clearDebugLog()
+        );
+      } else {
+        clearDebugLog();
+      }
     }
 
     async function copyDebugReport() {

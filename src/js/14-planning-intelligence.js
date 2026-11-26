@@ -568,7 +568,7 @@
         document.getElementById('ppWhatIfDiffCancelBtn')?.addEventListener('click', () => diffDlg.close());
         document.getElementById('ppWhatIfDiffConfirmBtn')?.addEventListener('click', () => {
           diffDlg.close();
-          if (typeof commitWhatIfToLive === 'function') commitWhatIfToLive();
+          if (typeof commitWhatIfToLive === 'function') commitWhatIfToLive({ skipConfirm: true });
         });
       }
     }

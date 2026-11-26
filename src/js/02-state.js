@@ -150,6 +150,7 @@
           retention: { ...DEFAULT_RETENTION },
           fte3Scheme: { ...DEFAULT_FTE3_SCHEME },
           financeVault: { enabled: false, fileName: '', filePath: '', linkedAt: '' },
+          pbsFolder: { enabled: false, folderName: '', folderPath: '', linkedAt: '' },
         },
         departments: [],
         projects: [],
@@ -451,6 +452,12 @@
           fileName: String(rawSet.financeVault?.fileName || '').trim(),
           filePath: String(rawSet.financeVault?.filePath || '').trim(),
           linkedAt: String(rawSet.financeVault?.linkedAt || ''),
+        },
+        pbsFolder: {
+          enabled: Boolean(rawSet.pbsFolder && rawSet.pbsFolder.enabled),
+          folderName: String(rawSet.pbsFolder?.folderName || '').trim(),
+          folderPath: String(rawSet.pbsFolder?.folderPath || '').trim(),
+          linkedAt: String(rawSet.pbsFolder?.linkedAt || ''),
         },
       };
 
@@ -882,6 +889,7 @@
     }
 
     function recordDumpEvent(format, filename, sizeBytes, summary) {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
       const db = getActiveDB();
       if (!Array.isArray(db.dumpHistory)) db.dumpHistory = [];
       db.dumpHistory.unshift({
@@ -900,7 +908,7 @@
       } else if (ui.demoMode) {
         safeSetStorage(STORAGE_KEYS.DEMO_DB, JSON.stringify(demoDB));
       } else {
-        safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+        ppPersistLiveDBCacheSafe(liveDB);
         scheduleAutoSaveToFile();
       }
       if (ui.activeTab === 'sync') renderSyncTab();
@@ -1298,7 +1306,63 @@
       safeSetStorage(STORAGE_KEYS.UI_PREFS, JSON.stringify(toSave));
     }
 
+    function ppShouldSuppressPlaintextStorage() {
+      const hasPass = typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8;
+      if (hasPass) return true;
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return true;
+      if (typeof ppGetAuthSession === 'function') {
+        const sess = ppGetAuthSession();
+        if (sess && (sess.mode === 'admin' || sess.mode === 'user' || sess.mode === 'locked')) return true;
+      }
+      return false;
+    }
+
+    function ppReadSecureSessionFlag() {
+      try {
+        const raw = safeGetStorage(STORAGE_KEYS.SECURE_MODE);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function ppMarkSecureSessionFlag(fileName = '', encrypted = true) {
+      try {
+        const prev = ppReadSecureSessionFlag() || {};
+        safeSetStorage(STORAGE_KEYS.SECURE_MODE, JSON.stringify({
+          protected: Boolean(encrypted),
+          fileName: String(fileName || prev.fileName || linkedFileHandle?.name || rememberedFileHandle?.name || ''),
+          updatedAt: new Date().toISOString(),
+        }));
+      } catch (_e) {}
+    }
+
+    function ppClearSecureSessionFlag() {
+      try {
+        if (typeof localStorage !== 'undefined') localStorage.removeItem(STORAGE_KEYS.SECURE_MODE);
+      } catch (_e) {}
+    }
+
+    function ppPersistLiveDBCacheSafe(db) {
+      if (ppShouldSuppressPlaintextStorage()) {
+        try {
+          if (typeof localStorage !== 'undefined') localStorage.removeItem(STORAGE_KEYS.LIVE_DB);
+        } catch (_e) {}
+        ppMarkSecureSessionFlag(linkedFileHandle?.name || rememberedFileHandle?.name || '', true);
+        return;
+      }
+      if (!db || typeof db !== 'object') return;
+      let toStore = db;
+      if (db.settings?.financeVault?.enabled && typeof window !== 'undefined' && typeof window.ppGetStrippedCloneForMainSync === 'function') {
+        toStore = window.ppGetStrippedCloneForMainSync(db);
+      }
+      safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(toStore));
+    }
+
     function recordChange(type, summary) {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
       const db = getActiveDB();
       if (!Array.isArray(db.changeLog)) db.changeLog = [];
       db.changeLog.unshift({
@@ -1315,6 +1379,7 @@
     }
 
     function touchDBAndSave() {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
       const db = getActiveDB();
       db.meta = db.meta || { version: 3, revision: 0 };
       db.meta.version = 3;
@@ -1329,8 +1394,11 @@
       if (ui.demoMode) {
         safeSetStorage(STORAGE_KEYS.DEMO_DB, JSON.stringify(demoDB));
       } else {
-        safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+        ppPersistLiveDBCacheSafe(liveDB);
         scheduleAutoSaveToFile();
+        if (typeof window !== 'undefined' && typeof window.ppOnMainDbSavedForFinance === 'function') {
+          window.ppOnMainDbSavedForFinance(liveDB);
+        }
       }
     }
 

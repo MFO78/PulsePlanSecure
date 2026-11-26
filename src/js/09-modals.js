@@ -3,6 +3,8 @@
      * ============================================================================ */
 
     let _pendingConfirmCallback = null;
+    let _pendingConfirmReject = null;
+    let _activeConfirmDialog = null;
 
     function showModal(innerHtml, maxWidthClass = 'max-w-lg') {
       const overlay = document.getElementById('modalOverlay');
@@ -28,8 +30,12 @@
 
     function closeModal() {
       const overlay = document.getElementById('modalOverlay');
+      const card = document.getElementById('modalCard');
       if (overlay) overlay.classList.add('hidden');
-      _pendingConfirmCallback = null;
+      if (card) card.innerHTML = '';
+      if (typeof window !== 'undefined' && typeof window.ppOnModalClosed === 'function') {
+        try { window.ppOnModalClosed(); } catch (_e) {}
+      }
 
       if (lastFocusedBeforeModal && typeof lastFocusedBeforeModal.focus === 'function') {
         try { lastFocusedBeforeModal.focus(); } catch (e) {}
@@ -42,8 +48,85 @@
       }
     }
 
-    function openConfirmModal(title, message, confirmLabel = 'Confirm', onConfirm = null) {
+    function closeStackedConfirm(accepted = false) {
+      const dlg = _activeConfirmDialog || (typeof document !== 'undefined' ? document.getElementById('ppConfirmDialog') : null);
+      _activeConfirmDialog = null;
+      if (dlg) {
+        try {
+          if (typeof dlg.close === 'function' && dlg.open) dlg.close();
+          else dlg.removeAttribute('open');
+        } catch (_e) {}
+        try { dlg.remove(); } catch (_e) {}
+      }
+      if (!accepted) {
+        const rej = _pendingConfirmReject;
+        _pendingConfirmCallback = null;
+        _pendingConfirmReject = null;
+        if (typeof rej === 'function') rej();
+      }
+    }
+
+    function openConfirmModal(title, message, confirmLabel = 'Confirm', onConfirm = null, opts = {}) {
+      closeStackedConfirm(false);
       _pendingConfirmCallback = typeof onConfirm === 'function' ? onConfirm : null;
+      _pendingConfirmReject = typeof opts.onCancel === 'function' ? opts.onCancel : null;
+      const cancelLabel = opts.cancelLabel || 'Cancel';
+      const tone = opts.tone || 'danger';
+      const isWarn = tone === 'amber' || tone === 'warning';
+      const confirmBtnCls = tone === 'primary'
+        ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+        : (isWarn
+            ? 'bg-amber-600 hover:bg-amber-700 text-white'
+            : 'bg-rose-600 hover:bg-rose-700 text-white');
+
+      const canUseStackedDialog = typeof document !== 'undefined' && document.body && typeof document.createElement === 'function';
+      if (canUseStackedDialog) {
+        const dlg = document.createElement('dialog');
+        dlg.id = 'ppConfirmDialog';
+        dlg.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-[calc(100%-2rem)] max-w-md';
+        dlg.setAttribute('aria-labelledby', 'ppConfirmTitle');
+        dlg.innerHTML = `
+          <div class="p-5 space-y-4 text-xs">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex items-start gap-2.5 min-w-0">
+                <div class="w-9 h-9 rounded-xl ${tone === 'primary' ? 'bg-indigo-50 text-indigo-600 border-indigo-200' : (isWarn ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-600 border-rose-200')} border flex items-center justify-center shrink-0">
+                  <svg class="w-4.5 h-4.5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                  </svg>
+                </div>
+                <div class="min-w-0">
+                  <h3 id="ppConfirmTitle" class="text-base font-extrabold text-slate-900 leading-snug">${escapeHtml(title)}</h3>
+                  <p class="text-slate-600 leading-relaxed text-xs mt-1 whitespace-pre-line">${escapeHtml(message)}</p>
+                </div>
+              </div>
+              <button type="button" id="ppConfirmCloseX" aria-label="Close confirmation" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold leading-none shrink-0 cursor-pointer">&times;</button>
+            </div>
+            <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" id="ppConfirmCancelBtn" class="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-semibold transition cursor-pointer">${escapeHtml(cancelLabel)}</button>
+              <button type="button" id="ppConfirmOkBtn" class="px-4 py-2 rounded-xl ${confirmBtnCls} font-semibold transition cursor-pointer">${escapeHtml(confirmLabel)}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(dlg);
+        _activeConfirmDialog = dlg;
+        dlg.querySelector('#ppConfirmCloseX')?.addEventListener('click', () => closeStackedConfirm(false));
+        dlg.querySelector('#ppConfirmCancelBtn')?.addEventListener('click', () => closeStackedConfirm(false));
+        dlg.querySelector('#ppConfirmOkBtn')?.addEventListener('click', () => executePendingConfirm());
+        dlg.addEventListener('cancel', (ev) => {
+          ev.preventDefault();
+          closeStackedConfirm(false);
+        });
+        dlg.addEventListener('click', (ev) => {
+          if (ev.target === dlg) closeStackedConfirm(false);
+        });
+        if (typeof dlg.showModal === 'function') {
+          try { dlg.showModal(); } catch (_e) { dlg.setAttribute('open', 'open'); }
+        } else {
+          dlg.setAttribute('open', 'open');
+        }
+        setTimeout(() => { dlg.querySelector('#ppConfirmCancelBtn')?.focus(); }, 15);
+        return;
+      }
+
       showModal(`
         <div class="p-5 space-y-4 text-xs">
           <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
@@ -53,23 +136,153 @@
           </div>
           <p class="text-slate-600 leading-relaxed text-sm sm:text-xs">${escapeHtml(message)}</p>
           <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-            <button type="button" onclick="closeModal()" class="px-4 py-2.5 sm:py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition">Cancel</button>
-            <button type="button" onclick="executePendingConfirm()" class="px-4 py-2.5 sm:py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold transition">${escapeHtml(confirmLabel)}</button>
+            <button type="button" onclick="closeModal()" class="px-4 py-2.5 sm:py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition">${escapeHtml(cancelLabel)}</button>
+            <button type="button" onclick="executePendingConfirm()" class="px-4 py-2.5 sm:py-2 rounded-xl ${confirmBtnCls} font-semibold transition">${escapeHtml(confirmLabel)}</button>
           </div>
         </div>`);
     }
 
     function executePendingConfirm() {
       const cb = _pendingConfirmCallback;
-      closeModal();
+      _pendingConfirmCallback = null;
+      _pendingConfirmReject = null;
+      if (_activeConfirmDialog || (typeof document !== 'undefined' && document.getElementById('ppConfirmDialog'))) {
+        closeStackedConfirm(true);
+      } else {
+        closeModal();
+      }
       if (typeof cb === 'function') cb();
     }
 
-    function openSyncConflictModal(extMeta, diskLastModified, diskDB = null) {
+    function ppConfirmAction({ title = 'Confirm Action', message = 'Are you sure?', confirmLabel = 'Delete', cancelLabel = 'Cancel', tone = 'danger' } = {}) {
+      if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') {
+        if (typeof globalThis.confirm === 'function') return Promise.resolve(Boolean(globalThis.confirm(message)));
+        return Promise.resolve(true);
+      }
+      return new Promise((resolve) => {
+        openConfirmModal(title, message, confirmLabel, () => resolve(true), {
+          cancelLabel,
+          tone,
+          onCancel: () => resolve(false),
+        });
+      });
+    }
+
+    function ppConfirmWithPassword({
+      title = 'Confirm Destructive Action',
+      message = '',
+      confirmLabel = 'Confirm',
+      expectedPassword = '',
+      requireWord = 'CLEAR',
+      verifyFn = null,
+    } = {}) {
+      if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') {
+        return Promise.resolve(false);
+      }
+      closeStackedConfirm(false);
+      const needsPassword = Boolean(expectedPassword || typeof verifyFn === 'function');
+      return new Promise((resolve) => {
+        const dlg = document.createElement('dialog');
+        dlg.id = 'ppConfirmDialog';
+        dlg.className = 'rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl p-0 w-[calc(100%-2rem)] max-w-md';
+        dlg.setAttribute('aria-labelledby', 'ppConfirmPwTitle');
+        dlg.innerHTML = `
+          <form id="ppConfirmPwForm" class="p-5 space-y-4 text-xs" onsubmit="return false;">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h3 id="ppConfirmPwTitle" class="text-base font-extrabold text-rose-700 leading-snug">${escapeHtml(title)}</h3>
+                <p class="text-slate-600 leading-relaxed text-xs mt-1 whitespace-pre-line">${escapeHtml(message)}</p>
+              </div>
+              <button type="button" id="ppConfirmPwCloseX" aria-label="Close confirmation" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold leading-none shrink-0 cursor-pointer">&times;</button>
+            </div>
+            <div class="space-y-1.5">
+              <label for="ppConfirmPwInput" class="block font-semibold text-slate-700">
+                ${needsPassword ? 'Enter Administrator Password to confirm' : `Type ${escapeHtml(requireWord)} to confirm`}
+              </label>
+              <div class="flex items-center gap-1.5">
+                <input id="ppConfirmPwInput" type="${needsPassword ? 'password' : 'text'}" autocomplete="${needsPassword ? 'current-password' : 'off'}"
+                  placeholder="${needsPassword ? 'Administrator password...' : escapeHtml(requireWord)}"
+                  class="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-900" />
+                ${needsPassword ? '<button type="button" id="ppConfirmPwEye" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-semibold cursor-pointer shrink-0">Show</button>' : ''}
+              </div>
+              <div id="ppConfirmPwErr" role="alert" class="hidden rounded-lg px-2.5 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 text-[11px] font-semibold"></div>
+            </div>
+            <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" id="ppConfirmPwCancel" class="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-semibold cursor-pointer">Cancel</button>
+              <button type="submit" id="ppConfirmPwSubmit" class="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold cursor-pointer">${escapeHtml(confirmLabel)}</button>
+            </div>
+          </form>`;
+        document.body.appendChild(dlg);
+        _activeConfirmDialog = dlg;
+
+        const finish = (ok) => {
+          _activeConfirmDialog = null;
+          try { if (dlg.open && typeof dlg.close === 'function') dlg.close(); } catch (_e) {}
+          try { dlg.remove(); } catch (_e) {}
+          resolve(Boolean(ok));
+        };
+
+        const inp = dlg.querySelector('#ppConfirmPwInput');
+        const errEl = dlg.querySelector('#ppConfirmPwErr');
+        const eyeBtn = dlg.querySelector('#ppConfirmPwEye');
+        eyeBtn?.addEventListener('click', () => {
+          if (!inp) return;
+          const show = inp.type === 'password';
+          inp.type = show ? 'text' : 'password';
+          eyeBtn.textContent = show ? 'Hide' : 'Show';
+        });
+        dlg.querySelector('#ppConfirmPwCloseX')?.addEventListener('click', () => finish(false));
+        dlg.querySelector('#ppConfirmPwCancel')?.addEventListener('click', () => finish(false));
+        dlg.addEventListener('cancel', (ev) => { ev.preventDefault(); finish(false); });
+        dlg.addEventListener('click', (ev) => { if (ev.target === dlg) finish(false); });
+        dlg.querySelector('#ppConfirmPwForm')?.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const val = (inp?.value || '').trim();
+          if (needsPassword) {
+            let valid = false;
+            try {
+              valid = typeof verifyFn === 'function' ? Boolean(await verifyFn(val)) : (val === expectedPassword);
+            } catch (_e) { valid = false; }
+            if (!valid) {
+              if (errEl) {
+                errEl.textContent = 'Incorrect password. Action cancelled.';
+                errEl.classList.remove('hidden');
+              }
+              inp?.select();
+              inp?.focus();
+              return;
+            }
+            finish(true);
+            return;
+          }
+          if (val.toUpperCase() !== String(requireWord || 'CLEAR').toUpperCase()) {
+            if (errEl) {
+              errEl.textContent = `Please type ${requireWord} to confirm.`;
+              errEl.classList.remove('hidden');
+            }
+            inp?.focus();
+            return;
+          }
+          finish(true);
+        });
+
+        if (typeof dlg.showModal === 'function') {
+          try { dlg.showModal(); } catch (_e) { dlg.setAttribute('open', 'open'); }
+        } else {
+          dlg.setAttribute('open', 'open');
+        }
+        setTimeout(() => inp?.focus(), 20);
+      });
+    }
+
+    function openSyncConflictModal(extMeta, diskLastModified, diskDB = null, conflicts = []) {
       const who = escapeHtml(extMeta?.lastModifiedBy || 'a teammate');
       const rev = escapeHtml(String(extMeta?.revision || '?'));
       const when = diskLastModified ? new Date(diskLastModified).toLocaleTimeString() : 'just now';
       const fname = escapeHtml(linkedFileHandle?.name || 'shared database');
+      const hasAccessConflict = Array.isArray(conflicts) && conflicts.some(c => c && String(c.section || '').startsWith('accessControl'));
+      const isAdminUser = typeof ppHasAdminAccess !== 'function' || ppHasAdminAccess();
+      const blockOverwrite = hasAccessConflict && !isAdminUser;
 
       let diffPreviewHtml = '';
       if (diskDB && liveDB && typeof computeSnapshotDiff === 'function') {
@@ -169,11 +382,15 @@
               <span>${reloadLabel}</span>
               <span class="text-[10px] opacity-80 shrink-0">Discard my unsaved edit</span>
             </button>
+            ${blockOverwrite ? `
+              <div class="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-medium">
+                An Administrator updated team user permissions on disk. Reload the disk version to apply those access changes safely.
+              </div>` : `
             <button type="button" onclick="forceOverwriteLinkedFile()"
               class="w-full px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs text-left flex items-center justify-between gap-2 transition">
               <span>Keep Mine &amp; Overwrite Shared File</span>
               <span class="text-[10px] shrink-0">Replace Rev ${rev}</span>
-            </button>
+            </button>`}
             <button type="button" onclick="downloadJsonBackup()"
               class="w-full px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-semibold text-xs text-left flex items-center justify-between gap-2 transition">
               <span>Download Backup of My Local Plan (.json)</span>
@@ -336,6 +553,17 @@
       showToast(`Removed "${clean}" from users`, 'info');
     }
 
+    function confirmRemoveQuickUser(name) {
+      const clean = String(name || '').trim();
+      if (!clean) return;
+      openConfirmModal(
+        'Remove Quick-Switch User',
+        `Remove "${clean}" from your Quick Switch list? You can restore removed users later.`,
+        'Remove User',
+        () => removeQuickUser(clean)
+      );
+    }
+
     function restoreRemovedUsers() {
       ui.removedUsers = [];
       persistUIPrefs();
@@ -358,7 +586,7 @@
               <span class="w-5 h-5 rounded-md ${isCur ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'} text-[9px] font-extrabold flex items-center justify-center shrink-0">${escapeHtml(getUserInitials(name))}</span>
               <span>${escapeHtml(name)}</span>
             </button>
-            ${canRemove ? `<button type="button" data-user-name="${escapeHtml(name)}" onclick="removeQuickUser(this.dataset.userName)"
+            ${canRemove ? `<button type="button" data-user-name="${escapeHtml(name)}" onclick="confirmRemoveQuickUser(this.dataset.userName)"
               title="Remove ${escapeHtml(name)}" aria-label="Remove user ${escapeHtml(name)}"
               class="px-2 py-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 font-bold leading-none transition cursor-pointer">&times;</button>` : ''}
           </div>`;
@@ -664,13 +892,6 @@
       const db = getActiveDB();
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
       const pCode = db.projects.find(p => p.id === projId)?.code || projId;
-      pushUndoState(`Adjust [${dCode} -> ${pCode}]`);
-      document.querySelectorAll('.cell-comment-input').forEach(ta => {
-        const dId = ta.dataset.commentDept;
-        const pId = ta.dataset.commentProj;
-        if (dId && pId) setCellProjectComment(dId, pId, periodKey, ta.value, db);
-      });
-
       const cur = getAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, db.allocations);
       const { step, decimals } = getManpowerStep(ui.manpowerUnit);
       const curDisp = fteToDisplayValue(cur.avgFte, periodKey, ui.timeUnit, ui.manpowerUnit);
@@ -678,11 +899,32 @@
       const nextDisp = Math.max(0, Math.round((curDisp + dir * step) * factor) / factor);
       const nextFte = displayValueToFte(nextDisp, periodKey, ui.timeUnit, ui.manpowerUnit);
 
-      setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
-      recordChange('Allocation', `[${dCode} -> ${pCode}] adjusted to ${formatValue(nextDisp)} in ${periodKey}`);
-      triggerHaptic(8);
-      renderAll();
-      openCellDetailModal(rowId, periodKey);
+      const applyStep = () => {
+        pushUndoState(`Adjust [${dCode} -> ${pCode}]`);
+        document.querySelectorAll('.cell-comment-input').forEach(ta => {
+          const dId = ta.dataset.commentDept;
+          const pId = ta.dataset.commentProj;
+          if (dId && pId) setCellProjectComment(dId, pId, periodKey, ta.value, db);
+        });
+        setAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, nextFte, db);
+        recordChange('Allocation', nextDisp <= 0.0001
+          ? `Removed [${dCode} -> ${pCode}] allocation in ${periodKey}`
+          : `[${dCode} -> ${pCode}] adjusted to ${formatValue(nextDisp)} in ${periodKey}`);
+        triggerHaptic(8);
+        renderAll();
+        openCellDetailModal(rowId, periodKey);
+      };
+
+      if (cur.hasData && nextDisp <= 0.0001) {
+        openConfirmModal(
+          'Remove Allocation',
+          `Stepping [${dCode} → ${pCode}] in ${periodKey} to 0 will delete this allocation${ui.timeUnit === 'month' ? ' (all weeks in this month)' : ''}. Continue?`,
+          'Remove',
+          applyStep
+        );
+        return;
+      }
+      applyStep();
     }
 
     /* ---------- Allocation Modal (Touch-Ready Numeric Keypad & Steppers) ---------- */
@@ -970,22 +1212,43 @@
         return;
       }
 
-      pushUndoState(`Set [${dCode} -> ${pCode}]`);
+      const doSaveAllocation = () => {
+        pushUndoState(`Set [${dCode} -> ${pCode}]`);
 
-      let curPk = startPk;
-      for (let i = 0; i < repeat; i++) {
-        const fte = displayValueToFte(rawVal, curPk, ui.timeUnit, ui.manpowerUnit);
-        setAllocationForPeriod(deptId, projId, curPk, ui.timeUnit, fte, db);
-        curPk = ui.timeUnit === 'month' ? addMonthsToMonthKey(curPk, 1) : addWeeksToWeekKey(curPk, 1);
+        let curPk = startPk;
+        for (let i = 0; i < repeat; i++) {
+          const fte = displayValueToFte(rawVal, curPk, ui.timeUnit, ui.manpowerUnit);
+          setAllocationForPeriod(deptId, projId, curPk, ui.timeUnit, fte, db);
+          curPk = ui.timeUnit === 'month' ? addMonthsToMonthKey(curPk, 1) : addWeeksToWeekKey(curPk, 1);
+        }
+
+        setCellProjectComment(deptId, projId, startPk, commentTxt, db);
+
+        recordChange('Allocation', `[${dCode} -> ${pCode}] set to ${formatValue(rawVal)} in ${startPk}${repeat > 1 ? ` (+${repeat - 1} more)` : ''}`);
+        triggerHaptic(10);
+        closeModal();
+        renderAll();
+        showToast('Allocation updated', 'success', { undoable: true });
+      };
+
+      if (rawVal <= 0.0001) {
+        let existingCount = 0;
+        let checkPk = startPk;
+        for (let i = 0; i < repeat; i++) {
+          if (getAllocationForPeriod(deptId, projId, checkPk, ui.timeUnit, db.allocations).hasData) existingCount++;
+          checkPk = ui.timeUnit === 'month' ? addMonthsToMonthKey(checkPk, 1) : addWeeksToWeekKey(checkPk, 1);
+        }
+        if (existingCount > 0) {
+          openConfirmModal(
+            'Remove Allocation',
+            `Setting [${dCode} → ${pCode}] to 0 will remove ${existingCount} existing ${ui.timeUnit}${existingCount === 1 ? '' : 's'} starting ${startPk}. Continue?`,
+            'Remove',
+            doSaveAllocation
+          );
+          return;
+        }
       }
-
-      setCellProjectComment(deptId, projId, startPk, commentTxt, db);
-
-      recordChange('Allocation', `[${dCode} -> ${pCode}] set to ${formatValue(rawVal)} in ${startPk}${repeat > 1 ? ` (+${repeat - 1} more)` : ''}`);
-      triggerHaptic(10);
-      closeModal();
-      renderAll();
-      showToast('Allocation updated', 'success', { undoable: true });
+      doSaveAllocation();
     }
 
     function deleteAllocationFromModal() {
@@ -996,22 +1259,33 @@
       const proj = db.projects.find(p => p.id === projId);
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
       const pCode = proj?.code || projId;
-      pushUndoState(`Remove [${dCode} -> ${pCode}]`);
-      setAllocationForPeriod(deptId, projId, pk, ui.timeUnit, 0, db);
-      if (isNonFteProject(proj)) {
-        setCellProjectComment(deptId, projId, pk, '', db);
-        recordChange('Comment', `Removed Admin (Non-FTE) note [${dCode} -> ${pCode}] in ${pk}`);
-        triggerHaptic(10);
-        closeModal();
-        renderAll();
-        showToast('Admin note removed', 'info', { undoable: true });
-        return;
-      }
-      recordChange('Allocation', `Removed [${dCode} -> ${pCode}] allocation in ${pk}`);
-      triggerHaptic(10);
-      closeModal();
-      renderAll();
-      showToast('Allocation removed', 'info', { undoable: true });
+      const isNonFte = isNonFteProject(proj);
+
+      openConfirmModal(
+        isNonFte ? 'Remove Admin Note' : 'Remove Allocation',
+        isNonFte
+          ? `Delete the Admin (Non-FTE) note for [${dCode} → ${pCode}] in ${pk}?`
+          : `Delete the [${dCode} → ${pCode}] allocation in ${pk}${ui.timeUnit === 'month' ? ' (all weeks in this month)' : ''}?`,
+        isNonFte ? 'Remove Note' : 'Remove Allocation',
+        () => {
+          pushUndoState(`Remove [${dCode} -> ${pCode}]`);
+          setAllocationForPeriod(deptId, projId, pk, ui.timeUnit, 0, db);
+          if (isNonFte) {
+            setCellProjectComment(deptId, projId, pk, '', db);
+            recordChange('Comment', `Removed Admin (Non-FTE) note [${dCode} -> ${pCode}] in ${pk}`);
+            triggerHaptic(10);
+            closeModal();
+            renderAll();
+            showToast('Admin note removed', 'info', { undoable: true });
+            return;
+          }
+          recordChange('Allocation', `Removed [${dCode} -> ${pCode}] allocation in ${pk}`);
+          triggerHaptic(10);
+          closeModal();
+          renderAll();
+          showToast('Allocation removed', 'info', { undoable: true });
+        }
+      );
     }
 
     /* ---------- Variable Capacity Modal (Single or Date Range with Start & End) ---------- */
@@ -1149,7 +1423,7 @@
                        <span class="font-extrabold text-sky-700 tabular-nums">${sp.fte} FTE <span class="text-[10px] font-semibold text-slate-500">(${dSign})</span></span>
                        <button type="button" onclick="openCapacityModal('${deptId}', '${sp.startWk}', { forceWeeks: true, endPeriod: '${sp.endWk}' })"
                          class="px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-[10px] transition">Edit</button>
-                       <button type="button" onclick="resetCapacityOverrideSpan('${deptId}', '${sp.startWk}', '${sp.endWk}'); openCapacityModal('${deptId}', '${startPk}', { timeUnit: '${effectiveUnit}' });"
+                       <button type="button" onclick="confirmResetCapacityOverrideSpan('${deptId}', '${sp.startWk}', '${sp.endWk}', () => openCapacityModal('${deptId}', '${startPk}', { timeUnit: '${effectiveUnit}' }));"
                          class="px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold text-[10px] transition">Reset</button>
                      </div>
                    </div>`;
@@ -1271,24 +1545,40 @@
       if (pks.length === 0) return;
 
       const dept = db.departments.find(d => d.id === deptId);
-      pushUndoState(`Reset ${dept?.name || deptId} capacity`);
-      pks.forEach(pk => {
-        const wks = unit === 'month' ? getWeeksInMonth(pk) : [pk];
-        wks.forEach(wk => { delete db.capacityOverrides[`${deptId}::${wk}`]; });
-      });
       const spanTxt = pks.length > 1 ? `${pks[0]} → ${pks[pks.length - 1]}` : pks[0];
-      recordChange('Capacity', `Reset ${dept?.name || deptId} capacity override (${spanTxt}) back to default`);
-      closeModal();
-      renderAll();
-      showToast('Capacity reset to default', 'info', { undoable: true });
+      openConfirmModal(
+        'Reset Capacity Override Range',
+        `Delete custom capacity overrides for "${dept?.name || deptId}" across ${spanTxt} and revert to default ${dept?.defaultCapacity ?? ''} FTE?`,
+        'Reset Range',
+        () => {
+          pushUndoState(`Reset ${dept?.name || deptId} capacity`);
+          pks.forEach(pk => {
+            const wks = unit === 'month' ? getWeeksInMonth(pk) : [pk];
+            wks.forEach(wk => { delete db.capacityOverrides[`${deptId}::${wk}`]; });
+          });
+          recordChange('Capacity', `Reset ${dept?.name || deptId} capacity override (${spanTxt}) back to default`);
+          closeModal();
+          renderAll();
+          showToast('Capacity reset to default', 'info', { undoable: true });
+        }
+      );
     }
 
     /* ---------- Department Modal & Cleanup ---------- */
+
+    function isFinanceVaultLockedForEdits(db) {
+      const finMeta = db?.settings?.financeVault;
+      const finStatus = typeof window !== 'undefined' && typeof window.ppGetFinanceVaultStatus === 'function'
+        ? window.ppGetFinanceVaultStatus()
+        : null;
+      return Boolean((finMeta && finMeta.enabled) && !(finStatus && finStatus.unlocked));
+    }
 
     function openDeptModal(deptId = '') {
       const db = getActiveDB();
       const d = db.departments.find(x => x.id === deptId);
       const color = d ? d.color : PALETTE[db.departments.length % PALETTE.length];
+      const finLocked = isFinanceVaultLockedForEdits(db);
 
       showModal(`
         <div class="p-5 space-y-4 text-xs">
@@ -1331,7 +1621,8 @@
           ${typeof ppCanAccessFinance === 'function' && !ppCanAccessFinance() ? '' : `
           <div>
             <label for="mDeptDayRate" class="block font-semibold text-slate-700 mb-1">Blended Day Rate (${escapeHtml(getCurrencySymbol(db))}/day, optional)</label>
-            <input id="mDeptDayRate" type="number" inputmode="decimal" min="0" step="25" value="${Number(d?.dayRate) > 0 ? d.dayRate : ''}" placeholder="Leave blank if cost tracking is not needed" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
+            <input id="mDeptDayRate" type="number" inputmode="decimal" min="0" step="25" value="${Number(d?.dayRate) > 0 ? d.dayRate : ''}" ${finLocked ? 'disabled title="Unlock Finance Vault first to edit day rates"' : ''} placeholder="${finLocked ? 'Unlock Finance Vault to view/edit rates' : 'Leave blank if cost tracking is not needed'}" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold disabled:opacity-60" />
+            ${finLocked ? '<div class="text-[10.5px] text-amber-700 font-semibold mt-1">Separate Finance Vault is locked — unlock it first to view or change day rates.</div>' : ''}
           </div>`}
           <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
             <button type="button" onclick="closeModal()" class="px-4 py-2.5 sm:py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold">Cancel</button>
@@ -1348,7 +1639,7 @@
       const defaultCapacity = Math.max(0, parseFloat(document.getElementById('mDeptCap').value) || 0);
       const manager = document.getElementById('mDeptMgr').value.trim();
       const color = document.getElementById('mDeptColor').value || '#4f46e5';
-      const canFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+      const canFin = (typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance()) && !isFinanceVaultLockedForEdits(db);
       const existingDept = id ? db.departments.find(x => x.id === id) : null;
       const dayRate = canFin
         ? Math.max(0, parseFloat(document.getElementById('mDeptDayRate')?.value) || 0)
@@ -1468,11 +1759,15 @@
               <label for="mProjBudget" class="block font-semibold text-slate-700 mb-1">Effort Budget (Person-Days, optional)</label>
               <input id="mProjBudget" type="number" inputmode="decimal" min="0" step="5" value="${Number(p?.budgetDays) > 0 ? p.budgetDays : ''}" placeholder="e.g. 120" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
             </div>
-            ${canFin ? `
+            ${canFin ? (() => {
+              const finLocked = isFinanceVaultLockedForEdits(db);
+              return `
             <div>
               <label for="mProjBudgetCost" class="block font-semibold text-slate-700 mb-1">Cost Budget (${escapeHtml(getCurrencySymbol(db))}, optional)</label>
-              <input id="mProjBudgetCost" type="number" inputmode="decimal" min="0" step="1000" value="${Number(p?.budgetCost) > 0 ? p.budgetCost : ''}" placeholder="e.g. 150000" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold" />
-            </div>` : ''}
+              <input id="mProjBudgetCost" type="number" inputmode="decimal" min="0" step="1000" value="${Number(p?.budgetCost) > 0 ? p.budgetCost : ''}" ${finLocked ? 'disabled title="Unlock Finance Vault first to edit cost budgets"' : ''} placeholder="${finLocked ? 'Unlock Finance Vault to view/edit' : 'e.g. 150000'}" class="w-full px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold disabled:opacity-60" />
+              ${finLocked ? '<div class="text-[10.5px] text-amber-700 font-semibold mt-1">Separate Finance Vault is locked — unlock it first to change cost budgets.</div>' : ''}
+            </div>`;
+            })() : ''}
           </div>
           <label class="inline-flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer select-none w-full">
             <input id="mProjArchived" type="checkbox" ${p?.archived ? 'checked' : ''} class="rounded text-indigo-600" />
@@ -1500,32 +1795,57 @@
       const techLead = (document.getElementById('mProjTechLead')?.value || '').trim();
       const color = document.getElementById('mProjColor').value || '#4f46e5';
       const budgetDays = nonFte ? 0 : Math.max(0, parseFloat(document.getElementById('mProjBudget')?.value) || 0);
-      const canFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+      const canFin = (typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance()) && !isFinanceVaultLockedForEdits(db);
       const existingProj = id ? db.projects.find(x => x.id === id) : null;
       const budgetCost = nonFte ? 0 : (canFin ? Math.max(0, parseFloat(document.getElementById('mProjBudgetCost')?.value) || 0) : (Number(existingProj?.budgetCost) || 0));
       const archived = Boolean(document.getElementById('mProjArchived')?.checked);
 
       if (!name) { showToast('Project name is required.', 'warning'); return; }
-
-      pushUndoState(`${id ? 'Update' : 'Add'} project [${code}]`);
-      if (id) {
-        const p = db.projects.find(x => x.id === id);
-        if (p) Object.assign(p, { name, code, status, priority, owner, techLead, color, budgetDays, budgetCost, tentative, nonFte, category, archived });
-        if (nonFte) {
-          Object.keys(db.allocations || {}).forEach(k => { if (k.split('::')[1] === id) delete db.allocations[k]; });
-        }
-        db.projects = getSortedProjects(db);
-        if (archived && ui.filterProj === id) ui.filterProj = 'all';
-        if (archived && ui.spotlightProjId === id) ui.spotlightProjId = '';
-        recordChange('Project', `Updated project [${code}] ${name} (${status}${nonFte ? ', Admin Non-FTE' : tentative ? ', pipeline' : ''}${techLead ? `, TL: ${techLead}` : ''}${budgetDays > 0 ? `, budget ${budgetDays}d` : ''}${archived ? ', archived' : ''})`);
-      } else {
-        db.projects.push({ id: uid('p'), name, code, status, priority, owner, techLead, color, budgetDays, budgetCost, tentative, nonFte, category, archived });
-        db.projects = getSortedProjects(db);
-        recordChange('Project', `Added project [${code}] ${name}${nonFte ? ' (Admin Non-FTE)' : tentative ? ' (pipeline)' : ''}${techLead ? ` (TL: ${techLead})` : ''}${budgetDays > 0 ? ` (budget ${budgetDays}d)` : ''}`);
+      const dupCode = (db.projects || []).find(x => x && x.id !== id && String(x.code || '').trim().toUpperCase() === code);
+      if (dupCode) {
+        showToast(`Project code "${code}" is already used by "${dupCode.name}". Choose a unique code so PBS files never collide.`, 'warning');
+        return;
       }
-      closeModal();
-      renderAll();
-      showToast('Project saved', 'success', { undoable: true });
+
+      const doCommitProject = () => {
+        const prevCode = existingProj ? existingProj.code : '';
+        pushUndoState(`${id ? 'Update' : 'Add'} project [${code}]`);
+        if (id) {
+          const p = db.projects.find(x => x.id === id);
+          if (p) Object.assign(p, { name, code, status, priority, owner, techLead, color, budgetDays, budgetCost, tentative, nonFte, category, archived });
+          if (nonFte) {
+            Object.keys(db.allocations || {}).forEach(k => { if (k.split('::')[1] === id) delete db.allocations[k]; });
+          }
+          db.projects = getSortedProjects(db);
+          if (archived && ui.filterProj === id) ui.filterProj = 'all';
+          if (archived && ui.spotlightProjId === id) ui.spotlightProjId = '';
+          recordChange('Project', `Updated project [${code}] ${name} (${status}${nonFte ? ', Admin Non-FTE' : tentative ? ', pipeline' : ''}${techLead ? `, TL: ${techLead}` : ''}${budgetDays > 0 ? `, budget ${budgetDays}d` : ''}${archived ? ', archived' : ''})`);
+          if (prevCode && prevCode !== code && typeof window !== 'undefined' && typeof window.ppOnProjectCodeRenamedForPbs === 'function') {
+            window.ppOnProjectCodeRenamedForPbs(id, prevCode, code).catch(() => {});
+          }
+        } else {
+          db.projects.push({ id: uid('p'), name, code, status, priority, owner, techLead, color, budgetDays, budgetCost, tentative, nonFte, category, archived });
+          db.projects = getSortedProjects(db);
+          recordChange('Project', `Added project [${code}] ${name}${nonFte ? ' (Admin Non-FTE)' : tentative ? ' (pipeline)' : ''}${techLead ? ` (TL: ${techLead})` : ''}${budgetDays > 0 ? ` (budget ${budgetDays}d)` : ''}`);
+        }
+        closeModal();
+        renderAll();
+        showToast('Project saved', 'success', { undoable: true });
+      };
+
+      if (id && nonFte) {
+        const existingAllocKeys = Object.keys(db.allocations || {}).filter(k => k.split('::')[1] === id && Number(db.allocations[k]) > 0);
+        if (existingAllocKeys.length > 0) {
+          openConfirmModal(
+            'Clear FTE Allocations?',
+            `Switching "[${code}] ${name}" to Admin (Non-FTE) will delete all ${existingAllocKeys.length} existing weekly FTE allocation(s) and zero its budgets. Continue?`,
+            'Switch & Clear Allocations',
+            doCommitProject
+          );
+          return;
+        }
+      }
+      doCommitProject();
     }
 
     function deleteProject(id) {
@@ -1657,12 +1977,19 @@
       const db = getActiveDB();
       const ms = db.milestones.find(x => x.id === id);
       if (!ms) return;
-      pushUndoState(`Delete milestone "${ms.title}"`);
-      db.milestones = db.milestones.filter(x => x.id !== id);
-      recordChange('Milestone', `Deleted milestone "${ms.title}"`);
-      closeModal();
-      renderAll();
-      showToast('Milestone deleted', 'info', { undoable: true });
+      openConfirmModal(
+        'Delete Milestone',
+        `Delete milestone "${ms.title}" (${ms.date || 'no date'})?`,
+        'Delete Milestone',
+        () => {
+          pushUndoState(`Delete milestone "${ms.title}"`);
+          db.milestones = db.milestones.filter(x => x.id !== id);
+          recordChange('Milestone', `Deleted milestone "${ms.title}"`);
+          closeModal();
+          renderAll();
+          showToast('Milestone deleted', 'info', { undoable: true });
+        }
+      );
     }
 
     /* ---------- Snapshot Modal & Actions ---------- */
@@ -1738,39 +2065,91 @@
         recordChange('Snapshot', `Restored roadmap state from snapshot "${snap.name}"`);
         renderAll();
         showToast(`Restored "${snap.name}"`, 'success', { undoable: true });
-      });
+      }, { tone: 'primary' });
     }
 
     function deleteSnapshot(id) {
       const db = getActiveDB();
       const snap = db.snapshots.find(s => s.id === id);
       if (!snap) return;
-      db.snapshots = db.snapshots.filter(s => s.id !== id);
-      if (ui.compareSnapshotId === id) ui.compareSnapshotId = '';
-      if (ui.compareTargetId === id) ui.compareTargetId = '__CURRENT__';
-      touchDBAndSave();
-      renderAll();
-      showToast('Snapshot deleted', 'info');
+      const pinnedWarn = snap.pinned ? ' This snapshot is PINNED as a protected baseline and cannot be undone once deleted.' : ' This cannot be undone.';
+      openConfirmModal(
+        snap.pinned ? 'Delete Pinned Baseline Snapshot?' : 'Delete Snapshot',
+        `Permanently delete snapshot "${snap.name}"?${pinnedWarn}`,
+        'Delete Snapshot',
+        () => {
+          db.snapshots = db.snapshots.filter(s => s.id !== id);
+          if (ui.compareSnapshotId === id) ui.compareSnapshotId = '';
+          if (ui.compareTargetId === id) ui.compareTargetId = '__CURRENT__';
+          touchDBAndSave();
+          renderAll();
+          showToast(`Snapshot "${snap.name}" deleted`, 'info');
+        }
+      );
     }
 
-    function confirmClearCurrentData() {
-      const modeName = ui.demoMode ? 'Demo Sandbox' : 'Live Company Database';
-      openConfirmModal(`Clear ${modeName}`, `This will erase all departments, projects, allocations, milestones, and snapshots in the ${modeName}.`, 'Clear Database', () => {
-        clearUndoHistory();
-        if (ui.demoMode) demoDB = createEmptyDB();
-        else liveDB = createEmptyDB();
-        touchDBAndSave();
-        renderAll();
-        showToast(`${modeName} cleared`, 'info');
-      });
+    async function confirmClearCurrentData() {
+      const isDemo = Boolean(ui.demoMode);
+      const modeName = isDemo ? 'Demo Sandbox' : 'Live Company Database';
+      if (!isDemo) {
+        const hasUsers = Array.isArray(liveDB?.accessControl?.users) && liveDB.accessControl.users.length > 0;
+        const isNamed = typeof ppIsNamedUser === 'function' && ppIsNamedUser();
+        const hasAdmin = typeof ppHasAdminAccess !== 'function' || ppHasAdminAccess();
+        if (!hasAdmin || (isNamed && hasUsers)) {
+          showToast('Only the Main Administrator can clear the entire Live Company Database (which also removes team user logins). Use "Clear Plan (Keep Setup & Data)" instead.', 'warning');
+          return;
+        }
+      }
+      const linkedNote = (!isDemo && linkedFileHandle)
+        ? `\n\nWarning: This will also overwrite your linked shared file "${linkedFileHandle.name}".`
+        : '';
+      const usersNote = (!isDemo && Array.isArray(liveDB?.accessControl?.users) && liveDB.accessControl.users.length > 0)
+        ? `\n\nThis will also remove all ${liveDB.accessControl.users.length} team user login(s) and reset permissions.`
+        : '';
+      const expectedPass = (!isDemo && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8) ? ppSyncPassphrase : '';
+
+      const ok = isDemo
+        ? await ppConfirmAction({
+            title: `Clear ${modeName}`,
+            message: `Erase all departments, projects, allocations, milestones, and snapshots in the ${modeName}?`,
+            confirmLabel: 'Clear Sandbox',
+          })
+        : await ppConfirmWithPassword({
+            title: `Clear ${modeName}`,
+            message: `This will permanently erase ALL departments, projects, allocations, milestones, and snapshots in the ${modeName}.${usersNote}${linkedNote}`,
+            confirmLabel: 'Clear Entire Database',
+            expectedPassword: expectedPass,
+            requireWord: 'CLEAR',
+          });
+      if (!ok) return;
+
+      clearUndoHistory();
+      if (isDemo) {
+        demoDB = createEmptyDB();
+      } else {
+        if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
+          window.ppLockFinanceVaultSilently(true);
+        }
+        liveDB = createEmptyDB();
+      }
+      touchDBAndSave();
+      renderAll();
+      showToast(`${modeName} cleared`, 'info');
     }
 
     function resetDemoData() {
-      clearUndoHistory();
-      demoDB = createSampleDemoDB();
-      safeSetStorage(STORAGE_KEYS.DEMO_DB, JSON.stringify(demoDB));
-      renderAll();
-      showToast('Demo sample data reset', 'success');
+      openConfirmModal(
+        'Reset Demo Sandbox',
+        'Reset the Demo Sandbox back to default sample data? Any edits made in Demo mode will be discarded.',
+        'Reset Demo Data',
+        () => {
+          clearUndoHistory();
+          demoDB = createSampleDemoDB();
+          safeSetStorage(STORAGE_KEYS.DEMO_DB, JSON.stringify(demoDB));
+          renderAll();
+          showToast('Demo sample data reset', 'success');
+        }
+      );
     }
 
     /* ---------- First-Use Welcome & Setup Splash Screen + PWA Install Guide ---------- */
@@ -1813,10 +2192,11 @@
           <div class="p-3 rounded-xl bg-slate-50 border border-slate-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div class="min-w-0">
               <label for="welcomeUserNameInput" class="block font-bold text-slate-800">1. Your Display Name</label>
-              <p class="text-[11px] text-slate-500">Used to stamp snapshots, backups, and the team change log.</p>
+              <p class="text-[11px] text-slate-500">${typeof ppIsNamedUser === 'function' && ppIsNamedUser() ? 'Managed by your signed-in account for audit integrity.' : 'Used to stamp snapshots, backups, and the team change log.'}</p>
             </div>
             <input id="welcomeUserNameInput" type="text" maxlength="40" value="${escapeHtml(ui.userName || 'Project Mgr')}" placeholder="e.g. Marco Rossi"
-              class="w-full sm:w-52 px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 shrink-0" />
+              ${typeof ppIsNamedUser === 'function' && ppIsNamedUser() ? 'readonly disabled' : ''}
+              class="w-full sm:w-52 px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 shrink-0 disabled:opacity-70" />
           </div>
 
           <!-- Step 2: Quick-Start Paths -->
@@ -1834,6 +2214,7 @@
                 <div class="text-[10px] font-semibold text-slate-400 pt-0.5">${liveSummary}</div>
               </button>
 
+              ${typeof ppIsStandardUser === 'function' && ppIsStandardUser() ? '' : `
               <button type="button" onclick="welcomeQuickAction('demo')"
                 class="text-left p-3 rounded-xl border border-amber-200 bg-amber-50/50 hover:border-amber-400 hover:bg-amber-50 transition space-y-1.5 cursor-pointer">
                 <div class="flex items-center justify-between gap-1">
@@ -1843,7 +2224,7 @@
                 <div class="font-bold text-slate-900">Explore Demo Sandbox</div>
                 <p class="text-[11px] text-slate-600 leading-snug">Test allocations, Timeline Gantt, and bottlenecks with isolated sample data.</p>
                 <div class="text-[10px] font-semibold text-amber-700 pt-0.5">Never touches Live DB</div>
-              </button>
+              </button>`}
 
               <div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-1.5 flex flex-col justify-between">
                 <div class="space-y-1.5">
@@ -1907,7 +2288,7 @@
 
     function dismissWelcomeModal() {
       const nameInp = document.getElementById('welcomeUserNameInput');
-      if (nameInp) {
+      if (nameInp && !(typeof ppIsNamedUser === 'function' && ppIsNamedUser())) {
         const nextName = nameInp.value.trim();
         if (nextName && nextName !== ui.userName) {
           setActiveUserName(nextName, false);
@@ -1922,7 +2303,7 @@
 
     function welcomeQuickAction(action) {
       const nameInp = document.getElementById('welcomeUserNameInput');
-      if (nameInp) {
+      if (nameInp && !(typeof ppIsNamedUser === 'function' && ppIsNamedUser())) {
         const nextName = nameInp.value.trim();
         if (nextName && nextName !== ui.userName) {
           setActiveUserName(nextName, false);
