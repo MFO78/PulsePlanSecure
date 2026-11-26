@@ -12,7 +12,7 @@
     identity: ['acronym', 'description', 'heritage'],
     docs: ['mechDrawing', 'elecDrawing', 'refDoc'],
     proc: ['manufacturer', 'partNumber', 'procurementStatus', 'leadTime', 'componentAlt'],
-    eng: ['mass', 'powerConsumption', 'powerDissipation', 'mtbf', 'lru', 'spareAvailable', 'spareToDeliver'],
+    eng: ['qty', 'mass', 'powerConsumption', 'powerDissipation', 'mtbf', 'lru', 'spareAvailable', 'spareToDeliver'],
   };
   const OPTIONAL_FIELD_KEYS = [
     ...OPTIONAL_GROUPS.identity,
@@ -48,6 +48,13 @@
     return (Number.isFinite(n) && n >= 0) ? Math.round(n * 10000) / 10000 : null;
   }
 
+  function parseOptionalQty(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const raw = typeof v === 'number' ? v : Number(String(v).trim().replace(/,/g, ''));
+    if (!Number.isFinite(raw) || raw < 1 || !Number.isInteger(raw) || raw > 1000000) return null;
+    return raw;
+  }
+
   function formatNum(v) {
     if (v === null || v === undefined || !Number.isFinite(Number(v))) return '';
     return String(Math.round(Number(v) * 10000) / 10000);
@@ -56,6 +63,7 @@
   function isFieldFilled(item, key) {
     if (!item) return false;
     const v = item[key];
+    if (key === 'qty') return typeof v === 'number' && Number.isFinite(v) && v > 1;
     return typeof v === 'number' ? Number.isFinite(v) : Boolean(v);
   }
 
@@ -116,6 +124,7 @@
       manufacturer: String(it.manufacturer || '').trim().slice(0, 140),
       partNumber: String(it.partNumber || '').trim().slice(0, 120),
       procurementStatus: String(it.procurementStatus || '').trim().slice(0, 80),
+      qty: parseOptionalQty(it.qty),
       mass: parseOptionalNumber(it.mass),
       powerConsumption: parseOptionalNumber(it.powerConsumption),
       powerDissipation: parseOptionalNumber(it.powerDissipation),
@@ -224,19 +233,56 @@
   }
 
   /* ---------- Item-level conflict diff & non-conflicting merge ---------- */
+  const FIELD_LABELS = [
+    ['code', 'Code'], ['name', 'Deliverable'], ['acronym', 'Acronym'], ['heritage', 'Status'],
+    ['maturity', 'Maturity'], ['deptId', 'Department'], ['owner', 'Owner'], ['milestoneId', 'Milestone'],
+    ['description', 'Description'], ['notes', 'Notes'],
+    ['mechDrawing', 'Mech. Dwg'], ['elecDrawing', 'Elec. Dwg'], ['refDoc', 'Ref. Doc'],
+    ['manufacturer', 'Manufacturer'], ['partNumber', 'Part No.'], ['procurementStatus', 'Proc. Status'],
+    ['leadTime', 'Lead (wks)'], ['componentAlt', 'Alternative'],
+    ['qty', 'Qty'], ['mass', 'Mass (kg)'], ['powerConsumption', 'Pwr Cons (W)'], ['powerDissipation', 'Pwr Diss (W)'],
+    ['mtbf', 'MTBF (h)'], ['lru', 'LRU'], ['spareAvailable', 'Spare Avail.'], ['spareToDeliver', 'Spare Deliv.'],
+    ['parentId', 'Parent'],
+  ];
+
   function itemSignature(it) {
     return JSON.stringify([
       it.parentId || null, it.code || '', it.name || '', it.deptId || '', it.owner || '', it.maturity || 'Draft', it.milestoneId || '', it.notes || '',
       it.acronym || '', it.description || '', it.heritage || '',
       it.mechDrawing || '', it.elecDrawing || '', it.refDoc || '',
       it.manufacturer || '', it.partNumber || '', it.procurementStatus || '',
-      it.mass ?? null, it.powerConsumption ?? null, it.powerDissipation ?? null, it.mtbf ?? null,
+      it.qty ?? null, it.mass ?? null, it.powerConsumption ?? null, it.powerDissipation ?? null, it.mtbf ?? null,
       it.lru || '', it.spareAvailable || '', it.spareToDeliver || '',
       it.leadTime ?? null, it.componentAlt || '',
     ]);
   }
 
-  function computeConflictDiff(localDoc, remoteDoc) {
+  function formatDiffVal(key, val, db) {
+    if (val === null || val === undefined || val === '') return '\u2014';
+    if (key === 'deptId' && db && Array.isArray(db.departments)) {
+      const d = db.departments.find(x => x.id === val);
+      return d ? `[${d.code}] ${d.name}` : String(val);
+    }
+    if (key === 'milestoneId' && db && Array.isArray(db.milestones)) {
+      const m = db.milestones.find(x => x.id === val);
+      return m ? m.title : String(val);
+    }
+    return typeof val === 'number' ? formatNum(val) : String(val);
+  }
+
+  function diffItemFields(localItem, remoteItem, db) {
+    const out = [];
+    FIELD_LABELS.forEach(([key, label]) => {
+      const lv = localItem ? (localItem[key] ?? '') : '';
+      const rv = remoteItem ? (remoteItem[key] ?? '') : '';
+      if (String(lv) !== String(rv)) {
+        out.push({ key, label, localVal: formatDiffVal(key, lv, db), remoteVal: formatDiffVal(key, rv, db) });
+      }
+    });
+    return out;
+  }
+
+  function computeConflictDiff(localDoc, remoteDoc, db) {
     const localItems = (localDoc && Array.isArray(localDoc.items)) ? localDoc.items : [];
     const remoteItems = (remoteDoc && Array.isArray(remoteDoc.items)) ? remoteDoc.items : [];
     const localMap = new Map(localItems.map(i => [i.id, i]));
@@ -247,7 +293,7 @@
     remoteItems.forEach(r => {
       const l = localMap.get(r.id);
       if (!l) addedRemote.push(r);
-      else if (itemSignature(l) !== itemSignature(r)) modifiedBoth.push({ local: l, remote: r });
+      else if (itemSignature(l) !== itemSignature(r)) modifiedBoth.push({ local: l, remote: r, changes: diffItemFields(l, r, db) });
     });
     localItems.forEach(l => { if (!remoteMap.has(l.id)) onlyLocal.push(l); });
     return { addedRemote, modifiedBoth, onlyLocal };
@@ -273,9 +319,9 @@
   P.YESNO_OPTIONS = YESNO_OPTIONS;
   P.PROC_STATUS_PRESETS = PROC_STATUS_PRESETS;
   P.data = {
-    PBS_SCHEMA, CACHE_KEY, HERITAGE_OPTIONS, YESNO_OPTIONS, PROC_STATUS_PRESETS, OPTIONAL_GROUPS, OPTIONAL_FIELD_KEYS,
-    normalizeHeritage, normalizeYesNo, parseOptionalNumber, formatNum, isFieldFilled, countOptionalFields,
+    PBS_SCHEMA, CACHE_KEY, HERITAGE_OPTIONS, YESNO_OPTIONS, PROC_STATUS_PRESETS, OPTIONAL_GROUPS, OPTIONAL_FIELD_KEYS, FIELD_LABELS,
+    normalizeHeritage, normalizeYesNo, parseOptionalNumber, parseOptionalQty, formatNum, isFieldFilled, countOptionalFields,
     makeId, sanitizeFilenamePart, getPbsFilename, createEmptyPbs, normalizePbsDoc,
-    loadCache, saveCache, encodePbsForDisk, decodePbsFromText, itemSignature, computeConflictDiff, mergeConflictDocs,
+    loadCache, saveCache, encodePbsForDisk, decodePbsFromText, itemSignature, diffItemFields, computeConflictDiff, mergeConflictDocs,
   };
 })();

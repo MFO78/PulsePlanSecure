@@ -2150,6 +2150,174 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
   assert.ok(out.htmlEditPsu.includes('data-pbs-section="docs" open>') && out.htmlEditPsu.includes('id="ppPbsProcStatusList"') && out.htmlEditPsu.includes('In Manufacture'), 'Edit form auto-opens populated sections and provides Procurement Status preset suggestions');
 });
 
+test('PBS v2 enhancements: non-double-counting SWaP + Qty, lead-time/spares risk, field conflict diff, filters/subtotals, renumber, URLs & current-view PDF', () => {
+  const out = vm.runInContext(`(() => {
+    const P = globalThis.__ppPbsV2;
+    const project = { id: 'p_enh', code: 'ORB', name: 'Orbiter Bus', color: '#0ea5e9' };
+    const db = {
+      departments: [
+        { id: 'd_el', code: 'EL', name: 'Electrical', color: '#4f46e5' },
+        { id: 'd_me', code: 'ME', name: 'Mechanical', color: '#10b981' },
+      ],
+      milestones: [
+        { id: 'm_cdr', title: 'CDR Hardware Freeze', date: '2026-08-01', status: 'Open', projectId: 'p_enh' },
+        { id: 'm_done', title: 'PDR', date: '2026-04-01', status: 'Done', projectId: 'p_enh' },
+      ],
+    };
+
+    // 1. Parent budget (5 kg) + children (1.25 kg + 4x0.25 kg = 2.25 kg + 2.1 kg = 4.35 kg) -> no double-counting!
+    // Also include lead-time slip (14 wks from 2026-06-01 -> ~2026-09-07 > 2026-08-01), spares gap, clickable URL, and delivered/received exemptions.
+    const doc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      items: [
+        { id: 'r1', parentId: null, code: '1', name: 'Avionics Bay', acronym: 'AVB', heritage: 'Update', maturity: 'CDR', mass: 4.0, powerConsumption: 80 },
+        { id: 'c1', parentId: 'r1', code: '1.1', name: 'Power Supply', acronym: 'PSU', heritage: 'New', maturity: 'CDR', deptId: 'd_el', milestoneId: 'm_cdr', procurementStatus: 'Ordered', leadTime: 14, mass: 1.25, powerConsumption: 45, powerDissipation: 8.5, lru: 'Yes', spareAvailable: 'No', spareToDeliver: 'Yes', refDoc: 'https://docs.example.com/icd/PWR-009' },
+        { id: 'c2', parentId: 'r1', code: '1.2', name: 'IMU Sensor', acronym: 'IMU', heritage: 'Existing', maturity: 'Qualified', deptId: 'd_el', milestoneId: 'm_cdr', procurementStatus: 'Received', leadTime: 20, qty: 4, mass: 0.25, powerConsumption: 5, powerDissipation: 2, spareAvailable: 'Yes', spareToDeliver: 'Yes' },
+        { id: 'c3', parentId: 'r1', code: '1.3', name: 'Alu Housing', acronym: 'HSG', heritage: 'Existing', maturity: 'Delivered', deptId: 'd_me', milestoneId: 'm_cdr', procurementStatus: 'In Stock', leadTime: 16, mass: 2.1, powerConsumption: 0, powerDissipation: 0 },
+      ],
+    }, project, 'Tester');
+
+    const summary = P.tree.computeMaturitySummary(doc, db.milestones, '2026-06-01');
+    const rollups = P.tree.computeSwpRollups(doc);
+    const r1Sub = rollups.byId.get('r1');
+    const c2Sub = rollups.byId.get('c2');
+
+    // 2. Per-field conflict diff
+    const remoteDoc = JSON.parse(JSON.stringify(doc));
+    remoteDoc.items[1].mass = 1.6;
+    remoteDoc.items[1].procurementStatus = 'In Transit';
+    remoteDoc.items[1].qty = 2;
+    const conflictDiff = P.data.computeConflictDiff(doc, remoteDoc, db);
+    const conflictHtml = P.view.renderConflictPanel({ conflict: { diff: conflictDiff } });
+
+    // 3. Extended filters & filtered subtotals (Electrical dept only -> c1 + c2 = 1.25 + 1.0 = 2.25 kg)
+    const aux = { summary, rollups };
+    const elRows = P.tree.getFilteredTreeRows(doc, { deptId: 'd_el' }, new Set(), aux);
+    const elMatchedIds = new Set(elRows.filter(r => !r.isContextOnly).map(r => r.item.id));
+    const elRollups = P.tree.computeFilteredRollups(doc, elMatchedIds);
+    const gapRows = P.tree.getFilteredTreeRows(doc, { flag: 'spareGap' }, new Set(), aux);
+    const leadRiskRows = P.tree.getFilteredTreeRows(doc, { flag: 'leadRisk' }, new Set(), aux);
+    const heritageRows = P.tree.getFilteredTreeRows(doc, { heritage: 'New' }, new Set(), aux);
+    const procRows = P.tree.getFilteredTreeRows(doc, { procStatus: 'Ordered' }, new Set(), aux);
+    const overlapRows = P.tree.getFilteredTreeRows(doc, { flag: 'overlap' }, new Set(), aux);
+
+    // 4. Current-view PDF (filtered Electrical + SWaP cols only) vs Full PDF
+    const fullModel = P.report.buildReportModel(doc, project, db, 'Tester', '2026-06-01');
+    const viewModel = P.report.buildReportModel(doc, project, db, 'Tester', '2026-06-01', {
+      visibleOptKeys: ['qty', 'mass', 'powerConsumption'],
+      rowIds: elRows.map(r => r.item.id),
+      matchedIds: Array.from(elMatchedIds),
+      todayIso: '2026-06-01',
+    });
+    const fullSvg = P.report.buildSvg(doc, project, db, '2026-06-01');
+
+    // 5. CSV round-trip with Qty + pasted Excel TSV with Qty
+    const csv = P.io.buildPbsCsv(doc, db);
+    const csvRt = P.io.parsePbsCsv(csv, db);
+    const pastedTsv = P.io.parsePbsCsv('Code\\tName\\tQty\\tMass (kg)\\n1\\tSensor\\t4x\\t0.25 kg\\n2\\tBadQty\\t0\\t1', db);
+
+    // 6. Auto-renumber after moving 1.3 above 1.2
+    const docRen = JSON.parse(JSON.stringify(doc));
+    P.tree.reorderItem(docRen, 'c3', 'up');
+    const codesBefore = P.tree.flattenTreeRows(docRen, null, 0, []).map(r => r.item.code).join(',');
+    const renRes = P.tree.renumberTree(docRen);
+    const codesAfter = P.tree.flattenTreeRows(docRen, null, 0, []).map(r => r.item.code).join(',');
+
+    // 7. Clickable URL rendering & XSS safety
+    const safeLink = P.view.renderTextOrLink('https://docs.example.com/icd/PWR-009');
+    const badProto = P.view.renderTextOrLink('javascript:alert(1)');
+    const plainDwg = P.view.renderTextOrLink('DWG-M-101 Rev C');
+
+    // 8. Full dialog HTML with filtered state, Undo/Redo, Paste panel, risk pills
+    const dialogHtml = P.view.buildDialogHtml({
+      doc, db, project, summary, rollups,
+      filteredRollups: elRollups, isFiltered: true, matchedCount: elMatchedIds.size,
+      rows: elRows, collapsedIds: new Set(),
+      colGroups: { docs: true, proc: true, swp: true },
+      filter: { search: '', deptId: 'd_el', maturity: '', milestoneId: '', heritage: '', procStatus: '', flag: '' },
+      edit: null, pasteOpen: true, canUndo: true, canRedo: false,
+      undoLabel: 'Undo: Update 1.1', redoLabel: 'Nothing to redo',
+      conflict: null, notices: [], owners: [], manufacturers: [], procStatuses: P.PROC_STATUS_PRESETS,
+      projectMilestones: db.milestones, cloneSources: [], canDirSync: false, dirName: '', hasRemembered: false,
+      status: { text: 'Saved locally', tone: 'idle' },
+    });
+
+    return {
+      summary, rollups, r1Sub, c2Sub,
+      conflictChanges: conflictDiff.modifiedBoth[0].changes.map(c => c.key).join(','),
+      conflictHtml,
+      elRollups,
+      gapIds: gapRows.filter(r => !r.isContextOnly).map(r => r.item.id).join(','),
+      leadRiskIds: leadRiskRows.filter(r => !r.isContextOnly).map(r => r.item.id).join(','),
+      heritageIds: heritageRows.filter(r => !r.isContextOnly).map(r => r.item.id).join(','),
+      procIds: procRows.filter(r => !r.isContextOnly).map(r => r.item.id).join(','),
+      overlapIds: overlapRows.filter(r => !r.isContextOnly).map(r => r.item.id).join(','),
+      fullModel, viewModel, fullSvg,
+      csvRtQty: csvRt.items.find(i => i.code === '1.2').qty,
+      csvRtWarnings: csvRt.warnings.length,
+      pastedTsv,
+      codesBefore, renChanged: renRes.changed, codesAfter,
+      safeLink, badProto, plainDwg, dialogHtml,
+    };
+  })()`, ctx);
+
+  // SWaP non-double-counting + Qty multiplication
+  assert.equal(out.rollups.totalMass, 4.35, 'Total mass uses children sum (1.25 + 4*0.25 + 2.1 = 4.35) without double-counting parent budget 4.0');
+  assert.equal(out.rollups.totalPowerConsumption, 65, 'Total power uses children sum (45 + 4*5 + 0 = 65 W) without double-counting parent 80 W');
+  assert.equal(out.rollups.totalPowerDissipation, 16.5, 'Total power dissipation multiplies Qty (8.5 + 4*2 = 16.5 W)');
+  assert.equal(out.rollups.overlapCount, 1, 'Detects 1 parent with budget/children overlap');
+  assert.equal(out.r1Sub.massOverlap, true, 'Flags parent mass overlap');
+  assert.equal(out.r1Sub.massOverBudget, true, 'Flags children mass (4.35) exceeding parent budget (4.0)');
+  assert.equal(out.r1Sub.powerConsOverlap, true, 'Flags parent power overlap');
+  assert.equal(out.r1Sub.powerConsOverBudget, false, 'Children power (65) is under parent budget (80)');
+  assert.equal(out.c2Sub.lineMass, 1, 'Qty=4 multiplies unit mass 0.25 -> lineMass 1 kg');
+
+  // Lead-time risk & spares gap
+  assert.equal(out.summary.leadRiskCount, 1, 'Only Ordered/non-Delivered PSU triggers lead-time risk (Received & Delivered items excluded)');
+  assert.equal(out.leadRiskIds, 'c1', 'Lead-time risk filter matches c1');
+  assert.equal(out.rollups.spareGapCount, 1, 'Detects 1 spares gap (spareToDeliver=Yes & spareAvailable=No)');
+  assert.equal(out.gapIds, 'c1', 'Spares gap filter matches c1');
+  assert.equal(out.heritageIds, 'c1', 'Heritage filter matches New item');
+  assert.equal(out.procIds, 'c1', 'Procurement status filter matches Ordered item');
+  assert.equal(out.overlapIds, 'r1', 'Overlap flag filter matches r1');
+
+  // Per-field conflict diff
+  assert.equal(out.conflictChanges, 'procurementStatus,qty,mass', 'Conflict diff reports exact changed optional fields');
+  assert.ok(out.conflictHtml.includes('Mass (kg)') && out.conflictHtml.includes('Proc. Status') && out.conflictHtml.includes('In Transit'), 'Conflict panel renders changed field labels and values');
+
+  // Filtered subtotals & current-view PDF
+  assert.equal(out.elRollups.totalMass, 2.25, 'Electrical filtered subtotal sums 1.25 + 4*0.25 = 2.25 kg');
+  assert.equal(out.elRollups.totalPowerConsumption, 65, 'Electrical filtered subtotal sums 45 + 4*5 = 65 W');
+  assert.equal(out.fullModel.rows[2].cells[out.fullModel.colIdx.mass], '1 (4x0.25)', 'Full PDF shows qty-multiplied mass breakdown');
+  assert.ok(out.fullModel.rows[0].cells[out.fullModel.colIdx.mass].includes('Sum 4.35 [vs 4]'), 'Full PDF annotates parent budget overlap');
+  assert.ok(out.fullModel.rows[1].cells[out.fullModel.colIdx.leadTime].includes('w!)'), 'Full PDF annotates lead-time slip risk');
+  assert.equal(out.fullModel.rows[1].cells[out.fullModel.colIdx.spareToDeliver], 'Yes (!)', 'Full PDF flags spares gap');
+  assert.equal(out.viewModel.head.length, 10, 'Current-view PDF restricts columns to 7 main + 3 selected optional cols (qty, mass, pwrCons)');
+  assert.equal(out.viewModel.layout.pageFormat, 'a4', 'Focused 10-col current-view PDF fits cleanly on A4 Landscape');
+  assert.equal(out.viewModel.totalRow.cells[0], 'FILTERED', 'Filtered PDF labels bottom row FILTERED');
+  assert.equal(out.viewModel.totalRow.cells[out.viewModel.colIdx.mass], '2.25', 'Filtered PDF total mass matches Electrical slice');
+  assert.ok(out.fullSvg.includes('IMU \u00d74') && out.fullSvg.includes('Quantity: 4'), 'SVG embeds Qty in card header and tooltip');
+
+  // CSV + Excel paste Qty & Renumber
+  assert.equal(out.csvRtWarnings, 0, '27-column CSV round-trip with Qty has zero warnings');
+  assert.equal(out.csvRtQty, 4, 'CSV round-trip preserves Quantity=4');
+  assert.equal(out.pastedTsv.items[0].qty, 4, 'Pasted TSV parses 4x as qty=4');
+  assert.equal(out.pastedTsv.items[1].qty, null, 'Pasted TSV rejects qty=0 to null');
+  assert.ok(out.pastedTsv.warnings.some(w => w.includes('invalid Quantity')), 'Invalid pasted Qty emits warning');
+  assert.equal(out.codesBefore, '1,1.1,1.3,1.2', 'Moving 1.3 up puts codes out of order');
+  assert.equal(out.renChanged, 2, 'renumberTree updates the 2 out-of-sequence codes');
+  assert.equal(out.codesAfter, '1,1.1,1.2,1.3', 'renumberTree restores clean sequential hierarchy');
+
+  // Clickable URLs & UI controls
+  assert.ok(out.safeLink.includes('<a href="https://docs.example.com/icd/PWR-009"') && out.safeLink.includes('rel="noopener noreferrer"'), 'https:// refDoc renders as safe clickable link');
+  assert.equal(out.badProto.includes('<a '), false, 'javascript: URL is rejected and rendered as plain escaped text');
+  assert.equal(out.plainDwg, 'DWG-M-101 Rev C', 'Plain drawing ID stays plain text');
+  assert.ok(out.dialogHtml.includes('id="ppPbsUndoBtn"') && out.dialogHtml.includes('id="ppPbsRedoBtn" disabled') && out.dialogHtml.includes('id="ppPbsRenumberBtn"') && out.dialogHtml.includes('id="ppPbsPastePanel"'), 'Dialog renders Undo/Redo, Renumber, and Paste panel');
+  assert.ok(out.dialogHtml.includes('id="ppPbsExportPdfViewBtn"') && out.dialogHtml.includes('FILTERED') && out.dialogHtml.includes('2 / 4 items'), 'Dialog renders PDF (Current View) and FILTERED subtotal footer');
+  assert.ok(out.dialogHtml.includes('data-pbs-flag-pill="leadRisk"') && out.dialogHtml.includes('data-pbs-flag-pill="spareGap"') && out.dialogHtml.includes('data-pbs-flag-pill="overlap"'), 'Summary bar renders clickable lead-time, spares-gap, and budget-overlap pills');
+  assert.ok(out.dialogHtml.includes('pp-pbs-yn-Warn') && out.dialogHtml.includes('pp-pbs-link'), 'Table renders spares gap warning pill and clickable URL link');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

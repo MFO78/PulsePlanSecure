@@ -2,10 +2,14 @@
  * Inert: only registers window.__ppPbsV2.ui; nothing is created or listened to until ui.open(projectId) is called. */
 (function ppPbsV2UiPart() {
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
+  const COL_PREFS_KEY = 'pulseplan_pbs_colprefs_v1';
+  const MAX_UNDO = 40;
+  const emptyFilter = () => ({ search: '', deptId: '', maturity: '', milestoneId: '', heritage: '', procStatus: '', flag: '' });
   const ui = {
-    dialog: null, wired: false, filter: { search: '', deptId: '', maturity: '', milestoneId: '' },
-    colGroups: { docs: false, proc: false, swp: false }, collapsedIds: new Set(),
-    edit: null, editSeq: 0, draft: null, notices: [], badgeRefresh: null,
+    dialog: null, wired: false, filter: emptyFilter(),
+    colGroups: { docs: false, proc: false, swp: false }, userLockedCols: false,
+    collapsedIds: new Set(), edit: null, editSeq: 0, draft: null, pasteOpen: false,
+    undoStack: [], redoStack: [], notices: [], badgeRefresh: null,
   };
   const C = () => P.core;
   const V = () => P.view;
@@ -20,7 +24,7 @@
     'ppPbsFMaturity', 'ppPbsFDept', 'ppPbsFOwner', 'ppPbsFMilestone', 'ppPbsFDescription', 'ppPbsFNotes',
     'ppPbsFMechDrawing', 'ppPbsFElecDrawing', 'ppPbsFRefDoc',
     'ppPbsFManufacturer', 'ppPbsFPartNumber', 'ppPbsFProcStatus', 'ppPbsFLeadTime', 'ppPbsFComponentAlt',
-    'ppPbsFMass', 'ppPbsFPowerCons', 'ppPbsFPowerDiss', 'ppPbsFMtbf', 'ppPbsFLru', 'ppPbsFSpareAvail', 'ppPbsFSpareDeliv',
+    'ppPbsFQty', 'ppPbsFMass', 'ppPbsFPowerCons', 'ppPbsFPowerDiss', 'ppPbsFMtbf', 'ppPbsFLru', 'ppPbsFSpareAvail', 'ppPbsFSpareDeliv',
   ];
 
   const isOpen = () => Boolean(ui.dialog && ui.dialog.open);
@@ -30,11 +34,64 @@
   const safe = (fn) => (...args) => Promise.resolve().then(() => fn(...args)).catch(err => C().toast((err && err.message) || 'Action failed.', 'error'));
   const doc = () => C().state.activeDoc;
   const project = () => C().getProject(C().state.activeProjectId);
+  const hasActiveFilter = () => {
+    const f = ui.filter;
+    return Boolean(f.search || f.deptId || f.maturity || f.milestoneId || f.heritage || f.procStatus || f.flag);
+  };
 
   function todayIso() {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  function loadColPrefs() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(COL_PREFS_KEY) : localStorage.getItem(COL_PREFS_KEY);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      if (p && typeof p === 'object') return { docs: Boolean(p.docs), proc: Boolean(p.proc), swp: Boolean(p.swp) };
+    } catch (_e) {}
+    return null;
+  }
+
+  function saveColPrefs(g) {
+    ui.userLockedCols = true;
+    try {
+      const raw = JSON.stringify({ docs: Boolean(g.docs), proc: Boolean(g.proc), swp: Boolean(g.swp) });
+      if (typeof safeSetStorage === 'function') safeSetStorage(COL_PREFS_KEY, raw);
+      else localStorage.setItem(COL_PREFS_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function pushUndo(label) {
+    const d = doc();
+    if (!d || !Array.isArray(d.items)) return;
+    ui.undoStack.push({ label: label || 'Edit', itemsJson: JSON.stringify(d.items) });
+    if (ui.undoStack.length > MAX_UNDO) ui.undoStack.shift();
+    ui.redoStack = [];
+  }
+
+  function undo() {
+    const d = doc();
+    if (!d || !ui.undoStack.length) return;
+    const entry = ui.undoStack.pop();
+    ui.redoStack.push({ label: entry.label, itemsJson: JSON.stringify(d.items) });
+    try { d.items = JSON.parse(entry.itemsJson); } catch (_e) { return; }
+    ui.edit = null; ui.pasteOpen = false; ui.notices = [];
+    commit(`Undo: ${entry.label}`);
+    C().toast(`Undid: ${entry.label}`, 'info');
+  }
+
+  function redo() {
+    const d = doc();
+    if (!d || !ui.redoStack.length) return;
+    const entry = ui.redoStack.pop();
+    ui.undoStack.push({ label: entry.label, itemsJson: JSON.stringify(d.items) });
+    try { d.items = JSON.parse(entry.itemsJson); } catch (_e) { return; }
+    ui.edit = null; ui.pasteOpen = false; ui.notices = [];
+    commit(`Redo: ${entry.label}`);
+    C().toast(`Redid: ${entry.label}`, 'info');
   }
 
   function projectMilestones(db, pid) {
@@ -64,14 +121,23 @@
     const d = S.activeDoc;
     const edit = ui.edit ? buildEdit() : null;
     if (ui.edit && !edit) ui.edit = null;
+    const summary = T().computeMaturitySummary(d, db.milestones || [], todayIso());
+    const rollups = T().computeSwpRollups(d);
+    const rows = T().getFilteredTreeRows(d, ui.filter, ui.collapsedIds, { summary, rollups });
+    const isFiltered = hasActiveFilter();
+    const matchedIds = isFiltered ? new Set(rows.filter(r => !r.isContextOnly).map(r => r.item.id)) : null;
+    const filteredRollups = isFiltered ? T().computeFilteredRollups(d, matchedIds) : null;
+    const lastUndo = ui.undoStack.length ? ui.undoStack[ui.undoStack.length - 1] : null;
+    const lastRedo = ui.redoStack.length ? ui.redoStack[ui.redoStack.length - 1] : null;
     return {
       doc: d, db, project: core.getProject(S.activeProjectId),
-      summary: T().computeMaturitySummary(d, db.milestones || [], todayIso()),
-      rollups: T().computeSwpRollups(d),
-      rows: T().getFilteredTreeRows(d, ui.filter, ui.collapsedIds),
-      collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
-      filter: ui.filter, edit,
-      conflict: S.conflictRemoteText ? { diff: S.conflictRemoteDoc ? D().computeConflictDiff(d, S.conflictRemoteDoc) : null } : null,
+      summary, rollups, filteredRollups, isFiltered, matchedCount: matchedIds ? matchedIds.size : d.items.length,
+      rows, collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
+      filter: ui.filter, edit, pasteOpen: ui.pasteOpen,
+      canUndo: Boolean(lastUndo), canRedo: Boolean(lastRedo),
+      undoLabel: lastUndo ? `Undo: ${lastUndo.label} (Ctrl+Z)` : 'Nothing to undo',
+      redoLabel: lastRedo ? `Redo: ${lastRedo.label} (Ctrl+Y)` : 'Nothing to redo',
+      conflict: S.conflictRemoteText ? { diff: S.conflictRemoteDoc ? D().computeConflictDiff(d, S.conflictRemoteDoc, db) : null } : null,
       notices: ui.notices,
       owners: core.getOwnerSuggestions(),
       manufacturers: core.getManufacturerSuggestions(),
@@ -90,7 +156,7 @@
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -126,6 +192,8 @@
     if (!isOpen()) return;
     const focus = captureFocus();
     const draft = readDraft();
+    const pasteEl = q('#ppPbsPasteInput');
+    const pasteDraft = pasteEl ? pasteEl.value : null;
     if (draft && ui.edit && draft.seq === ui.edit.seq) ui.edit.openSections = draft.sections;
     const body = q('.pp-pbs-body');
     const scrollTop = body ? body.scrollTop : 0;
@@ -138,6 +206,9 @@
     if (newTblWrap) newTblWrap.scrollLeft = scrollLeft;
     if (draft && ui.edit && draft.seq === ui.edit.seq && q('#ppPbsItemForm')) {
       Object.keys(draft.values).forEach(id => { const el = q(`#${id}`); if (el) el.value = draft.values[id]; });
+    }
+    if (pasteDraft !== null && ui.pasteOpen && q('#ppPbsPasteInput')) {
+      q('#ppPbsPasteInput').value = pasteDraft;
     }
     if (focusSel) {
       const target = q(focusSel);
@@ -169,6 +240,7 @@
 
   /* ---------- Tree actions ---------- */
   function openForm(itemId, parentId) {
+    ui.pasteOpen = false;
     ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq, openSections: null };
     if (parentId) ui.collapsedIds.delete(parentId);
     render('#ppPbsFName');
@@ -213,6 +285,19 @@
       return { ok: true, value: parsed };
     };
 
+    const rawQty = val('ppPbsFQty').trim();
+    let qtyVal = null;
+    if (rawQty) {
+      qtyVal = D().parseOptionalQty(rawQty);
+      if (qtyVal === null) {
+        const det = q('details[data-pbs-section="eng"]');
+        if (det) det.open = true;
+        C().toast('Quantity must be a whole number >= 1.', 'warning');
+        const el = q('#ppPbsFQty');
+        if (el) el.focus();
+        return;
+      }
+    }
     const mass = readNum('ppPbsFMass', 'Mass (kg)', 'eng'); if (!mass.ok) return;
     const powerConsumption = readNum('ppPbsFPowerCons', 'Power Consumption (W)', 'eng'); if (!powerConsumption.ok) return;
     const powerDissipation = readNum('ppPbsFPowerDiss', 'Power Dissipation (W)', 'eng'); if (!powerDissipation.ok) return;
@@ -235,6 +320,7 @@
       manufacturer: val('ppPbsFManufacturer').trim().slice(0, 140),
       partNumber: val('ppPbsFPartNumber').trim().slice(0, 120),
       procurementStatus: val('ppPbsFProcStatus').trim().slice(0, 80),
+      qty: qtyVal,
       mass: mass.value,
       powerConsumption: powerConsumption.value,
       powerDissipation: powerDissipation.value,
@@ -246,6 +332,7 @@
       componentAlt: val('ppPbsFComponentAlt').trim().slice(0, 200),
     };
     let id; let summary;
+    pushUndo(item ? `Update ${code} ${name}` : `Add ${code} ${name}`);
     if (item) {
       const prev = item.maturity;
       Object.assign(item, fields, { parentId });
@@ -270,6 +357,7 @@
     (function walk(pid) { T().getChildren(d, pid).forEach(c => { ids.add(c.id); walk(c.id); }); })(id);
     const n = ids.size - 1;
     if (!askOk(`Delete "${item.name}"${n ? ` and its ${n} sub-item${n === 1 ? '' : 's'}` : ''}?`)) return;
+    pushUndo(`Delete ${item.code} ${item.name}`);
     d.items = d.items.filter(i => !ids.has(i.id));
     ids.forEach(x => ui.collapsedIds.delete(x));
     if (ui.edit && ids.has(ui.edit.itemId)) ui.edit = null;
@@ -280,11 +368,55 @@
     const d = doc();
     const item = d.items.find(i => i.id === id);
     if (!item) return;
+    const snap = JSON.stringify(d.items);
     const res = T().reorderItem(d, id, action);
     if (!res.ok) { C().toast('That item cannot be moved further in this direction.', 'info'); return; }
-    if (action === 'indent' && res.newParentId) ui.collapsedIds.delete(res.newParentId);
     const label = { up: 'Moved up', down: 'Moved down', indent: 'Indented', outdent: 'Outdented' }[action] || 'Moved';
+    ui.undoStack.push({ label: `${label} ${item.code} ${item.name}`, itemsJson: snap });
+    if (ui.undoStack.length > MAX_UNDO) ui.undoStack.shift();
+    ui.redoStack = [];
+    if (action === 'indent' && res.newParentId) ui.collapsedIds.delete(res.newParentId);
     commit(`${label} PBS item ${item.code} ${item.name}`);
+  }
+
+  function renumberItems() {
+    const d = doc();
+    if (!d || d.items.length < 2) return;
+    if (!askOk('Re-sequence all PBS item codes (1, 1.1, 1.2...) to match the current tree hierarchy? You can undo this with Ctrl+Z.')) return;
+    const snap = JSON.stringify(d.items);
+    const { changed } = T().renumberTree(d);
+    if (!changed) { C().toast('All PBS codes are already in sequential order.', 'info'); return; }
+    ui.undoStack.push({ label: `Renumber ${changed} codes`, itemsJson: snap });
+    if (ui.undoStack.length > MAX_UNDO) ui.undoStack.shift();
+    ui.redoStack = [];
+    commit(`Renumbered ${changed} PBS code${changed === 1 ? '' : 's'}`);
+    C().toast(`Renumbered ${changed} PBS item${changed === 1 ? '' : 's'}.`, 'success');
+  }
+
+  function openPastePanel() {
+    ui.edit = null;
+    ui.pasteOpen = true;
+    render('#ppPbsPasteInput');
+  }
+  function closePastePanel() {
+    ui.pasteOpen = false;
+    render('#ppPbsPasteBtn');
+  }
+  function submitPaste() {
+    const el = q('#ppPbsPasteInput');
+    const raw = el ? el.value : '';
+    if (!raw.trim()) { C().toast('Paste spreadsheet or CSV rows first.', 'warning'); if (el) el.focus(); return; }
+    const d = doc();
+    const { items, warnings } = IO().parsePbsCsv(raw, C().getDb());
+    if (!items.length) { C().toast('No PBS rows found in the pasted text.', 'warning'); return; }
+    if (items.length > MAX_IMPORT_ITEMS) { C().toast(`Too many pasted rows (limit ${MAX_IMPORT_ITEMS}).`, 'warning'); return; }
+    pushUndo(`Paste ${items.length} items`);
+    d.items.push(...items);
+    ui.pasteOpen = false;
+    ui.notices = [`Pasted ${items.length} item${items.length === 1 ? '' : 's'} from clipboard.`, ...warnings];
+    syncPopulatedColGroups(false);
+    commit(`Pasted ${items.length} PBS items`);
+    C().toast(`Imported ${items.length} pasted item${items.length === 1 ? '' : 's'}.`, 'success');
   }
 
   function toggleItem(id) {
@@ -300,8 +432,15 @@
   function syncPopulatedColGroups(reset) {
     const pop = V().getPopulatedGroupFlags ? V().getPopulatedGroupFlags(doc()) : { docs: false, proc: false, swp: false };
     if (reset) {
-      ui.colGroups = { docs: pop.docs, proc: pop.proc, swp: pop.swp };
-    } else {
+      const saved = loadColPrefs();
+      if (saved) {
+        ui.colGroups = saved;
+        ui.userLockedCols = true;
+      } else {
+        ui.colGroups = { docs: pop.docs, proc: pop.proc, swp: pop.swp };
+        ui.userLockedCols = false;
+      }
+    } else if (!ui.userLockedCols) {
       if (pop.docs) ui.colGroups.docs = true;
       if (pop.proc) ui.colGroups.proc = true;
       if (pop.swp) ui.colGroups.swp = true;
@@ -310,14 +449,18 @@
   function toggleColGroup(groupKey) {
     if (!['docs', 'proc', 'swp'].includes(groupKey)) return;
     ui.colGroups[groupKey] = !ui.colGroups[groupKey];
+    saveColPrefs(ui.colGroups);
     render();
   }
   function setMainOnlyCols() {
     ui.colGroups = { docs: false, proc: false, swp: false };
+    saveColPrefs(ui.colGroups);
     render();
   }
   function showAllUsedCols() {
-    syncPopulatedColGroups(true);
+    const pop = V().getPopulatedGroupFlags ? V().getPopulatedGroupFlags(doc()) : { docs: false, proc: false, swp: false };
+    ui.colGroups = { docs: pop.docs, proc: pop.proc, swp: pop.swp };
+    saveColPrefs(ui.colGroups);
     render();
   }
 
@@ -341,9 +484,10 @@
     const d = doc();
     const { doc: loaded, wasEncrypted } = await D().decodePbsFromText(await readFileText(file), project(), undefined, C().getUserName());
     if (d.items.length && !askOk(`Replace the ${d.items.length} existing items with ${loaded.items.length} items from "${file.name}"?`)) return;
+    pushUndo(`Load ${file.name}`);
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.edit = null;
+    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false;
     syncPopulatedColGroups(true);
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
@@ -359,6 +503,7 @@
     if (!items.length) { C().toast('No PBS rows found in that CSV file.', 'warning'); return; }
     if (items.length > MAX_IMPORT_ITEMS) { C().toast(`CSV has too many rows (limit ${MAX_IMPORT_ITEMS}).`, 'warning'); return; }
     if (d.items.length && !askOk(`Append ${items.length} imported items to the ${d.items.length} existing items?`)) return;
+    pushUndo(`Import ${items.length} CSV items`);
     d.items.push(...items);
     ui.notices = [`Imported ${items.length} item${items.length === 1 ? '' : 's'} from ${file.name}.`, ...warnings];
     syncPopulatedColGroups(false);
@@ -379,15 +524,32 @@
     C().toast('PDF library unavailable. Opened a print view: choose "Save as PDF".', 'info');
   }
 
-  function exportPdf() {
+  function buildPdfOptions(currentViewOnly) {
+    const date = todayIso();
+    if (!currentViewOnly) return { todayIso: date };
+    const d = doc();
+    const db = C().getDb();
+    const visibleOptKeys = V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key);
+    const opts = { visibleOptKeys, todayIso: date };
+    if (hasActiveFilter()) {
+      const summary = T().computeMaturitySummary(d, db.milestones || [], date);
+      const rollups = T().computeSwpRollups(d);
+      const rows = T().getFilteredTreeRows(d, ui.filter, new Set(), { summary, rollups });
+      opts.rowIds = rows.map(r => r.item.id);
+      opts.matchedIds = rows.filter(r => !r.isContextOnly).map(r => r.item.id);
+    }
+    return opts;
+  }
+
+  function exportPdf(currentViewOnly) {
     const p = project();
     const date = todayIso();
-    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date);
+    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly)));
     const JsPdf = window.jspdf && window.jspdf.jsPDF;
     if (JsPdf) {
       try {
         R().renderPdf(JsPdf, model).save(R().pdfFilename(p, C().state.activeProjectId, date));
-        C().toast('PBS PDF report exported.', 'success');
+        C().toast(currentViewOnly ? 'PBS current-view PDF exported.' : 'PBS PDF report exported.', 'success');
         return;
       } catch (_e) { /* fall back to print view */ }
     }
@@ -402,6 +564,7 @@
     const items = IO().cloneItems(src).map(it => ({ ...it, maturity: 'Draft' }));
     const label = sp ? `[${sp.code || sp.id}] ${sp.name}` : srcId;
     if (d.items.length && !askOk(`Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links, procurement status and spare availability are not copied.`)) { render(); return; }
+    pushUndo(`Clone from ${label}`);
     d.items.push(...items);
     syncPopulatedColGroups(false);
     commit(`Cloned ${items.length} items from ${label}`);
@@ -411,6 +574,7 @@
   async function conflictMerge() {
     const S = C().state;
     if (!S.conflictRemoteDoc) return;
+    pushUndo('Merge sync conflict');
     const remoteModified = S.conflictRemoteModified;
     const added = D().computeConflictDiff(S.activeDoc, S.conflictRemoteDoc).addedRemote.length;
     C().replaceDoc(D().mergeConflictDocs(S.activeDoc, S.conflictRemoteDoc), S.activeWasEncrypted);
@@ -422,6 +586,7 @@
   }
   async function conflictLoad() {
     if (!askOk('Discard your unsaved local changes and load the shared folder version?')) return;
+    pushUndo('Load shared folder');
     await C().syncFromFolder({});
     syncPopulatedColGroups(true);
     render();
@@ -437,8 +602,11 @@
   const BUTTONS = {
     ppPbsCloseBtn: () => closeDialog(),
     ppPbsAddRootBtn: () => openForm(null, null),
+    ppPbsUndoBtn: () => undo(),
+    ppPbsRedoBtn: () => redo(),
     ppPbsExpandAllBtn: () => setAllCollapsed(false),
     ppPbsCollapseAllBtn: () => setAllCollapsed(true),
+    ppPbsRenumberBtn: () => renumberItems(),
     ppPbsColsMainBtn: () => setMainOnlyCols(),
     ppPbsColsAllBtn: () => showAllUsedCols(),
     ppPbsLinkFolderBtn: safe(async () => { await C().linkFolder(); render(); }),
@@ -448,9 +616,13 @@
     ppPbsLoadJsonBtn: () => { const el = q('#ppPbsJsonFileInput'); if (el) el.click(); },
     ppPbsExportCsvBtn: safe(exportCsv),
     ppPbsImportCsvBtn: () => { const el = q('#ppPbsCsvFileInput'); if (el) el.click(); },
+    ppPbsPasteBtn: () => (ui.pasteOpen ? closePastePanel() : openPastePanel()),
+    ppPbsPasteCancel: () => closePastePanel(),
+    ppPbsPasteSubmit: safe(submitPaste),
     ppPbsExportSvgBtn: safe(exportSvg),
-    ppPbsExportPdfBtn: safe(exportPdf),
-    ppPbsClearFiltersBtn: () => { ui.filter = { search: '', deptId: '', maturity: '', milestoneId: '' }; render('#ppPbsFilterSearch'); },
+    ppPbsExportPdfBtn: safe(() => exportPdf(false)),
+    ppPbsExportPdfViewBtn: safe(() => exportPdf(true)),
+    ppPbsClearFiltersBtn: () => { ui.filter = emptyFilter(); render('#ppPbsFilterSearch'); },
     ppPbsFormCancel: () => closeForm(ui.edit ? ui.edit.itemId : null),
     ppPbsConflictMerge: safe(conflictMerge),
     ppPbsConflictLoad: safe(conflictLoad),
@@ -461,6 +633,11 @@
     const t = e.target.closest ? e.target.closest('button') : null;
     if (!t || !ui.dialog.contains(t)) return;
     const d = t.dataset;
+    if (d.pbsFlagPill) {
+      ui.filter.flag = ui.filter.flag === d.pbsFlagPill ? '' : d.pbsFlagPill;
+      render();
+      return;
+    }
     if (d.pbsColGroup) return toggleColGroup(d.pbsColGroup);
     if (d.pbsToggle) return toggleItem(d.pbsToggle);
     if (d.pbsMove) return moveItem(d.pbsId, d.pbsMove);
@@ -469,6 +646,14 @@
     if (d.pbsDel) return deleteItem(d.pbsDel);
     const fn = BUTTONS[t.id];
     if (fn) fn();
+  }
+
+  function onDblClick(e) {
+    if (e.target.closest && e.target.closest('button, a, input, select, textarea, form')) return;
+    const row = e.target.closest ? e.target.closest('[data-pbs-row]') : null;
+    if (!row || !ui.dialog.contains(row)) return;
+    const id = row.getAttribute('data-pbs-row');
+    if (id) openForm(id, null);
   }
 
   function onChange(e) {
@@ -482,6 +667,9 @@
     } else if (t.id === 'ppPbsFilterDept') { ui.filter.deptId = t.value; render();
     } else if (t.id === 'ppPbsFilterMaturity') { ui.filter.maturity = t.value; render();
     } else if (t.id === 'ppPbsFilterMs') { ui.filter.milestoneId = t.value; render();
+    } else if (t.id === 'ppPbsFilterHeritage') { ui.filter.heritage = t.value; render();
+    } else if (t.id === 'ppPbsFilterProc') { ui.filter.procStatus = t.value; render();
+    } else if (t.id === 'ppPbsFilterFlag') { ui.filter.flag = t.value; render();
     } else if (t.id === 'ppPbsCloneSelect' && t.value) { cloneFrom(t.value); }
   }
 
@@ -490,6 +678,13 @@
   }
 
   function onKeydown(e) {
+    const tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
+    const inEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    if (!inEditable && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
+    }
     const row = e.target.closest ? e.target.closest('[data-pbs-row]') : null;
     if (!row || e.target !== row) return;
     const id = row.getAttribute('data-pbs-row');
@@ -506,7 +701,13 @@
       while (next && !next.hasAttribute('data-pbs-row')) {
         next = e.key === 'ArrowDown' ? next.nextElementSibling : next.previousElementSibling;
       }
-      if (next && next.hasAttribute('data-pbs-row')) next.focus();
+      if (next && next.hasAttribute('data-pbs-row')) {
+        const tblWrap = q('.pp-pbs-table-wrap');
+        const sl = tblWrap ? tblWrap.scrollLeft : 0;
+        next.focus({ preventScroll: true });
+        if (typeof next.scrollIntoView === 'function') next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        if (tblWrap) tblWrap.scrollLeft = sl;
+      }
     } else if (e.key === 'ArrowRight' && toggle && toggle.getAttribute('aria-expanded') === 'false') { e.preventDefault(); toggleItem(id); }
     else if (e.key === 'ArrowLeft' && toggle && toggle.getAttribute('aria-expanded') === 'true') { e.preventDefault(); toggleItem(id); }
   }
@@ -520,11 +721,15 @@
     document.body.appendChild(el);
     ui.dialog = el;
     el.addEventListener('click', onClick);
+    el.addEventListener('dblclick', onDblClick);
     el.addEventListener('change', onChange);
     el.addEventListener('input', onInput);
     el.addEventListener('keydown', onKeydown);
     el.addEventListener('submit', (e) => { if (e.target.id === 'ppPbsItemForm') { e.preventDefault(); submitForm(); } });
-    el.addEventListener('cancel', (e) => { if (ui.edit) { e.preventDefault(); closeForm(ui.edit.itemId); } });
+    el.addEventListener('cancel', (e) => {
+      if (ui.edit) { e.preventDefault(); closeForm(ui.edit.itemId); }
+      else if (ui.pasteOpen) { e.preventDefault(); closePastePanel(); }
+    });
     el.addEventListener('close', () => { safe(onClosed)(); });
   }
 
@@ -535,7 +740,7 @@
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
     if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
     if (S.dirHandle && S.syncStatusText === 'Saving...' && !S.conflictRemoteText) await core.writeToFolder(false);
-    ui.edit = null; ui.draft = null;
+    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.undoStack = []; ui.redoStack = [];
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
 
@@ -546,8 +751,9 @@
     if (!core.openSession(projectId)) { core.toast('Project not found.', 'error'); return; }
     ensureDialog();
     V().injectStyles();
-    ui.filter = { search: '', deptId: '', maturity: '', milestoneId: '' };
-    ui.collapsedIds = new Set(); ui.edit = null; ui.notices = [];
+    ui.filter = emptyFilter();
+    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false;
+    ui.undoStack = []; ui.redoStack = []; ui.notices = [];
     syncPopulatedColGroups(true);
     const hooks = core.state.hooks;
     hooks.rerender = () => render();

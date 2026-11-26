@@ -9,7 +9,7 @@
     'Manufacturer', 'Part Number', 'Procurement/Manufacture Status',
     'Mass (kg)', 'Power Consumption (W)', 'Power Dissipation (W)', 'MTBF (h)',
     'LRU', 'SPARE Available', 'SPARE to be Delivered',
-    'Lead Time (wks)', 'Component Alternative',
+    'Lead Time (wks)', 'Component Alternative', 'Quantity',
   ];
 
   const POSITIONAL_KEYS = [
@@ -19,7 +19,7 @@
     'manufacturer', 'partNumber', 'procurementStatus',
     'mass', 'powerConsumption', 'powerDissipation', 'mtbf',
     'lru', 'spareAvailable', 'spareToDeliver',
-    'leadTime', 'componentAlt',
+    'leadTime', 'componentAlt', 'qty',
   ];
 
   const HEADER_ALIASES = {
@@ -49,6 +49,7 @@
     sparetobedelivered: 'spareToDeliver', sparetodeliver: 'spareToDeliver', sparetobedeliveredyesno: 'spareToDeliver', sparetodeliveryesno: 'spareToDeliver',
     leadtimewks: 'leadTime', leadtimeweeks: 'leadTime', leadtimew: 'leadTime', leadtime: 'leadTime',
     componentalternative: 'componentAlt', alternative: 'componentAlt', altcomponent: 'componentAlt', secondsource: 'componentAlt',
+    quantity: 'qty', qty: 'qty', count: 'qty', units: 'qty', unitcount: 'qty', nb: 'qty',
   };
 
   const tree = () => P.tree;
@@ -104,7 +105,7 @@
         item.manufacturer || '', item.partNumber || '', item.procurementStatus || '',
         fmt(item.mass), fmt(item.powerConsumption), fmt(item.powerDissipation), fmt(item.mtbf),
         item.lru || '', item.spareAvailable || '', item.spareToDeliver || '',
-        fmt(item.leadTime), item.componentAlt || '',
+        fmt(item.leadTime), item.componentAlt || '', item.qty != null ? String(item.qty) : '',
       ].map(csvCell).join(','));
     });
     return '\uFEFF' + lines.join('\r\n');
@@ -197,6 +198,14 @@
         return yn;
       };
 
+      const rawQty = get('qty');
+      let qty = null;
+      if (rawQty) {
+        const cleanedQty = rawQty.replace(/^\s*x\s*|\s*x\s*$/i, '').trim();
+        qty = data().parseOptionalQty(cleanedQty);
+        if (qty === null) warnings.push(`Row ${rowNum}: invalid Quantity "${rawQty}" (expected integer >= 1), ignored.`);
+      }
+
       if (codeToId.has(code)) warnings.push(`Row ${rowNum}: duplicate code "${code}"; parent links use the first occurrence.`);
       const id = makeId('pbs');
       items.push({
@@ -212,6 +221,7 @@
         manufacturer: get('manufacturer').slice(0, 140),
         partNumber: get('partNumber').slice(0, 120),
         procurementStatus: get('procurementStatus').slice(0, 80),
+        qty,
         mass: parseCsvNumber(get('mass'), /\s*kg$/i, rowNum, 'Mass (kg)', warnings),
         powerConsumption: parseCsvNumber(get('powerConsumption'), /\s*w$/i, rowNum, 'Power Consumption (W)', warnings),
         powerDissipation: parseCsvNumber(get('powerDissipation'), /\s*w$/i, rowNum, 'Power Dissipation (W)', warnings),

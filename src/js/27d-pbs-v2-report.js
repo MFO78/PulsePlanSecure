@@ -51,6 +51,7 @@
     if (n.procurementStatus) lines.push(`Procurement: ${n.procurementStatus}`);
     if (isNum(n.leadTime)) lines.push(`Lead Time: ${fmtNum(n.leadTime)} wks`);
     if (n.componentAlt) lines.push(`Alternative: ${n.componentAlt}`);
+    if (isNum(n.qty) && n.qty > 1) lines.push(`Quantity: ${n.qty}`);
     if (isNum(n.mass)) lines.push(`Mass: ${fmtNum(n.mass)} kg`);
     if (isNum(n.powerConsumption)) lines.push(`Power Consumption: ${fmtNum(n.powerConsumption)} W`);
     if (isNum(n.powerDissipation)) lines.push(`Power Dissipation: ${fmtNum(n.powerDissipation)} W`);
@@ -120,7 +121,8 @@
       const hBadge = hInfo
         ? `<rect x="${W - 36}" y="49" width="28" height="14" rx="4" fill="${hInfo.bg}"/><text x="${W - 22}" y="59" text-anchor="middle" font-size="8" font-weight="700" fill="${hInfo.fg}">${hInfo.short}</text>`
         : '';
-      const codeLabel = !n.isRoot && n.acronym ? clip(`${n.code} \u00b7 ${n.acronym}`, 17) : clip(n.code, 12);
+      const qtySuffix = !n.isRoot && isNum(n.qty) && n.qty > 1 ? ` \u00d7${n.qty}` : '';
+      const codeLabel = !n.isRoot && n.acronym ? clip(`${n.code} \u00b7 ${n.acronym}${qtySuffix}`, 17) : clip(`${n.code}${qtySuffix}`, 15);
       const tip = buildCardTooltip(n, dept);
       cards.push(`<g transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
     <title>${xmlEsc(tip)}</title>
@@ -168,40 +170,77 @@
     { key: 'manufacturer', label: 'Manufacturer', w: 74, has: it => Boolean(it.manufacturer) },
     { key: 'partNumber', label: 'Part No.', w: 80, has: it => Boolean(it.partNumber) },
     { key: 'procurementStatus', label: 'Proc. Status', w: 66, has: it => Boolean(it.procurementStatus) },
-    { key: 'leadTime', label: 'Lead (wks)', w: 46, align: 'right', has: it => isNum(it.leadTime) },
+    { key: 'leadTime', label: 'Lead (wks)', w: 52, align: 'right', has: it => isNum(it.leadTime) },
     { key: 'componentAlt', label: 'Alternative', w: 80, has: it => Boolean(it.componentAlt) },
-    { key: 'mass', label: 'Mass (kg)', w: 48, align: 'right', has: it => isNum(it.mass) },
-    { key: 'powerConsumption', label: 'Pwr Cons (W)', w: 52, align: 'right', has: it => isNum(it.powerConsumption) },
-    { key: 'powerDissipation', label: 'Pwr Diss (W)', w: 52, align: 'right', has: it => isNum(it.powerDissipation) },
+    { key: 'qty', label: 'Qty', w: 30, align: 'right', has: it => isNum(it.qty) && it.qty > 1 },
+    { key: 'mass', label: 'Mass (kg)', w: 54, align: 'right', has: it => isNum(it.mass) },
+    { key: 'powerConsumption', label: 'Pwr Cons (W)', w: 56, align: 'right', has: it => isNum(it.powerConsumption) },
+    { key: 'powerDissipation', label: 'Pwr Diss (W)', w: 56, align: 'right', has: it => isNum(it.powerDissipation) },
     { key: 'mtbf', label: 'MTBF (h)', w: 52, align: 'right', has: it => isNum(it.mtbf) },
     { key: 'lru', label: 'LRU', w: 40, align: 'center', has: it => Boolean(it.lru) },
     { key: 'spareAvailable', label: 'Spare Avail.', w: 44, align: 'center', has: it => Boolean(it.spareAvailable) },
-    { key: 'spareToDeliver', label: 'Spare Deliv.', w: 44, align: 'center', has: it => Boolean(it.spareToDeliver) },
+    { key: 'spareToDeliver', label: 'Spare Deliv.', w: 48, align: 'center', has: it => Boolean(it.spareToDeliver) },
     { key: 'notes', label: 'Notes', always: true, w: 90, auto: true },
   ];
 
-  function buildReportModel(doc, project, db, userName, dateStr) {
+  const round4 = (n) => Math.round(n * 10000) / 10000;
+
+  /* options?: { visibleOptKeys?: Set|Array, rowIds?: Set|Array, matchedIds?: Set|Array, todayIso?: string } */
+  function buildReportModel(doc, project, db, userName, dateStr, options) {
+    const opts = options || {};
     const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
     const msMap = new Map(((db && db.milestones) || []).map(m => [m.id, m]));
-    const rollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
-    const flat = P.tree.flattenTreeRows(doc, null, 0, []);
+    const fullRollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
+    const summary = P.tree && typeof P.tree.computeMaturitySummary === 'function'
+      ? P.tree.computeMaturitySummary(doc, (db && db.milestones) || [], opts.todayIso || dateStr || '')
+      : null;
 
-    const activeCols = REPORT_COLS.filter(c => c.always || flat.some(({ item }) => c.has(item)));
+    const allFlat = P.tree.flattenTreeRows(doc, null, 0, []);
+    const rowIdSet = opts.rowIds ? new Set(opts.rowIds) : null;
+    const matchedIdSet = opts.matchedIds ? new Set(opts.matchedIds) : null;
+    const flat = rowIdSet ? allFlat.filter(({ item }) => rowIdSet.has(item.id)) : allFlat;
+    const isFiltered = Boolean(matchedIdSet);
+    const totalRollups = (isFiltered && P.tree && typeof P.tree.computeFilteredRollups === 'function')
+      ? P.tree.computeFilteredRollups(doc, matchedIdSet)
+      : fullRollups;
+
+    const visOptSet = opts.visibleOptKeys ? new Set(opts.visibleOptKeys) : null;
+    const activeCols = REPORT_COLS.filter(c => {
+      if (c.always) return true;
+      if (visOptSet && !visOptSet.has(c.key)) return false;
+      return flat.some(({ item }) => c.has(item));
+    });
     const hasOpt = activeCols.some(c => !c.always);
     const colIdx = {};
     activeCols.forEach((c, i) => { colIdx[c.key] = i; });
 
-    const metricCell = (own, desc) => {
-      if (isNum(own)) return { text: pdfSafe(fmtNum(own)), isRollup: false };
-      if (isNum(desc)) return { text: pdfSafe(`Sum ${fmtNum(desc)}`), isRollup: true };
-      return { text: '-', isRollup: false };
+    const metricCell = (own, desc, descUnit, overlap, overBudget, effQ) => {
+      if (overlap) {
+        const qNote = effQ > 1 ? ` (${effQ}x${fmtNum(descUnit)})` : '';
+        return { text: pdfSafe(`Sum ${fmtNum(desc)}${qNote} [vs ${fmtNum(own)}]`), isRollup: true, isWarn: !overBudget, isErr: overBudget };
+      }
+      if (isNum(own)) {
+        if (effQ > 1) return { text: pdfSafe(`${fmtNum(round4(own * effQ))} (${effQ}x${fmtNum(own)})`), isRollup: false, isWarn: false, isErr: false };
+        return { text: pdfSafe(fmtNum(own)), isRollup: false, isWarn: false, isErr: false };
+      }
+      if (isNum(desc)) {
+        const qNote = effQ > 1 ? ` (${effQ}x${fmtNum(descUnit)})` : '';
+        return { text: pdfSafe(`Sum ${fmtNum(desc)}${qNote}`), isRollup: true, isWarn: false, isErr: false };
+      }
+      return { text: '-', isRollup: false, isWarn: false, isErr: false };
     };
 
     const rows = flat.map(({ item, depth }) => {
       const dept = item.deptId ? deptMap.get(item.deptId) : null;
       const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
-      const sub = rollups && rollups.byId ? rollups.byId.get(item.id) : null;
+      const sub = fullRollups && fullRollups.byId ? fullRollups.byId.get(item.id) : null;
+      const effQ = sub ? sub.effQty : ((isNum(item.qty) && item.qty > 1) ? item.qty : 1);
+      const leadRisk = summary && summary.leadRiskMap ? summary.leadRiskMap.get(item.id) : null;
+      const isSpareGap = Boolean(fullRollups && fullRollups.spareGapIds && fullRollups.spareGapIds.has(item.id));
+      const isContext = Boolean(matchedIdSet && !matchedIdSet.has(item.id));
       const rollupCols = new Set();
+      const warnCols = new Set();
+      const errCols = new Set();
 
       const cells = activeCols.map((col, idx) => {
         switch (col.key) {
@@ -220,27 +259,45 @@
           case 'manufacturer': return item.manufacturer ? pdfSafe(item.manufacturer) : '-';
           case 'partNumber': return item.partNumber ? pdfSafe(item.partNumber) : '-';
           case 'procurementStatus': return item.procurementStatus ? pdfSafe(item.procurementStatus) : '-';
-          case 'leadTime': return isNum(item.leadTime) ? pdfSafe(fmtNum(item.leadTime)) : '-';
+          case 'leadTime': {
+            if (!isNum(item.leadTime)) return '-';
+            if (leadRisk) {
+              errCols.add(idx);
+              return pdfSafe(`${fmtNum(item.leadTime)} (+${leadRisk.slipWeeks}w!)`);
+            }
+            return pdfSafe(fmtNum(item.leadTime));
+          }
           case 'componentAlt': return item.componentAlt ? pdfSafe(item.componentAlt) : '-';
+          case 'qty': return isNum(item.qty) && item.qty > 1 ? String(item.qty) : (isNum(item.qty) ? '1' : '-');
           case 'mass': {
-            const m = metricCell(item.mass, sub && sub.descMass);
+            const m = metricCell(item.mass, sub && sub.descMass, sub && sub.descMassUnit, Boolean(sub && sub.massOverlap), Boolean(sub && sub.massOverBudget), effQ);
             if (m.isRollup) rollupCols.add(idx);
+            if (m.isWarn) warnCols.add(idx);
+            if (m.isErr) errCols.add(idx);
             return m.text;
           }
           case 'powerConsumption': {
-            const m = metricCell(item.powerConsumption, sub && sub.descPowerCons);
+            const m = metricCell(item.powerConsumption, sub && sub.descPowerCons, sub && sub.descPowerConsUnit, Boolean(sub && sub.powerConsOverlap), Boolean(sub && sub.powerConsOverBudget), effQ);
             if (m.isRollup) rollupCols.add(idx);
+            if (m.isWarn) warnCols.add(idx);
+            if (m.isErr) errCols.add(idx);
             return m.text;
           }
           case 'powerDissipation': {
-            const m = metricCell(item.powerDissipation, sub && sub.descPowerDiss);
+            const m = metricCell(item.powerDissipation, sub && sub.descPowerDiss, sub && sub.descPowerDissUnit, Boolean(sub && sub.powerDissOverlap), Boolean(sub && sub.powerDissOverBudget), effQ);
             if (m.isRollup) rollupCols.add(idx);
+            if (m.isWarn) warnCols.add(idx);
+            if (m.isErr) errCols.add(idx);
             return m.text;
           }
           case 'mtbf': return isNum(item.mtbf) ? pdfSafe(fmtNum(item.mtbf)) : '-';
           case 'lru': return item.lru ? pdfSafe(item.lru) : '-';
           case 'spareAvailable': return item.spareAvailable ? pdfSafe(item.spareAvailable) : '-';
-          case 'spareToDeliver': return item.spareToDeliver ? pdfSafe(item.spareToDeliver) : '-';
+          case 'spareToDeliver': {
+            if (!item.spareToDeliver) return '-';
+            if (isSpareGap) { warnCols.add(idx); return 'Yes (!)'; }
+            return pdfSafe(item.spareToDeliver);
+          }
           case 'notes': return pdfSafe(item.notes || '');
           default: return '';
         }
@@ -251,35 +308,42 @@
         maturity: item.maturity,
         deptColor: dept && dept.color ? dept.color : null,
         isTotal: false,
+        isContext,
         rollupCols,
+        warnCols,
+        errCols,
         cells,
       };
     });
 
-    /* Append a single unified TOTAL row directly at the bottom when numeric SWaP / LRU / Spare columns are present. */
+    /* Append a single unified TOTAL (or FILTERED) row directly at the bottom when numeric SWaP / LRU / Spare columns are present. */
     const hasTotalCols = Boolean(
-      rollups && (
-        (colIdx.mass !== undefined && rollups.totalMass !== null)
-        || (colIdx.powerConsumption !== undefined && rollups.totalPowerConsumption !== null)
-        || (colIdx.powerDissipation !== undefined && rollups.totalPowerDissipation !== null)
-        || (colIdx.lru !== undefined && rollups.lruCount > 0)
-        || (colIdx.spareAvailable !== undefined && rollups.spareAvailCount > 0)
-        || (colIdx.spareToDeliver !== undefined && rollups.spareDelivCount > 0)
+      totalRollups && (
+        (colIdx.mass !== undefined && totalRollups.totalMass !== null)
+        || (colIdx.powerConsumption !== undefined && totalRollups.totalPowerConsumption !== null)
+        || (colIdx.powerDissipation !== undefined && totalRollups.totalPowerDissipation !== null)
+        || (colIdx.lru !== undefined && totalRollups.lruCount > 0)
+        || (colIdx.spareAvailable !== undefined && totalRollups.spareAvailCount > 0)
+        || (colIdx.spareToDeliver !== undefined && totalRollups.spareDelivCount > 0)
       )
     );
+    const itemCountLabel = isFiltered
+      ? `${matchedIdSet.size} / ${allFlat.length} items`
+      : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
     let totalRow = null;
     if (hasTotalCols && rows.length) {
       totalRow = {
-        depth: 0, maturity: '', deptColor: null, isTotal: true, rollupCols: new Set(),
+        depth: 0, maturity: '', deptColor: null, isTotal: true, isContext: false,
+        rollupCols: new Set(), warnCols: new Set(), errCols: new Set(),
         cells: activeCols.map(col => {
-          if (col.key === 'code') return 'TOTAL';
-          if (col.key === 'name') return pdfSafe(`${rows.length} item${rows.length === 1 ? '' : 's'}`);
-          if (col.key === 'mass') return rollups.totalMass !== null ? pdfSafe(fmtNum(rollups.totalMass)) : '-';
-          if (col.key === 'powerConsumption') return rollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(rollups.totalPowerConsumption)) : '-';
-          if (col.key === 'powerDissipation') return rollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(rollups.totalPowerDissipation)) : '-';
-          if (col.key === 'lru') return rollups.lruCount ? `${rollups.lruCount} Yes` : '-';
-          if (col.key === 'spareAvailable') return rollups.spareAvailCount ? `${rollups.spareAvailCount} Yes` : '-';
-          if (col.key === 'spareToDeliver') return rollups.spareDelivCount ? `${rollups.spareDelivCount} Yes` : '-';
+          if (col.key === 'code') return isFiltered ? 'FILTERED' : 'TOTAL';
+          if (col.key === 'name') return pdfSafe(itemCountLabel);
+          if (col.key === 'mass') return totalRollups.totalMass !== null ? pdfSafe(fmtNum(totalRollups.totalMass)) : '-';
+          if (col.key === 'powerConsumption') return totalRollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(totalRollups.totalPowerConsumption)) : '-';
+          if (col.key === 'powerDissipation') return totalRollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(totalRollups.totalPowerDissipation)) : '-';
+          if (col.key === 'lru') return totalRollups.lruCount ? `${totalRollups.lruCount} Yes` : '-';
+          if (col.key === 'spareAvailable') return totalRollups.spareAvailCount ? `${totalRollups.spareAvailCount} Yes` : '-';
+          if (col.key === 'spareToDeliver') return totalRollups.spareDelivCount ? `${totalRollups.spareDelivCount} Yes` : '-';
           return '';
         }),
       };
@@ -298,7 +362,7 @@
         fontSize = 7.8;
         cellPadding = 4.5;
       } else {
-        const customW = Math.min(1820, Math.ceil(neededW + marginX * 2 + 16));
+        const customW = Math.min(1860, Math.ceil(neededW + marginX * 2 + 16));
         pageFormat = [customW, 842];
         pageLabel = 'Wide Landscape';
         fontSize = 7.4;
@@ -307,13 +371,15 @@
     }
 
     const swpSub = [];
-    if (rollups && rollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(rollups.totalMass)} kg`);
-    if (rollups && rollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(rollups.totalPowerConsumption)} W`);
-    if (rollups && rollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(rollups.totalPowerDissipation)} W`);
+    if (totalRollups && totalRollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(totalRollups.totalMass)} kg`);
+    if (totalRollups && totalRollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(totalRollups.totalPowerConsumption)} W`);
+    if (totalRollups && totalRollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(totalRollups.totalPowerDissipation)} W`);
+    const scopeTag = isFiltered ? `Filtered (${matchedIdSet.size} of ${allFlat.length} items)` : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
+    const viewTag = visOptSet ? 'Current columns' : '';
 
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
-      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
+      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${scopeTag}${viewTag ? `  |  ${viewTag}` : ''}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
       projectColor: project && project.color ? project.color : null,
       cols: activeCols,
       colIdx,
@@ -321,6 +387,7 @@
       rows,
       totalRow,
       hasOpt,
+      isFiltered,
       layout: { pageFormat, pageLabel, neededW, marginX, fontSize, cellPadding },
     };
   }
@@ -357,8 +424,10 @@
     const allRows = model.totalRow ? [...model.rows, model.totalRow] : model.rows;
     const emptyBodyRow = cols.map((c, i) => (i === colIdx.name ? 'No PBS items recorded' : (c.key === 'notes' ? '' : '-')));
     const meta = allRows.map(r => ({
-      depth: r.depth, maturity: r.maturity, isTotal: Boolean(r.isTotal),
+      depth: r.depth, maturity: r.maturity, isTotal: Boolean(r.isTotal), isContext: Boolean(r.isContext),
       rollupCols: r.rollupCols || new Set(),
+      warnCols: r.warnCols || new Set(),
+      errCols: r.errCols || new Set(),
       deptRgb: r.deptColor ? hexToRgb(r.deptColor) : null,
     }));
 
@@ -380,6 +449,7 @@
           data.cell.styles.textColor = [15, 23, 42];
           return;
         }
+        if (m.isContext) data.cell.styles.textColor = [100, 116, 139];
         if (m.deptRgb) {
           data.cell.styles.fillColor = tint(m.deptRgb, 0.11);
           if (data.column.index === colIdx.dept) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
@@ -393,6 +463,14 @@
         if (m.rollupCols && m.rollupCols.has(data.column.index)) {
           data.cell.styles.fontStyle = 'italic';
           data.cell.styles.textColor = [100, 116, 139];
+        }
+        if (m.warnCols && m.warnCols.has(data.column.index)) {
+          data.cell.styles.textColor = [180, 83, 9];
+          data.cell.styles.fontStyle = 'bold';
+        }
+        if (m.errCols && m.errCols.has(data.column.index)) {
+          data.cell.styles.textColor = [190, 18, 60];
+          data.cell.styles.fontStyle = 'bold';
         }
       },
       didDrawCell(data) {
@@ -415,7 +493,7 @@
 
     const body = allRows.map(r => {
       const accent = r.deptColor || '#cbd5e1';
-      const rowStyle = r.isTotal ? ' style="background:#e2e8f0;font-weight:700"' : '';
+      const rowStyle = r.isTotal ? ' style="background:#e2e8f0;font-weight:700"' : (r.isContext ? ' style="opacity:.65"' : '');
       const tds = r.cells.map((cell, idx) => {
         const col = cols[idx] || {};
         const styles = [];
@@ -425,6 +503,8 @@
         if (col.align) styles.push(`text-align:${col.align}`);
         if (r.isTotal) styles.push('white-space:nowrap');
         if (r.rollupCols && r.rollupCols.has(idx)) styles.push('font-style:italic;color:#64748b');
+        if (r.warnCols && r.warnCols.has(idx)) styles.push('color:#b45309;font-weight:700');
+        if (r.errCols && r.errCols.has(idx)) styles.push('color:#be123c;font-weight:700');
         return `<td${styles.length ? ` style="${styles.join(';')}"` : ''}>${htmlEsc(cell)}</td>`;
       }).join('');
       return `<tr${rowStyle}>${tds}</tr>`;

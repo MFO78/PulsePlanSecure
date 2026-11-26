@@ -32,16 +32,20 @@
     .pp-pbs-colhint { font-size: 10.5px; color: var(--text-muted, #64748b); }
     .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; }
     .pp-pbs-btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
-    .pp-pbs-btn:hover { background: var(--surface-subtle, #f1f5f9); }
-    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-chip:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
+    .pp-pbs-btn:hover:not(:disabled) { background: var(--surface-subtle, #f1f5f9); }
+    .pp-pbs-btn:disabled { opacity: .42; cursor: not-allowed; }
+    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-chip:focus-visible, .pp-pbs-pill-btn:focus-visible, .pp-pbs-textarea:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
     .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; }
-    .pp-pbs-btn-primary:hover { background: #4338ca; }
+    .pp-pbs-btn-primary:hover:not(:disabled) { background: #4338ca; }
     .pp-pbs-btn-emerald { background: #059669; border-color: #059669; color: #ffffff; }
-    .pp-pbs-btn-emerald:hover { background: #047857; }
+    .pp-pbs-btn-emerald:hover:not(:disabled) { background: #047857; }
     .pp-pbs-btn-danger { border-color: #fecdd3; background: #fff1f2; color: #be123c; }
     .pp-pbs-btn-xs { padding: .16rem .38rem; font-size: 10.5px; border-radius: .4rem; }
     .pp-pbs-input, .pp-pbs-select { padding: .32rem .55rem; border-radius: .5rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 11.5px; }
     .pp-pbs-pill { display: inline-flex; align-items: center; gap: .25rem; padding: .16rem .5rem; border-radius: 9999px; font-size: 10.5px; font-weight: 700; }
+    .pp-pbs-pill-btn { cursor: pointer; border: 1px solid transparent; transition: filter .12s, box-shadow .12s; }
+    .pp-pbs-pill-btn:hover { filter: brightness(.95); }
+    .pp-pbs-pill-btn.is-active { box-shadow: 0 0 0 2px #4f46e5; }
     .pp-pbs-pill-swp { background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; }
     .pp-pbs-status-ok { background: #dcfce7; color: #166534; }
     .pp-pbs-status-warn { background: #fef3c7; color: #92400e; }
@@ -76,13 +80,22 @@
     .pp-pbs-yn { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 10px; font-weight: 700; }
     .pp-pbs-yn-Yes { background: #d1fae5; color: #065f46; }
     .pp-pbs-yn-No { background: #f1f5f9; color: #64748b; }
+    .pp-pbs-yn-Warn { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
     .pp-pbs-subtext { font-size: 10.5px; color: var(--text-muted, #64748b); line-height: 1.35; margin-top: .08rem; }
+    .pp-pbs-cell-sub { display: block; font-size: 9.5px; line-height: 1.25; color: var(--text-muted, #64748b); font-weight: 600; }
+    .pp-pbs-cell-warn { color: #b45309 !important; font-weight: 700; }
+    .pp-pbs-cell-err { color: #be123c !important; font-weight: 700; }
+    .pp-pbs-link { color: #4338ca; text-decoration: underline; text-underline-offset: 2px; font-weight: 600; white-space: nowrap; }
+    .pp-pbs-link:hover { color: #312e81; }
     .pp-pbs-num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right !important; }
     .pp-pbs-center { text-align: center !important; white-space: nowrap; }
     .pp-pbs-rollup { font-style: italic; color: var(--text-muted, #64748b); font-size: 11px; }
     .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
     .pp-pbs-desc-cell { min-width: 150px; max-width: 240px; line-height: 1.3; }
-    .pp-pbs-form { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
+    .pp-pbs-form, .pp-pbs-paste { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
+    .pp-pbs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
+    .pp-pbs-paste { display: flex; flex-direction: column; gap: .5rem; }
+    .pp-pbs-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, monospace; font-size: 11.5px; padding: .5rem .6rem; border-radius: .5rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-sizing: border-box; resize: vertical; }
     .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; font-size: 11px; font-weight: 700; }
     .pp-pbs-section { grid-column: 1 / -1; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); overflow: hidden; }
     .pp-pbs-section > summary { display: flex; align-items: center; justify-content: space-between; padding: .46rem .7rem; font-size: 11.5px; font-weight: 800; color: var(--text-primary, #1e293b); cursor: pointer; user-select: none; list-style: none; }
@@ -102,8 +115,12 @@
     .pp-pbs-proj-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: .3rem; }
     .pp-pbs-proj-btn:hover { background: #e0e7ff; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #1e293b; border-bottom-color: #334155; }
-    html.dark .pp-pbs-form, body.dark .pp-pbs-form { border-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste { border-color: #334155; }
+    html.dark .pp-pbs-textarea, body.dark .pp-pbs-textarea { background: #0f172a; color: #e2e8f0; border-color: #475569; }
+    html.dark .pp-pbs-link, body.dark .pp-pbs-link { color: #93c5fd; }
+    html.dark .pp-pbs-cell-warn, body.dark .pp-pbs-cell-warn { color: #fbbf24 !important; }
+    html.dark .pp-pbs-cell-err, body.dark .pp-pbs-cell-err { color: #fda4af !important; }
     html.dark .pp-pbs-section, body.dark .pp-pbs-section { background: #0f172a; border-color: #334155; }
     html.dark .pp-pbs-section > summary, body.dark .pp-pbs-section > summary { color: #e2e8f0; }
     html.dark .pp-pbs-sec-grid, body.dark .pp-pbs-sec-grid { border-top-color: #334155; }
@@ -205,6 +222,24 @@
   const herPill = (h) => (h ? `<span class="pp-pbs-her pp-pbs-her-${esc(h)}">${esc(h)}</span>` : '');
   const ynPill = (v) => (v ? `<span class="pp-pbs-yn pp-pbs-yn-${esc(v)}">${esc(v)}</span>` : '\u2014');
 
+  function renderTextOrLink(val) {
+    const raw = String(val || '').trim();
+    if (!raw) return '\u2014';
+    if (/^https?:\/\/[^\s<>"']+$/i.test(raw)) {
+      let label = raw.replace(/^https?:\/\/(www\.)?/i, '');
+      try {
+        const u = new URL(raw);
+        const host = u.hostname.replace(/^www\./i, '');
+        const tail = u.pathname && u.pathname !== '/' ? u.pathname : '';
+        label = host + (tail.length > 26 ? `${tail.slice(0, 25)}\u2026` : tail);
+      } catch (_e) {
+        if (label.length > 36) label = `${label.slice(0, 35)}\u2026`;
+      }
+      return `<a href="${esc(raw)}" target="_blank" rel="noopener noreferrer" class="pp-pbs-link" title="${esc(raw)}">${esc(label)} &#8599;</a>`;
+    }
+    return esc(raw);
+  }
+
   const OPTIONAL_COL_GROUPS = {
     docs: [
       { key: 'description', label: 'Description', cls: 'pp-pbs-desc-cell', has: it => Boolean(it.description) },
@@ -221,6 +256,7 @@
     ],
     swp: [
       { key: 'heritage', label: 'Status', cls: 'pp-pbs-center', center: true, has: it => Boolean(it.heritage) },
+      { key: 'qty', label: 'Qty', cls: 'pp-pbs-num', right: true, has: it => isNum(it.qty) && it.qty > 1 },
       { key: 'mass', label: 'Mass (kg)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.mass) },
       { key: 'powerConsumption', label: 'Pwr Cons (W)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.powerConsumption) },
       { key: 'powerDissipation', label: 'Pwr Diss (W)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.powerDissipation) },
@@ -251,38 +287,85 @@
     return out;
   }
 
-  function formatMetricCell(own, desc, unit) {
+  function formatMetricCell(own, desc, descUnit, overlap, overBudget, effQ, unit) {
+    const q = effQ && effQ > 1 ? effQ : 1;
+    if (overlap) {
+      const tip = `Parent budget (${fmtNum(own)} ${unit}) and sub-items (\u03a3 ${fmtNum(descUnit)} ${unit}) are both set. Project totals use sub-items (\u03a3 ${fmtNum(desc)} ${unit}) to prevent double-counting.`;
+      const cls = overBudget ? 'pp-pbs-cell-err' : 'pp-pbs-cell-warn';
+      const note = overBudget ? `\u26a0 over ${fmtNum(own)}` : `\u26a0 vs ${fmtNum(own)}`;
+      return {
+        html: `<span class="pp-pbs-rollup" title="${esc(tip)}">&Sigma; ${esc(fmtNum(desc))}</span><span class="pp-pbs-cell-sub ${cls}" title="${esc(tip)}">${esc(note)}</span>`,
+        empty: false,
+      };
+    }
     if (isNum(own)) {
-      const tip = isNum(desc) ? ` title="Own: ${esc(fmtNum(own))} ${unit} + Sub-items: ${esc(fmtNum(desc))} ${unit}"` : '';
-      return { html: `<span${tip}>${esc(fmtNum(own))}</span>`, empty: false };
+      if (q > 1) {
+        const lineTot = Math.round(own * q * 10000) / 10000;
+        return {
+          html: `<span title="${q} &times; ${esc(fmtNum(own))} ${unit} = ${esc(fmtNum(lineTot))} ${unit}">${esc(fmtNum(lineTot))}</span><span class="pp-pbs-cell-sub">${q}&times;${esc(fmtNum(own))}</span>`,
+          empty: false,
+        };
+      }
+      return { html: `<span>${esc(fmtNum(own))}</span>`, empty: false };
     }
     if (isNum(desc)) {
+      if (q > 1) {
+        return {
+          html: `<span class="pp-pbs-rollup" title="Auto-rolled up from sub-items (${q} &times; ${esc(fmtNum(descUnit))} ${unit})">&Sigma; ${esc(fmtNum(desc))}</span><span class="pp-pbs-cell-sub">${q}&times;${esc(fmtNum(descUnit))}</span>`,
+          empty: false,
+        };
+      }
       return { html: `<span class="pp-pbs-rollup" title="Auto-rolled up from sub-items">&Sigma; ${esc(fmtNum(desc))}</span>`, empty: false };
     }
     return { html: '\u2014', empty: true };
   }
 
-  function renderOptionalCell(col, item, sub) {
+  function renderOptionalCell(col, item, sub, summary, rollups) {
     let html = '\u2014';
     let empty = true;
+    const effQ = sub ? sub.effQty : ((isNum(item.qty) && item.qty > 1) ? item.qty : 1);
     switch (col.key) {
       case 'description': if (item.description) { html = esc(item.description); empty = false; } break;
-      case 'mechDrawing': if (item.mechDrawing) { html = esc(item.mechDrawing); empty = false; } break;
-      case 'elecDrawing': if (item.elecDrawing) { html = esc(item.elecDrawing); empty = false; } break;
-      case 'refDoc': if (item.refDoc) { html = esc(item.refDoc); empty = false; } break;
+      case 'mechDrawing': if (item.mechDrawing) { html = renderTextOrLink(item.mechDrawing); empty = false; } break;
+      case 'elecDrawing': if (item.elecDrawing) { html = renderTextOrLink(item.elecDrawing); empty = false; } break;
+      case 'refDoc': if (item.refDoc) { html = renderTextOrLink(item.refDoc); empty = false; } break;
       case 'manufacturer': if (item.manufacturer) { html = esc(item.manufacturer); empty = false; } break;
       case 'partNumber': if (item.partNumber) { html = esc(item.partNumber); empty = false; } break;
       case 'procurementStatus': if (item.procurementStatus) { html = `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(item.procurementStatus)}</span>`; empty = false; } break;
-      case 'leadTime': if (isNum(item.leadTime)) { html = `${esc(fmtNum(item.leadTime))} wks`; empty = false; } break;
+      case 'leadTime':
+        if (isNum(item.leadTime)) {
+          const risk = summary && summary.leadRiskMap ? summary.leadRiskMap.get(item.id) : null;
+          html = `${esc(fmtNum(item.leadTime))} wks${risk ? `<span class="pp-pbs-cell-sub pp-pbs-cell-err" title="Projected ETA ${esc(risk.etaIso)} is ${risk.slipWeeks}w past milestone (${esc(risk.milestoneDate)})">\u26a0 +${risk.slipWeeks}w slip</span>` : ''}`;
+          empty = false;
+        }
+        break;
       case 'componentAlt': if (item.componentAlt) { html = esc(item.componentAlt); empty = false; } break;
       case 'heritage': if (item.heritage) { html = herPill(item.heritage); empty = false; } break;
-      case 'mass': ({ html, empty } = formatMetricCell(item.mass, sub && sub.descMass, 'kg')); break;
-      case 'powerConsumption': ({ html, empty } = formatMetricCell(item.powerConsumption, sub && sub.descPowerCons, 'W')); break;
-      case 'powerDissipation': ({ html, empty } = formatMetricCell(item.powerDissipation, sub && sub.descPowerDiss, 'W')); break;
+      case 'qty':
+        if (isNum(item.qty) && item.qty > 1) { html = `<strong>&times;${item.qty}</strong>`; empty = false; }
+        else if (isNum(item.qty)) { html = '1'; empty = false; }
+        break;
+      case 'mass':
+        ({ html, empty } = formatMetricCell(item.mass, sub && sub.descMass, sub && sub.descMassUnit, Boolean(sub && sub.massOverlap), Boolean(sub && sub.massOverBudget), effQ, 'kg'));
+        break;
+      case 'powerConsumption':
+        ({ html, empty } = formatMetricCell(item.powerConsumption, sub && sub.descPowerCons, sub && sub.descPowerConsUnit, Boolean(sub && sub.powerConsOverlap), Boolean(sub && sub.powerConsOverBudget), effQ, 'W'));
+        break;
+      case 'powerDissipation':
+        ({ html, empty } = formatMetricCell(item.powerDissipation, sub && sub.descPowerDiss, sub && sub.descPowerDissUnit, Boolean(sub && sub.powerDissOverlap), Boolean(sub && sub.powerDissOverBudget), effQ, 'W'));
+        break;
       case 'mtbf': if (isNum(item.mtbf)) { html = esc(fmtNum(item.mtbf)); empty = false; } break;
       case 'lru': if (item.lru) { html = ynPill(item.lru); empty = false; } break;
       case 'spareAvailable': if (item.spareAvailable) { html = ynPill(item.spareAvailable); empty = false; } break;
-      case 'spareToDeliver': if (item.spareToDeliver) { html = ynPill(item.spareToDeliver); empty = false; } break;
+      case 'spareToDeliver':
+        if (item.spareToDeliver) {
+          const gap = Boolean(rollups && rollups.spareGapIds && rollups.spareGapIds.has(item.id));
+          html = gap
+            ? '<span class="pp-pbs-yn pp-pbs-yn-Warn" title="SPARE to be delivered is Yes, but SPARE available is No">Yes \u26a0</span>'
+            : ynPill(item.spareToDeliver);
+          empty = false;
+        }
+        break;
       default: break;
     }
     const cls = `pp-pbs-cell-kv${col.cls ? ` ${col.cls}` : ''}${empty ? ' pp-pbs-opt-empty' : ''}`;
@@ -297,9 +380,11 @@
     const msMap = new Map((ctx.db.milestones || []).map(m => [m.id, m]));
     const rollupsById = (ctx.rollups && ctx.rollups.byId) ? ctx.rollups.byId : new Map();
     const hasHeritageCol = optCols.some(c => c.key === 'heritage');
+    const hasQtyCol = optCols.some(c => c.key === 'qty');
+    const hasLeadCol = optCols.some(c => c.key === 'leadTime');
 
     if (!ctx.rows.length) {
-      const msg = ctx.doc.items.length ? 'No PBS items match the active filters.' : 'No PBS deliverables yet. Use <strong>+ Add Root Item</strong>, import a CSV, or clone another project.';
+      const msg = ctx.doc.items.length ? 'No PBS items match the active filters.' : 'No PBS deliverables yet. Use <strong>+ Add Root Item</strong>, <strong>Paste Table</strong>, import a CSV, or clone another project.';
       return `<tr><td colspan="${colSpan}" style="text-align:center;padding:1.5rem;color:var(--text-muted,#64748b)">${msg}</td></tr>`;
     }
 
@@ -309,6 +394,7 @@
       const collapsed = ctx.collapsedIds.has(item.id);
       const bottleneck = ctx.summary.bottleneckMap.get(item.id);
       const overdue = ctx.summary.overdueIds.has(item.id);
+      const leadRisk = ctx.summary.leadRiskMap ? ctx.summary.leadRiskMap.get(item.id) : null;
       const nm = esc(item.name);
       const id = esc(item.id);
       const deptColor = dept && dept.color ? esc(dept.color) : '';
@@ -319,18 +405,22 @@
         : '<span class="pp-pbs-toggle-spacer" aria-hidden="true"></span>';
 
       const acrBadge = item.acronym ? `<span class="pp-pbs-acr">${esc(item.acronym)}</span>` : '';
+      const inlineQty = (!hasQtyCol && isNum(item.qty) && item.qty > 1) ? `<span class="pp-pbs-acr" title="Quantity">&times;${item.qty}</span>` : '';
       const inlineHer = (!hasHeritageCol && item.heritage) ? herPill(item.heritage) : '';
       const subNotes = item.notes ? `<div class="pp-pbs-subtext">${esc(item.notes)}</div>` : '';
-      const nameCell = `<td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 16}px"><div class="pp-pbs-name-flex">${toggle}<div class="pp-pbs-name-main"><div class="pp-pbs-name-line"><span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${acrBadge}${inlineHer}${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}</div>${subNotes}</div></div></td>`;
+      const nameCell = `<td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 16}px"><div class="pp-pbs-name-flex">${toggle}<div class="pp-pbs-name-main"><div class="pp-pbs-name-line"><span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${acrBadge}${inlineQty}${inlineHer}${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}</div>${subNotes}</div></div></td>`;
 
+      const inlineLeadWarn = (leadRisk && !hasLeadCol)
+        ? ` <span class="pp-pbs-cell-err" style="font-size:10px" title="Lead time (${esc(fmtNum(item.leadTime))} wks) projects ETA ${esc(leadRisk.etaIso)}, ${leadRisk.slipWeeks}w past milestone">\u00b7 \u26a0 +${leadRisk.slipWeeks}w lead</span>`
+        : '';
       const msCell = ms
-        ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}`
+        ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}${inlineLeadWarn}`
         : '\u2014';
       const deptCell = dept
         ? `<span>${deptColor ? `<span class="pp-pbs-dept-dot" style="background:${deptColor}" aria-hidden="true"></span>` : ''}${esc(`[${dept.code}] ${dept.name}`)}</span>`
         : '\u2014';
 
-      const optCells = optCols.map(col => renderOptionalCell(col, item, sub)).join('');
+      const optCells = optCols.map(col => renderOptionalCell(col, item, sub, ctx.summary, ctx.rollups)).join('');
 
       const btn = (act, label, text) => `<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-move="${act}" data-pbs-id="${id}" aria-label="${label} ${nm}">${text}</button>`;
       const actionsCell = `<td class="pp-pbs-cell-actions" data-label="Actions" style="text-align:right;white-space:nowrap"><span role="group" aria-label="Actions for ${nm}">${btn('up', 'Move up', '\u2191')} ${btn('down', 'Move down', '\u2193')} ${btn('outdent', 'Outdent', '\u2190')} ${btn('indent', 'Indent', '\u2192')}
@@ -352,7 +442,7 @@
   }
 
   function renderTotalFoot(ctx, optCols) {
-    const r = ctx.rollups;
+    const r = (ctx.isFiltered && ctx.filteredRollups) ? ctx.filteredRollups : ctx.rollups;
     if (!r || !ctx.rows.length || !optCols.length) return '';
     const hasSummaryCol = optCols.some(c =>
       (c.key === 'mass' && r.totalMass !== null)
@@ -374,9 +464,14 @@
       return '<td class="pp-pbs-opt-empty"></td>';
     }).join('');
 
+    const footCode = ctx.isFiltered ? 'SUM' : 'TOTAL';
+    const footName = ctx.isFiltered
+      ? `FILTERED &middot; ${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length} / ${ctx.doc.items.length} items`
+      : `${ctx.doc.items.length} item${ctx.doc.items.length === 1 ? '' : 's'}`;
+
     return `<tfoot><tr class="pp-pbs-total-row">
-      <td class="pp-pbs-foot-code" style="font-family:ui-monospace,monospace">TOTAL</td>
-      <td class="pp-pbs-foot-name">${ctx.doc.items.length} item${ctx.doc.items.length === 1 ? '' : 's'}</td>
+      <td class="pp-pbs-foot-code" style="font-family:ui-monospace,monospace">${footCode}</td>
+      <td class="pp-pbs-foot-name">${footName}</td>
       <td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td>
       ${optTds}
       <td class="pp-pbs-foot-actions pp-pbs-opt-empty"></td>
@@ -418,9 +513,9 @@
       <details class="pp-pbs-section" data-pbs-section="docs"${openSec.docs ? ' open' : ''}>
         <summary><span class="pp-pbs-sec-title">Documentation &amp; Drawings</span>${secBadge(counts.docs)}</summary>
         <div class="pp-pbs-sec-grid">
-          ${field('Mechanical Drawing', `<input type="text" id="ppPbsFMechDrawing" class="pp-pbs-input" value="${esc(item ? item.mechDrawing : '')}" placeholder="e.g., DWG-MECH-042 Rev B" />`)}
-          ${field('Electrical Drawing', `<input type="text" id="ppPbsFElecDrawing" class="pp-pbs-input" value="${esc(item ? item.elecDrawing : '')}" placeholder="e.g., DWG-ELEC-118 Rev A" />`)}
-          ${field('Reference Document', `<input type="text" id="ppPbsFRefDoc" class="pp-pbs-input" value="${esc(item ? item.refDoc : '')}" placeholder="e.g., ICD-SYS-003, Spec..." />`)}
+          ${field('Mechanical Drawing', `<input type="text" id="ppPbsFMechDrawing" class="pp-pbs-input" value="${esc(item ? item.mechDrawing : '')}" placeholder="e.g., DWG-MECH-042 Rev B or https://..." />`)}
+          ${field('Electrical Drawing', `<input type="text" id="ppPbsFElecDrawing" class="pp-pbs-input" value="${esc(item ? item.elecDrawing : '')}" placeholder="e.g., DWG-ELEC-118 Rev A or https://..." />`)}
+          ${field('Reference Document', `<input type="text" id="ppPbsFRefDoc" class="pp-pbs-input" value="${esc(item ? item.refDoc : '')}" placeholder="e.g., ICD-SYS-003 or https://..." />`)}
         </div>
       </details>
 
@@ -438,9 +533,10 @@
       <details class="pp-pbs-section" data-pbs-section="eng"${openSec.eng ? ' open' : ''}>
         <summary><span class="pp-pbs-sec-title">Engineering Budgets, Reliability &amp; Spares</span>${secBadge(counts.eng)}</summary>
         <div class="pp-pbs-sec-grid">
-          ${field('Mass (kg)', `<input type="number" id="ppPbsFMass" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.mass)}" placeholder="e.g., 1.25" />`)}
-          ${field('Power Consumption (W)', `<input type="number" id="ppPbsFPowerCons" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.powerConsumption)}" placeholder="e.g., 45" />`)}
-          ${field('Power Dissipation (W)', `<input type="number" id="ppPbsFPowerDiss" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.powerDissipation)}" placeholder="e.g., 12.5" />`)}
+          ${field('Quantity (Qty)', `<input type="number" id="ppPbsFQty" class="pp-pbs-input" min="1" step="1" value="${numVal(item && item.qty)}" placeholder="1" title="Multiplies unit Mass &amp; Power in roll-ups when &gt; 1" />`)}
+          ${field('Unit Mass (kg)', `<input type="number" id="ppPbsFMass" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.mass)}" placeholder="e.g., 1.25" />`)}
+          ${field('Unit Power Cons. (W)', `<input type="number" id="ppPbsFPowerCons" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.powerConsumption)}" placeholder="e.g., 45" />`)}
+          ${field('Unit Power Diss. (W)', `<input type="number" id="ppPbsFPowerDiss" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.powerDissipation)}" placeholder="e.g., 12.5" />`)}
           ${field('MTBF (h)', `<input type="number" id="ppPbsFMtbf" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.mtbf)}" placeholder="e.g., 50000" />`)}
           ${field('LRU', `<select id="ppPbsFLru" class="pp-pbs-select">${ynOpts(item ? item.lru : '')}</select>`)}
           ${field('SPARE Available', `<select id="ppPbsFSpareAvail" class="pp-pbs-select">${ynOpts(item ? item.spareAvailable : '')}</select>`)}
@@ -454,6 +550,20 @@
       </div></form>`;
   }
 
+  function renderPastePanel(ctx) {
+    if (!ctx.pasteOpen) return '';
+    return `<div id="ppPbsPastePanel" class="pp-pbs-paste" role="region" aria-label="Paste PBS rows from Excel or CSV">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <strong style="font-size:12px">Paste from Excel / Sheets / CSV</strong>
+        <span style="font-size:10.5px;color:var(--text-muted,#64748b)">Tab, comma, or semicolon separated &middot; header row auto-detected across all PBS columns</span>
+      </div>
+      <textarea id="ppPbsPasteInput" class="pp-pbs-textarea" placeholder="Code&#9;Name&#9;Acronym&#9;Manufacturer&#9;Part Number&#9;Mass (kg)&#9;Qty&#10;1&#9;Avionics Bay&#9;AVB&#9;&#9;&#9;&#9;&#10;1.1&#9;Sensor Module&#9;SNS&#9;Bosch&#9;BNO085&#9;0.15&#9;4"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:.45rem">
+        <button type="button" class="pp-pbs-btn" id="ppPbsPasteCancel">Cancel</button>
+        <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPasteSubmit">Import Pasted Rows</button>
+      </div></div>`;
+  }
+
   /* ctx.conflict: { diff: { addedRemote, modifiedBoth, onlyLocal } | null } or null */
   function renderConflictPanel(ctx) {
     if (!ctx.conflict) return '';
@@ -461,13 +571,22 @@
     const summary = diff
       ? `Remote added: <strong>${diff.addedRemote.length}</strong> &middot; Modified in both: <strong>${diff.modifiedBoth.length}</strong> &middot; Local only: <strong>${diff.onlyLocal.length}</strong>`
       : 'The shared folder file changed on disk and could not be compared (it may be encrypted with another passphrase).';
+    const formatModLine = (m) => {
+      const changes = Array.isArray(m.changes) ? m.changes : [];
+      if (changes.length) {
+        const shown = changes.slice(0, 4).map(c => `${esc(c.label)}: <em>${esc(c.localVal)}</em> vs <em>${esc(c.remoteVal)}</em>`).join(' &middot; ');
+        const more = changes.length > 4 ? ` (+${changes.length - 4} more)` : '';
+        return `<div>~ <strong>Both:</strong> ${esc(m.local.code)} ${esc(m.local.name)} &mdash; ${shown}${more}</div>`;
+      }
+      return `<div>~ <strong>Both:</strong> ${esc(m.local.code)} ${esc(m.local.name)} [Local: ${esc(m.local.maturity)} / Remote: ${esc(m.remote.maturity)}]</div>`;
+    };
     const lines = diff ? [
       ...diff.addedRemote.map(r => `<div>+ <strong>Remote:</strong> ${esc(r.code)} ${esc(r.name)} (${esc(r.maturity)})</div>`),
-      ...diff.modifiedBoth.map(m => `<div>~ <strong>Both:</strong> ${esc(m.local.code)} ${esc(m.local.name)} [Local: ${esc(m.local.maturity)} / Remote: ${esc(m.remote.maturity)}]</div>`),
+      ...diff.modifiedBoth.map(formatModLine),
       ...diff.onlyLocal.map(l => `<div>\u2022 <strong>Local only:</strong> ${esc(l.code)} ${esc(l.name)}</div>`),
     ] : [];
     return `<div class="pp-pbs-conflict" role="alert"><div style="font-weight:800;margin-bottom:.25rem">Sync Conflict Detected</div><div>${summary}</div>
-      ${lines.length ? `<div style="margin:.45rem 0;max-height:110px;overflow-y:auto;border-top:1px solid rgba(180,83,9,.25);padding-top:.35rem;font-size:11px">${lines.join('')}</div>` : ''}
+      ${lines.length ? `<div style="margin:.45rem 0;max-height:125px;overflow-y:auto;border-top:1px solid rgba(180,83,9,.25);padding-top:.35rem;font-size:11px">${lines.join('')}</div>` : ''}
       <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem">
         ${diff ? '<button type="button" class="pp-pbs-btn pp-pbs-btn-emerald" id="ppPbsConflictMerge">Merge Non-Conflicting</button>' : ''}
         <button type="button" class="pp-pbs-btn" id="ppPbsConflictLoad">Load Shared Folder</button>
@@ -483,17 +602,24 @@
     const clone = (ctx.cloneSources || []).length
       ? `<select id="ppPbsCloneSelect" class="pp-pbs-select" aria-label="Clone PBS from another project"><option value="">Clone from project...</option>${ctx.cloneSources.map(p => `<option value="${esc(p.id)}">[${esc(p.code)}] ${esc(p.name)} (${esc(p.count)})</option>`).join('')}</select>`
       : '';
+    const renumBtn = (ctx.doc.items || []).length >= 2
+      ? '<button type="button" class="pp-pbs-btn" id="ppPbsRenumberBtn" title="Re-sequence hierarchical codes (1, 1.1, 1.2...) to match current tree order">Renumber</button>'
+      : '';
     return `<div class="pp-pbs-toolbar" role="toolbar" aria-label="PBS actions">
       <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsAddRootBtn">+ Add Root Item</button>
+      <button type="button" class="pp-pbs-btn" id="ppPbsUndoBtn"${ctx.canUndo ? '' : ' disabled'} title="${esc(ctx.undoLabel || 'Undo (Ctrl+Z)')}">\u21b6 Undo</button>
+      <button type="button" class="pp-pbs-btn" id="ppPbsRedoBtn"${ctx.canRedo ? '' : ' disabled'} title="${esc(ctx.redoLabel || 'Redo (Ctrl+Y)')}">\u21b7 Redo</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsExpandAllBtn">Expand All</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsCollapseAllBtn">Collapse All</button>
+      ${renumBtn}
       ${folderBtn}
       <button type="button" class="pp-pbs-btn" id="ppPbsSaveJsonBtn">Save JSON</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsLoadJsonBtn">Load JSON</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsExportCsvBtn">Export CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsImportCsvBtn">Import CSV</button>
+      <button type="button" class="pp-pbs-btn" id="ppPbsPasteBtn">Paste Table</button>
       <button type="button" class="pp-pbs-btn pp-pbs-btn-emerald" id="ppPbsExportSvgBtn">SVG Diagram</button>
-      <button type="button" class="pp-pbs-btn" id="ppPbsExportPdfBtn">PDF Report</button>
+      <button type="button" class="pp-pbs-btn" id="ppPbsExportPdfBtn" title="Export full PDF with all populated columns">PDF Report</button>
       ${clone}
       <input type="file" id="ppPbsJsonFileInput" accept=".json,application/json" style="display:none" tabindex="-1" />
       <input type="file" id="ppPbsCsvFileInput" accept=".csv,.tsv,.txt,text/csv" style="display:none" tabindex="-1" />
@@ -502,18 +628,32 @@
 
   function renderSummary(ctx) {
     const s = ctx.summary;
-    const r = ctx.rollups || null;
+    const fullR = ctx.rollups || null;
+    const activeR = (ctx.isFiltered && ctx.filteredRollups) ? ctx.filteredRollups : fullR;
+    const activeFlag = (ctx.filter && ctx.filter.flag) || '';
+    const riskPill = (flagKey, tone, text, title) =>
+      `<button type="button" class="pp-pbs-pill pp-pbs-pill-btn pp-pbs-status-${tone}${activeFlag === flagKey ? ' is-active' : ''}" data-pbs-flag-pill="${flagKey}" aria-pressed="${activeFlag === flagKey ? 'true' : 'false'}" title="${esc(title)}">${text}</button>`;
+
     const swpPills = [];
-    if (r) {
-      if (r.totalMass !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Sum of entered Mass across ${r.massCount} item${r.massCount === 1 ? '' : 's'}">Mass: ${esc(fmtNum(r.totalMass))} kg</span>`);
-      if (r.totalPowerConsumption !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Sum of entered Power Consumption across ${r.powerConsCount} item${r.powerConsCount === 1 ? '' : 's'}">Power: ${esc(fmtNum(r.totalPowerConsumption))} W</span>`);
-      if (r.totalPowerDissipation !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Sum of entered Power Dissipation across ${r.powerDissCount} item${r.powerDissCount === 1 ? '' : 's'}">Diss.: ${esc(fmtNum(r.totalPowerDissipation))} W</span>`);
-      if (r.lruCount > 0) swpPills.push(`<span class="pp-pbs-pill pp-pbs-status-ok">LRU: ${r.lruCount}</span>`);
-      if (r.spareDelivCount > 0) swpPills.push(`<span class="pp-pbs-pill pp-pbs-status-idle">Spares to deliver: ${r.spareDelivCount}</span>`);
+    if (ctx.isFiltered) {
+      swpPills.push(`<span class="pp-pbs-pill pp-pbs-status-idle" title="SWaP totals reflect the currently filtered items">Filtered: ${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length}</span>`);
     }
+    if (activeR) {
+      if (activeR.totalMass !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Effective total Mass (qty-multiplied, without parent/child double-counting)">Mass: ${esc(fmtNum(activeR.totalMass))} kg</span>`);
+      if (activeR.totalPowerConsumption !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Effective total Power Consumption">Power: ${esc(fmtNum(activeR.totalPowerConsumption))} W</span>`);
+      if (activeR.totalPowerDissipation !== null) swpPills.push(`<span class="pp-pbs-pill pp-pbs-pill-swp" title="Effective total Power Dissipation">Diss.: ${esc(fmtNum(activeR.totalPowerDissipation))} W</span>`);
+      if (activeR.lruCount > 0) swpPills.push(`<span class="pp-pbs-pill pp-pbs-status-ok">LRU: ${activeR.lruCount}</span>`);
+      if (activeR.spareDelivCount > 0) swpPills.push(`<span class="pp-pbs-pill pp-pbs-status-idle">Spares to deliver: ${activeR.spareDelivCount}</span>`);
+    }
+    const riskPills = [];
+    if (s.overdueCount) riskPills.push(riskPill('overdue', 'error', `\u26a0 ${s.overdueCount} overdue milestone${s.overdueCount === 1 ? '' : 's'}`, 'Click to filter items with overdue linked milestones'));
+    if (s.leadRiskCount) riskPills.push(riskPill('leadRisk', 'error', `\u26a0 ${s.leadRiskCount} lead-time risk${s.leadRiskCount === 1 ? '' : 's'}`, 'Click to filter items whose procurement lead time exceeds their linked milestone'));
+    if (fullR && fullR.spareGapCount > 0) riskPills.push(riskPill('spareGap', 'warn', `\u26a0 Spares gap: ${fullR.spareGapCount}`, 'Click to filter items where SPARE to be delivered = Yes and SPARE available = No'));
+    if (fullR && fullR.overlapCount > 0) riskPills.push(riskPill('overlap', 'warn', `\u26a0 Budget overlap: ${fullR.overlapCount}`, 'Parent & child SWaP values both entered (totals use children to prevent double-counting). Click to filter.'));
+
     return `<div class="pp-pbs-summary" aria-label="Maturity gate and SWaP summary"><div style="display:flex;flex-wrap:wrap;align-items:center;gap:.35rem">
       ${MATURITY.map(m => `<span class="pp-pbs-pill pp-pbs-mat-${m}">${m}: ${s.counts[m]}</span>`).join('')}
-      ${s.overdueCount ? `<span class="pp-pbs-pill pp-pbs-status-error">\u26a0 ${s.overdueCount} overdue milestone link${s.overdueCount === 1 ? '' : 's'}</span>` : ''}
+      ${riskPills.join('')}
       ${swpPills.join('')}</div>
       <div style="display:flex;align-items:center;gap:.45rem;font-weight:700"><span>Qualified / Delivered: ${s.qualifiedPct}%</span>
       <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${s.qualifiedPct}" aria-label="Qualified or delivered share" style="width:90px;height:8px;border-radius:9999px;background:#e2e8f0;overflow:hidden"><div style="width:${s.qualifiedPct}%;height:100%;background:#059669"></div></div></div></div>`;
@@ -531,6 +671,10 @@
       const on = Boolean(g[key]);
       return `<button type="button" class="pp-pbs-chip${on ? ' is-active' : ''}" data-pbs-col-group="${key}" aria-pressed="${on ? 'true' : 'false'}">${on ? '\u2713 ' : '+ '}${label}${count > 0 ? `<span class="pp-pbs-chip-cnt">${count}</span>` : ''}</button>`;
     };
+    const showViewPdf = Boolean(ctx.isFiltered || (anyPop && !allPopOn));
+    const viewPdfBtn = showViewPdf
+      ? '<button type="button" id="ppPbsExportPdfViewBtn" class="pp-pbs-btn pp-pbs-btn-xs" title="Export PDF with only the currently visible columns and active filters">PDF (Current View)</button>'
+      : '';
     const hint = optCols.length
       ? `<span class="pp-pbs-colhint">${optCols.length} spec col${optCols.length === 1 ? '' : 's'} inline &middot; Code, Deliverable &amp; Actions pinned</span>`
       : '';
@@ -542,18 +686,43 @@
       ${chip('proc', 'Procurement', r.procItemsCount)}
       ${chip('swp', 'SWaP & Spares', r.engItemsCount)}
       ${anyPop && !allPopOn ? '<button type="button" id="ppPbsColsAllBtn" class="pp-pbs-btn pp-pbs-btn-xs">Show All Used</button>' : ''}
+      ${viewPdfBtn}
     </div>${hint}</div>`;
   }
 
   function renderFilters(ctx) {
-    const f = ctx.filter;
-    const active = Boolean(f.search || f.deptId || f.maturity || f.milestoneId);
+    const f = ctx.filter || {};
+    const items = (ctx.doc && ctx.doc.items) || [];
+    const r = ctx.rollups || null;
+    const s = ctx.summary || null;
+    const active = Boolean(f.search || f.deptId || f.maturity || f.milestoneId || f.heritage || f.procStatus || f.flag);
     const sel = (id, label, all, opts, cur) => `<select id="${id}" class="pp-pbs-select" aria-label="${label}"><option value="">${all}</option>${opts.map(o => `<option value="${esc(o.v)}"${cur === o.v ? ' selected' : ''}>${esc(o.t)}</option>`).join('')}</select>`;
+
+    const hasHeritage = Boolean(f.heritage || items.some(it => it.heritage));
+    const procVals = Array.from(new Set(items.map(it => it.procurementStatus).filter(Boolean))).sort();
+    if (f.procStatus && !procVals.includes(f.procStatus)) procVals.push(f.procStatus);
+    const hasFlags = Boolean(
+      f.flag
+      || (r && (r.lruCount > 0 || r.spareDelivCount > 0 || r.spareGapCount > 0 || r.overlapCount > 0))
+      || (s && (s.overdueCount > 0 || s.leadRiskCount > 0))
+    );
+    const flagOpts = [
+      { v: 'lru', t: 'LRU Only' },
+      { v: 'spareDeliv', t: 'Spares to Deliver' },
+      { v: 'spareGap', t: 'Spares Gap' },
+      { v: 'leadRisk', t: 'Lead-Time Risk' },
+      { v: 'overdue', t: 'Overdue Milestone' },
+      { v: 'overlap', t: 'SWaP Budget Overlap' },
+    ];
+
     return `<div class="pp-pbs-filters" role="search" aria-label="Filter PBS items">
-      <input type="search" id="ppPbsFilterSearch" class="pp-pbs-input" style="min-width:190px;flex:1" aria-label="Search PBS items" placeholder="Filter by code, acronym, deliverable, P/N, manufacturer, drawing..." value="${esc(f.search)}" />
-      ${sel('ppPbsFilterDept', 'Filter by department', 'All Departments', (ctx.db.departments || []).map(d => ({ v: d.id, t: `[${d.code}] ${d.name}` })), f.deptId)}
-      ${sel('ppPbsFilterMaturity', 'Filter by maturity', 'All Gates', MATURITY.map(m => ({ v: m, t: m })), f.maturity)}
-      ${sel('ppPbsFilterMs', 'Filter by milestone', 'All Milestones', (ctx.projectMilestones || []).map(m => ({ v: m.id, t: m.title })), f.milestoneId)}
+      <input type="search" id="ppPbsFilterSearch" class="pp-pbs-input" style="min-width:180px;flex:1" aria-label="Search PBS items" placeholder="Filter by code, acronym, deliverable, P/N, manufacturer, drawing..." value="${esc(f.search || '')}" />
+      ${sel('ppPbsFilterDept', 'Filter by department', 'All Departments', (ctx.db.departments || []).map(d => ({ v: d.id, t: `[${d.code}] ${d.name}` })), f.deptId || '')}
+      ${sel('ppPbsFilterMaturity', 'Filter by maturity', 'All Gates', MATURITY.map(m => ({ v: m, t: m })), f.maturity || '')}
+      ${sel('ppPbsFilterMs', 'Filter by milestone', 'All Milestones', (ctx.projectMilestones || []).map(m => ({ v: m.id, t: m.title })), f.milestoneId || '')}
+      ${hasHeritage ? sel('ppPbsFilterHeritage', 'Filter by Existing/Update/New status', 'All Statuses', HERITAGE.map(h => ({ v: h, t: h })), f.heritage || '') : ''}
+      ${procVals.length ? sel('ppPbsFilterProc', 'Filter by procurement status', 'All Proc.', procVals.map(v => ({ v, t: v })), f.procStatus || '') : ''}
+      ${hasFlags ? sel('ppPbsFilterFlag', 'Filter by engineering or risk flag', 'All Flags', flagOpts, f.flag || '') : ''}
       ${active ? '<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" id="ppPbsClearFiltersBtn">Reset</button>' : ''}</div>`;
   }
 
@@ -563,9 +732,9 @@
     return `<div class="pp-pbs-notice" role="status"><strong>Import notes</strong><ul style="margin:.3rem 0 0 1rem;list-style:disc">${w.slice(0, 8).map(x => `<li>${esc(x)}</li>`).join('')}</ul>${w.length > 8 ? `<div>\u2026and ${w.length - 8} more.</div>` : ''}</div>`;
   }
 
-  /* ctx: { doc, db, project, summary, rollups, rows, collapsedIds, colGroups, filter, edit, conflict, notices,
-   *        owners, manufacturers, procStatuses, projectMilestones, cloneSources:[{id,code,name,count}],
-   *        canDirSync, dirName, hasRemembered, status:{text,tone} } */
+  /* ctx: { doc, db, project, summary, rollups, filteredRollups, isFiltered, matchedCount, rows, collapsedIds, colGroups, filter, edit, pasteOpen,
+   *        canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
+   *        cloneSources:[{id,code,name,count}], canDirSync, dirName, hasRemembered, status:{text,tone} } */
   function buildDialogHtml(ctx) {
     const p = ctx.project;
     const n = ctx.summary.total;
@@ -577,11 +746,11 @@
     return `<div class="pp-pbs-wrap"${projStyle}>
       <header class="pp-pbs-head"><div>
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
-        <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: focus a row, then Alt+Arrows to move or indent, Enter to edit</span></div></div>
+        <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: double-click or Enter to edit, Alt+Arrows to move/indent, Ctrl+Z to undo</span></div></div>
         <div style="display:flex;align-items:center;gap:.45rem"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite">${esc(ctx.status.text)}</span>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}
-      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderEditForm(ctx)}
+      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
         <div class="pp-pbs-table-wrap"><table class="pp-pbs-table${stickyCls}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
           <thead><tr>
             <th scope="col" class="pp-pbs-th-code">Code</th>
@@ -599,8 +768,8 @@
   }
 
   P.view = {
-    esc, CSS, OPTIONAL_COL_GROUPS, getPopulatedGroupFlags, resolveVisibleOptionalCols,
-    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderConflictPanel,
+    esc, CSS, OPTIONAL_COL_GROUPS, renderTextOrLink, getPopulatedGroupFlags, resolveVisibleOptionalCols,
+    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderConflictPanel,
     renderToolbar, renderSummary, renderColBar, renderFilters, renderNotice, buildDialogHtml,
   };
 })();
