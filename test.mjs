@@ -1872,7 +1872,7 @@ test('Resilient holiday grouping, Project Technical Lead, Dedicated Milestones l
   }
 });
 
-test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP roll-ups, search, CSV, clone, SVG, PDF annexes & uncluttered views', () => {
+test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP roll-ups, search, CSV, clone, SVG, unified wide PDF & sticky table', () => {
   const out = vm.runInContext(`(() => {
     const P = globalThis.__ppPbsV2;
     const db = {
@@ -1958,16 +1958,28 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
     const cloned = P.io.cloneItems(fullDoc);
     const clonedPsu = cloned.find(x => x.code === '1.1');
 
-    // 7. SVG diagram + PDF report model + mock jsPDF renderPdf + Print HTML
+    // 7. SVG diagram + single unified PDF report (A4 legacy / A3 moderate / Wide full) + Print HTML
     const fullSvg = P.report.buildSvg(fullDoc, project, db, '2026-11-26');
+    const medDoc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      items: [{
+        id: 'i_med', parentId: null, code: '1', name: 'Transponder', deptId: 'd_elec', owner: 'Ada', maturity: 'CDR',
+        acronym: 'TXP', heritage: 'New', manufacturer: 'Thales', partNumber: 'TX-400', mass: 1.8, powerConsumption: 22,
+      }],
+    }, project, 'Tester');
+    const medModel = P.report.buildReportModel(medDoc, project, db, 'Tester', '2026-11-26');
     const fullModel = P.report.buildReportModel(fullDoc, project, db, 'Tester', '2026-11-26');
     const fullPrintHtml = P.report.buildPrintHtml(fullModel);
 
     function runMockPdf(model) {
       const tables = [];
-      let pages = 1;
-      function MockJsPdf() {
-        this.internal = { pageSize: { getWidth: () => 842, getHeight: () => 595 } };
+      let ctorOpts = null;
+      function MockJsPdf(opts) {
+        ctorOpts = opts;
+        const fmt = opts && opts.format;
+        const w = Array.isArray(fmt) ? Math.max(fmt[0], fmt[1]) : (fmt === 'a3' ? 1191 : 842);
+        const h = Array.isArray(fmt) ? Math.min(fmt[0], fmt[1]) : (fmt === 'a3' ? 842 : 595);
+        this.internal = { pageSize: { getWidth: () => w, getHeight: () => h } };
         this.lastAutoTable = { finalY: 160 };
         this.setFillColor = () => {};
         this.rect = () => {};
@@ -1975,27 +1987,27 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
         this.setFont = () => {};
         this.setFontSize = () => {};
         this.text = () => {};
-        this.addPage = () => { pages++; };
-        this.autoTable = (opts) => {
-          tables.push({ head: opts.head[0], rows: opts.body.length });
-          this.lastAutoTable = { finalY: (opts.startY || 80) + opts.body.length * 18 + 30 };
+        this.addPage = () => {};
+        this.autoTable = (aOpts) => {
+          tables.push({ head: aOpts.head[0], rows: aOpts.body.length, body: aOpts.body });
+          this.lastAutoTable = { finalY: (aOpts.startY || 80) + aOpts.body.length * 18 + 30 };
         };
       }
       P.report.renderPdf(MockJsPdf, model);
-      return { tables, pages };
+      return { tables, ctorOpts };
     }
     const legacyPdf = runMockPdf(legacyModel);
+    const medPdf = runMockPdf(medModel);
     const fullPdf = runMockPdf(fullModel);
 
-    // 8. Uncluttered view rendering across all 4 lenses, detail drawer & collapsible form
+    // 8. Unified in-app table with frozen left columns + additive column-group toggles & collapsible form
     const baseCtx = (d, opts = {}) => ({
       doc: d, db, project,
       summary: P.tree.computeMaturitySummary(d, db.milestones, '2026-06-01'),
       rollups: P.tree.computeSwpRollups(d),
       rows: P.tree.getFilteredTreeRows(d, {}, new Set()),
       collapsedIds: new Set(),
-      expandedDetailIds: opts.expanded || new Set(),
-      viewMode: opts.viewMode || 'overview',
+      colGroups: opts.colGroups || { docs: false, proc: false, swp: false },
       filter: { search: '', deptId: '', maturity: '', milestoneId: '' },
       edit: opts.edit || null,
       conflict: null, notices: [],
@@ -2004,11 +2016,16 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
       status: { text: 'Saved locally', tone: 'idle' },
     });
 
-    const htmlLegacyOverview = P.view.buildDialogHtml(baseCtx(legacyDoc, { viewMode: 'overview' }));
-    const htmlOverview = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'overview', expanded: new Set(['i_psu']) }));
-    const htmlEng = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'engineering' }));
-    const htmlProc = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'procurement' }));
-    const htmlDocs = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'docs' }));
+    const sparseDoc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      items: [{ id: 'i_sp', parentId: null, code: '1', name: 'Bracket', maturity: 'PDR', mass: 0.45 }],
+    }, project, 'Tester');
+    const sparseCols = P.view.resolveVisibleOptionalCols(sparseDoc, { docs: false, proc: false, swp: true });
+
+    const htmlLegacy = P.view.buildDialogHtml(baseCtx(legacyDoc, { colGroups: P.view.getPopulatedGroupFlags(legacyDoc) }));
+    const htmlMainOnly = P.view.buildDialogHtml(baseCtx(fullDoc, { colGroups: { docs: false, proc: false, swp: false } }));
+    const htmlProcAndSwp = P.view.buildDialogHtml(baseCtx(fullDoc, { colGroups: { docs: false, proc: true, swp: true } }));
+    const htmlAllPop = P.view.buildDialogHtml(baseCtx(fullDoc, { colGroups: P.view.getPopulatedGroupFlags(fullDoc) }));
     const htmlEditNew = P.view.buildDialogHtml(baseCtx(fullDoc, {
       edit: { open: true, item: null, parentId: null, suggestedCode: '2', parentCandidates: fullDoc.items, openSections: { docs: false, proc: false, eng: false } },
     }));
@@ -2017,25 +2034,27 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
     }));
 
     return {
-      legacyCounts, legacyRollups, legacyAnnexCount: legacyModel.annexes.length, legacyPdf, legacyPrintHtml, legacySvg,
+      legacyCounts, legacyRollups, legacyModel, legacyPdf, legacyPrintHtml, legacySvg,
+      medModel, medPdf,
       psu, enc, psuCounts, rollups, rootSub, diff,
       searchByPnLen: searchByPn.length, searchByDwgLen: searchByDwg.length, searchByAltLen: searchByAlt.length,
       csvOut, csvRoundTrip, legacyParsed, excelParsed,
       clonedPsu,
       fullSvg, fullModel, fullPdf, fullPrintHtml,
-      htmlLegacyOverview, htmlOverview, htmlEng, htmlProc, htmlDocs, htmlEditNew, htmlEditPsu,
+      sparseColKeys: sparseCols.map(c => c.key),
+      htmlLegacy, htmlMainOnly, htmlProcAndSwp, htmlAllPop, htmlEditNew, htmlEditPsu,
     };
   })()`, ctx);
 
   // Legacy backward-compatibility & zero-clutter checks
   assert.equal(out.legacyCounts.total, 0, 'Legacy item has 0 optional fields populated');
   assert.equal(out.legacyRollups.totalMass, null, 'Legacy doc has null totalMass');
-  assert.equal(out.legacyAnnexCount, 0, 'Legacy doc generates 0 PDF technical annexes');
-  assert.equal(out.legacyPdf.tables.length, 1, 'Legacy PDF renders exactly the single main table');
-  assert.equal(out.legacyPrintHtml.includes('Technical Annex'), false, 'Legacy Print HTML stays clean without annexes');
-  assert.equal(out.htmlLegacyOverview.includes('pp-pbs-spec-btn'), false, 'Legacy overview shows no Specs toggle buttons');
-  assert.equal(out.htmlLegacyOverview.includes('pp-pbs-pill-swp'), false, 'Legacy summary bar shows no SWaP pills');
-  assert.equal(out.htmlLegacyOverview.includes('ppPbsToggleAllSpecsBtn'), false, 'Legacy view bar hides Show All Specs button');
+  assert.equal(out.legacyModel.head.length, 7, 'Legacy PDF keeps exact 7 main columns');
+  assert.equal(out.legacyPdf.ctorOpts.format, 'a4', 'Legacy PDF uses A4 Landscape');
+  assert.equal(out.legacyPdf.tables.length, 1, 'Legacy PDF renders exactly 1 unified table');
+  assert.equal(out.htmlLegacy.includes('pp-pbs-sticky'), false, 'Legacy table does not enable sticky horizontal scroll');
+  assert.equal(out.htmlLegacy.includes('pp-pbs-pill-swp'), false, 'Legacy summary bar shows no SWaP pills');
+  assert.equal(out.htmlLegacy.includes('pp-pbs-total-row'), false, 'Legacy table hides totals footer');
 
   // Full 18-field normalization checks
   assert.equal(out.psuCounts.total, 18, 'PSU item has all 18 optional fields populated');
@@ -2104,24 +2123,29 @@ test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP
   assert.equal(out.clonedPsu.procurementStatus, '', 'Clone resets project-specific procurementStatus');
   assert.equal(out.clonedPsu.spareAvailable, '', 'Clone resets project-specific spareAvailable');
 
-  // SVG & PDF / Print exports
+  // SVG & single unified wide PDF / Print exports
   assert.ok(out.fullSvg.includes('1.1 \u00b7 PSU'), 'SVG card header includes compact Acronym');
   assert.ok(out.fullSvg.includes('>NEW</text>') && out.fullSvg.includes('>UPD</text>'), 'SVG cards show compact heritage pills');
   assert.ok(out.fullSvg.includes('Mass 3.35 kg') && out.fullSvg.includes('Power 45 W'), 'SVG subtitle surfaces SWaP totals');
   assert.ok(out.fullSvg.includes('DCM3623T50M53C2T00') && out.fullSvg.includes('XP Power QHL400'), 'SVG card <title> embeds full hover specs');
-  assert.equal(out.fullModel.annexes.length, 3, 'Full PBS PDF model produces all 3 populated technical annexes');
-  assert.equal(out.fullPdf.tables.length, 4, 'Vector PDF renders main hierarchy table + 3 annexes');
-  const engAnnex = out.fullModel.annexes.find(a => a.key === 'eng');
-  assert.ok(engAnnex.rows[0].cells[3] === 'Sum 3.35', 'Engineering annex shows rolled-up Sum for empty parent');
-  assert.ok(engAnnex.rows[engAnnex.rows.length - 1].isTotal && engAnnex.rows[engAnnex.rows.length - 1].cells[3] === '3.35', 'Engineering annex ends with accurate TOTAL row');
-  assert.ok(out.fullPrintHtml.includes('Engineering Budgets, Reliability &amp; Spares') && out.fullPrintHtml.includes('Procurement &amp; Supply Chain') && out.fullPrintHtml.includes('Documentation &amp; Drawings'), 'Offline print HTML includes all 3 annexes');
+  assert.equal(out.medModel.head.length, 13, 'Moderate PBS dynamically includes only its 6 populated optional columns alongside main 7');
+  assert.equal(out.medPdf.ctorOpts.format, 'a3', 'Moderate PBS PDF auto-scales to A3 Landscape');
+  assert.equal(out.medPdf.tables.length, 1, 'Moderate PBS renders a single unified table');
+  assert.equal(out.fullModel.head.length, 25, 'Full PBS includes all 18 optional columns inline alongside the 7 main columns');
+  assert.equal(out.fullPdf.tables.length, 1, 'Full PBS PDF renders 1 single unified table (no separate annexes)');
+  assert.ok(Array.isArray(out.fullPdf.ctorOpts.format) && out.fullPdf.ctorOpts.format[0] > 1191, 'Full 25-col PBS auto-scales to Wide Landscape page width');
+  const massColIdx = out.fullModel.colIdx.mass;
+  assert.equal(out.fullModel.rows[0].cells[massColIdx], 'Sum 3.35', 'Parent row shows rolled-up Sum directly in the Mass column');
+  assert.equal(out.fullModel.totalRow.cells[massColIdx], '3.35', 'Unified PDF TOTAL row aligns total Mass directly under Mass column');
+  assert.equal((out.fullPrintHtml.match(/<table/g) || []).length, 1, 'Offline print HTML renders a single unified horizontal table');
+  assert.ok(out.fullPrintHtml.includes('DCM3623T50M53C2T00') && out.fullPrintHtml.includes('DWG-M-101 Rev C') && out.fullPrintHtml.includes('TOTAL'), 'Print HTML includes all populated specs inline plus TOTAL row');
 
-  // Uncluttered view rendering across all 4 lenses, detail drawer & collapsible form
-  assert.ok(out.htmlOverview.includes('Mass: 3.35 kg') && out.htmlOverview.includes('Power: 45 W') && out.htmlOverview.includes('Diss.: 8.5 W'), 'Summary bar shows SWaP totals');
-  assert.ok(out.htmlOverview.includes('Specs (18)') && out.htmlOverview.includes('pp-pbs-detail-row') && out.htmlOverview.includes('DCM3623T50M53C2T00'), 'Overview renders compact Specs toggle and expandable detail drawer');
-  assert.ok(out.htmlEng.includes('Mass (kg)') && out.htmlEng.includes('&Sigma; 3.35') && out.htmlEng.includes('50000'), 'Engineering view shows rolled-up parent mass and MTBF');
-  assert.ok(out.htmlProc.includes('Vicor') && out.htmlProc.includes('Ordered') && out.htmlProc.includes('14 wks') && out.htmlProc.includes('XP Power QHL400'), 'Procurement view shows supply chain & spares columns');
-  assert.ok(out.htmlDocs.includes('DWG-M-101 Rev C') && out.htmlDocs.includes('DWG-E-204 Rev B') && out.htmlDocs.includes('ICD-PWR-009'), 'Docs view shows description and drawing/reference columns');
+  // Unified in-app table, frozen left columns, additive column-group toggles & collapsible form
+  assert.equal(out.sparseColKeys.join(','), 'mass', 'Enabling SWaP on a doc with only Mass shows ONLY Mass (no blank clutter columns)');
+  assert.equal(out.htmlMainOnly.includes('pp-pbs-sticky'), false, 'Main Only keeps clean 7-column table without horizontal sticky scrolling');
+  assert.ok(out.htmlMainOnly.includes('pp-pbs-acr') && out.htmlMainOnly.includes('PSU') && out.htmlMainOnly.includes('pp-pbs-her-New'), 'Main Only still keeps compact Acronym & Heritage chips inline');
+  assert.ok(out.htmlProcAndSwp.includes('pp-pbs-sticky') && out.htmlProcAndSwp.includes('Maturity') && out.htmlProcAndSwp.includes('Department') && out.htmlProcAndSwp.includes('DCM3623T50M53C2T00') && out.htmlProcAndSwp.includes('&Sigma; 3.35') && out.htmlProcAndSwp.includes('pp-pbs-total-row'), 'Additive Procurement + SWaP toggles keep main columns visible, freeze Code/Deliverable, and render totals footer');
+  assert.ok(out.htmlAllPop.includes('DWG-M-101 Rev C') && out.htmlAllPop.includes('Vicor') && out.htmlAllPop.includes('50000') && out.htmlAllPop.includes('Mass: 3.35 kg'), 'All Populated shows Docs + Procurement + SWaP inline alongside main columns');
   assert.ok(out.htmlEditNew.includes('data-pbs-section="docs">') && out.htmlEditNew.includes('data-pbs-section="proc">') && out.htmlEditNew.includes('data-pbs-section="eng">'), 'New item form starts with all 3 optional sections collapsed');
   assert.ok(out.htmlEditPsu.includes('data-pbs-section="docs" open>') && out.htmlEditPsu.includes('id="ppPbsProcStatusList"') && out.htmlEditPsu.includes('In Manufacture'), 'Edit form auto-opens populated sections and provides Procurement Status preset suggestions');
 });

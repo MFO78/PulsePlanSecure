@@ -151,15 +151,34 @@
 </svg>`;
   }
 
-  /* ---------- PDF / print report ---------- */
-  const REPORT_HEAD = ['Code', 'Deliverable / Subsystem', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes'];
-
-  function formatSparesCell(it) {
-    const parts = [];
-    if (it.spareAvailable) parts.push(`Avail: ${it.spareAvailable}`);
-    if (it.spareToDeliver) parts.push(`Deliv: ${it.spareToDeliver}`);
-    return parts.length ? parts.join(' / ') : '-';
-  }
+  /* ---------- PDF / print report (single unified horizontal table with dynamic populated columns) ---------- */
+  const REPORT_COLS = [
+    { key: 'code', label: 'Code', always: true, w: 44, baseW: 54, bold: true },
+    { key: 'acronym', label: 'Acronym', w: 46, has: it => Boolean(it.acronym) },
+    { key: 'name', label: 'Deliverable / Subsystem', always: true, w: 132, baseW: 195 },
+    { key: 'heritage', label: 'Status', w: 48, align: 'center', has: it => Boolean(it.heritage) },
+    { key: 'maturity', label: 'Maturity', always: true, w: 54, baseW: 66, bold: true },
+    { key: 'dept', label: 'Department', always: true, w: 80, baseW: 115 },
+    { key: 'owner', label: 'Owner', always: true, w: 62, baseW: 85 },
+    { key: 'milestone', label: 'Milestone', always: true, w: 84, baseW: 120 },
+    { key: 'description', label: 'Description', w: 112, has: it => Boolean(it.description) },
+    { key: 'mechDrawing', label: 'Mech. Dwg', w: 74, has: it => Boolean(it.mechDrawing) },
+    { key: 'elecDrawing', label: 'Elec. Dwg', w: 74, has: it => Boolean(it.elecDrawing) },
+    { key: 'refDoc', label: 'Ref. Doc', w: 76, has: it => Boolean(it.refDoc) },
+    { key: 'manufacturer', label: 'Manufacturer', w: 74, has: it => Boolean(it.manufacturer) },
+    { key: 'partNumber', label: 'Part No.', w: 80, has: it => Boolean(it.partNumber) },
+    { key: 'procurementStatus', label: 'Proc. Status', w: 66, has: it => Boolean(it.procurementStatus) },
+    { key: 'leadTime', label: 'Lead (wks)', w: 46, align: 'right', has: it => isNum(it.leadTime) },
+    { key: 'componentAlt', label: 'Alternative', w: 80, has: it => Boolean(it.componentAlt) },
+    { key: 'mass', label: 'Mass (kg)', w: 48, align: 'right', has: it => isNum(it.mass) },
+    { key: 'powerConsumption', label: 'Pwr Cons (W)', w: 52, align: 'right', has: it => isNum(it.powerConsumption) },
+    { key: 'powerDissipation', label: 'Pwr Diss (W)', w: 52, align: 'right', has: it => isNum(it.powerDissipation) },
+    { key: 'mtbf', label: 'MTBF (h)', w: 52, align: 'right', has: it => isNum(it.mtbf) },
+    { key: 'lru', label: 'LRU', w: 40, align: 'center', has: it => Boolean(it.lru) },
+    { key: 'spareAvailable', label: 'Spare Avail.', w: 44, align: 'center', has: it => Boolean(it.spareAvailable) },
+    { key: 'spareToDeliver', label: 'Spare Deliv.', w: 44, align: 'center', has: it => Boolean(it.spareToDeliver) },
+    { key: 'notes', label: 'Notes', always: true, w: 90, auto: true },
+  ];
 
   function buildReportModel(doc, project, db, userName, dateStr) {
     const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
@@ -167,244 +186,221 @@
     const rollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
     const flat = P.tree.flattenTreeRows(doc, null, 0, []);
 
+    const activeCols = REPORT_COLS.filter(c => c.always || flat.some(({ item }) => c.has(item)));
+    const hasOpt = activeCols.some(c => !c.always);
+    const colIdx = {};
+    activeCols.forEach((c, i) => { colIdx[c.key] = i; });
+
+    const metricCell = (own, desc) => {
+      if (isNum(own)) return { text: pdfSafe(fmtNum(own)), isRollup: false };
+      if (isNum(desc)) return { text: pdfSafe(`Sum ${fmtNum(desc)}`), isRollup: true };
+      return { text: '-', isRollup: false };
+    };
+
     const rows = flat.map(({ item, depth }) => {
       const dept = item.deptId ? deptMap.get(item.deptId) : null;
       const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
-      const label = `${item.name}${item.acronym ? ` [${item.acronym}]` : ''}${item.heritage ? ` (${item.heritage})` : ''}`;
-      const descNote = item.description && item.notes
-        ? `${item.description} | Note: ${item.notes}`
-        : (item.description || item.notes || '');
+      const sub = rollups && rollups.byId ? rollups.byId.get(item.id) : null;
+      const rollupCols = new Set();
+
+      const cells = activeCols.map((col, idx) => {
+        switch (col.key) {
+          case 'code': return pdfSafe(item.code);
+          case 'acronym': return item.acronym ? pdfSafe(item.acronym) : '-';
+          case 'name': return pdfSafe(item.name);
+          case 'heritage': return item.heritage ? pdfSafe(item.heritage) : '-';
+          case 'maturity': return pdfSafe(item.maturity);
+          case 'dept': return dept ? pdfSafe(`[${dept.code}] ${dept.name}`) : '-';
+          case 'owner': return item.owner ? pdfSafe(item.owner) : '-';
+          case 'milestone': return ms ? pdfSafe(`${ms.title}${ms.date ? ` (${ms.date})` : ''}`) : '-';
+          case 'description': return item.description ? pdfSafe(item.description) : '-';
+          case 'mechDrawing': return item.mechDrawing ? pdfSafe(item.mechDrawing) : '-';
+          case 'elecDrawing': return item.elecDrawing ? pdfSafe(item.elecDrawing) : '-';
+          case 'refDoc': return item.refDoc ? pdfSafe(item.refDoc) : '-';
+          case 'manufacturer': return item.manufacturer ? pdfSafe(item.manufacturer) : '-';
+          case 'partNumber': return item.partNumber ? pdfSafe(item.partNumber) : '-';
+          case 'procurementStatus': return item.procurementStatus ? pdfSafe(item.procurementStatus) : '-';
+          case 'leadTime': return isNum(item.leadTime) ? pdfSafe(fmtNum(item.leadTime)) : '-';
+          case 'componentAlt': return item.componentAlt ? pdfSafe(item.componentAlt) : '-';
+          case 'mass': {
+            const m = metricCell(item.mass, sub && sub.descMass);
+            if (m.isRollup) rollupCols.add(idx);
+            return m.text;
+          }
+          case 'powerConsumption': {
+            const m = metricCell(item.powerConsumption, sub && sub.descPowerCons);
+            if (m.isRollup) rollupCols.add(idx);
+            return m.text;
+          }
+          case 'powerDissipation': {
+            const m = metricCell(item.powerDissipation, sub && sub.descPowerDiss);
+            if (m.isRollup) rollupCols.add(idx);
+            return m.text;
+          }
+          case 'mtbf': return isNum(item.mtbf) ? pdfSafe(fmtNum(item.mtbf)) : '-';
+          case 'lru': return item.lru ? pdfSafe(item.lru) : '-';
+          case 'spareAvailable': return item.spareAvailable ? pdfSafe(item.spareAvailable) : '-';
+          case 'spareToDeliver': return item.spareToDeliver ? pdfSafe(item.spareToDeliver) : '-';
+          case 'notes': return pdfSafe(item.notes || '');
+          default: return '';
+        }
+      });
+
       return {
         depth,
         maturity: item.maturity,
         deptColor: dept && dept.color ? dept.color : null,
-        cells: [
-          pdfSafe(item.code), pdfSafe(label), pdfSafe(item.maturity),
-          dept ? pdfSafe(`[${dept.code}] ${dept.name}`) : '-',
-          item.owner ? pdfSafe(item.owner) : '-',
-          ms ? pdfSafe(`${ms.title}${ms.date ? ` (${ms.date})` : ''}`) : '-',
-          pdfSafe(descNote),
-        ],
+        isTotal: false,
+        rollupCols,
+        cells,
       };
     });
 
-    /* Conditional annexes: only populated domains are appended so reports without optional fields stay identical. */
-    const annexes = [];
+    /* Append a single unified TOTAL row directly at the bottom when numeric SWaP / LRU / Spare columns are present. */
+    const hasTotalCols = Boolean(
+      rollups && (
+        (colIdx.mass !== undefined && rollups.totalMass !== null)
+        || (colIdx.powerConsumption !== undefined && rollups.totalPowerConsumption !== null)
+        || (colIdx.powerDissipation !== undefined && rollups.totalPowerDissipation !== null)
+        || (colIdx.lru !== undefined && rollups.lruCount > 0)
+        || (colIdx.spareAvailable !== undefined && rollups.spareAvailCount > 0)
+        || (colIdx.spareToDeliver !== undefined && rollups.spareDelivCount > 0)
+      )
+    );
+    let totalRow = null;
+    if (hasTotalCols && rows.length) {
+      totalRow = {
+        depth: 0, maturity: '', deptColor: null, isTotal: true, rollupCols: new Set(),
+        cells: activeCols.map(col => {
+          if (col.key === 'code') return 'TOTAL';
+          if (col.key === 'name') return pdfSafe(`${rows.length} item${rows.length === 1 ? '' : 's'}`);
+          if (col.key === 'mass') return rollups.totalMass !== null ? pdfSafe(fmtNum(rollups.totalMass)) : '-';
+          if (col.key === 'powerConsumption') return rollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(rollups.totalPowerConsumption)) : '-';
+          if (col.key === 'powerDissipation') return rollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(rollups.totalPowerDissipation)) : '-';
+          if (col.key === 'lru') return rollups.lruCount ? `${rollups.lruCount} Yes` : '-';
+          if (col.key === 'spareAvailable') return rollups.spareAvailCount ? `${rollups.spareAvailCount} Yes` : '-';
+          if (col.key === 'spareToDeliver') return rollups.spareDelivCount ? `${rollups.spareDelivCount} Yes` : '-';
+          return '';
+        }),
+      };
+    }
 
-    const engRows = [];
-    flat.forEach(({ item, depth }) => {
-      const hasEng = Boolean(item.heritage || isNum(item.mass) || isNum(item.powerConsumption) || isNum(item.powerDissipation) || isNum(item.mtbf) || item.lru || item.spareAvailable || item.spareToDeliver);
-      if (!hasEng) return;
-      const dept = item.deptId ? deptMap.get(item.deptId) : null;
-      const sub = rollups && rollups.byId ? rollups.byId.get(item.id) : null;
-      const numOrSub = (own, desc) => (isNum(own) ? fmtNum(own) : (isNum(desc) ? `Sum ${fmtNum(desc)}` : '-'));
-      engRows.push({
-        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
-        cells: [
-          pdfSafe(item.code),
-          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
-          pdfSafe(item.heritage || '-'),
-          pdfSafe(numOrSub(item.mass, sub && sub.descMass)),
-          pdfSafe(numOrSub(item.powerConsumption, sub && sub.descPowerCons)),
-          pdfSafe(numOrSub(item.powerDissipation, sub && sub.descPowerDiss)),
-          isNum(item.mtbf) ? pdfSafe(fmtNum(item.mtbf)) : '-',
-          pdfSafe(item.lru || '-'),
-          pdfSafe(formatSparesCell(item)),
-        ],
-      });
-    });
-    if (engRows.length) {
-      if (rollups && (rollups.totalMass !== null || rollups.totalPowerConsumption !== null || rollups.totalPowerDissipation !== null || rollups.lruCount || rollups.spareAvailCount || rollups.spareDelivCount)) {
-        const spTot = [];
-        if (rollups.spareAvailCount) spTot.push(`Avail: ${rollups.spareAvailCount}`);
-        if (rollups.spareDelivCount) spTot.push(`Deliv: ${rollups.spareDelivCount}`);
-        engRows.push({
-          depth: 0, deptColor: null, isTotal: true,
-          cells: [
-            'TOTAL',
-            pdfSafe(`${engRows.length} item${engRows.length === 1 ? '' : 's'} with engineering specs`),
-            '-',
-            rollups.totalMass !== null ? pdfSafe(fmtNum(rollups.totalMass)) : '-',
-            rollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(rollups.totalPowerConsumption)) : '-',
-            rollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(rollups.totalPowerDissipation)) : '-',
-            '-',
-            rollups.lruCount ? `${rollups.lruCount} Yes` : '-',
-            pdfSafe(spTot.length ? spTot.join(' / ') : '-'),
-          ],
-        });
+    const neededW = activeCols.reduce((sum, c) => sum + (hasOpt ? c.w : (c.baseW || c.w)), 0);
+    const marginX = hasOpt && activeCols.length > 12 ? 24 : 36;
+    let pageFormat = 'a4';
+    let pageLabel = 'A4 Landscape';
+    let fontSize = hasOpt ? 8 : 8.5;
+    let cellPadding = hasOpt ? 4.5 : 6;
+    if (hasOpt && neededW > 770) {
+      if (neededW <= 1142) {
+        pageFormat = 'a3';
+        pageLabel = 'A3 Landscape';
+        fontSize = 7.8;
+        cellPadding = 4.5;
+      } else {
+        const customW = Math.min(1820, Math.ceil(neededW + marginX * 2 + 16));
+        pageFormat = [customW, 842];
+        pageLabel = 'Wide Landscape';
+        fontSize = 7.4;
+        cellPadding = 4;
       }
-      annexes.push({
-        key: 'eng',
-        title: 'Technical Annex — Engineering Budgets, Reliability & Spares (SWaP-R / ILS)',
-        head: ['Code', 'Deliverable / Subsystem', 'Heritage', 'Mass (kg)', 'Pwr Cons (W)', 'Pwr Diss (W)', 'MTBF (h)', 'LRU', 'Spares (Avail / Deliv)'],
-        colStyles: {
-          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 165 }, 2: { cellWidth: 56 },
-          3: { cellWidth: 62, halign: 'right' }, 4: { cellWidth: 70, halign: 'right' }, 5: { cellWidth: 70, halign: 'right' },
-          6: { cellWidth: 64, halign: 'right' }, 7: { cellWidth: 38, halign: 'center' }, 8: { cellWidth: 'auto' },
-        },
-        rows: engRows,
-      });
-    }
-
-    const procRows = [];
-    flat.forEach(({ item, depth }) => {
-      const hasProc = Boolean(item.manufacturer || item.partNumber || item.procurementStatus || isNum(item.leadTime) || item.componentAlt);
-      if (!hasProc) return;
-      const dept = item.deptId ? deptMap.get(item.deptId) : null;
-      procRows.push({
-        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
-        cells: [
-          pdfSafe(item.code),
-          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
-          pdfSafe(item.manufacturer || '-'),
-          pdfSafe(item.partNumber || '-'),
-          pdfSafe(item.procurementStatus || '-'),
-          isNum(item.leadTime) ? pdfSafe(fmtNum(item.leadTime)) : '-',
-          pdfSafe(item.componentAlt || '-'),
-        ],
-      });
-    });
-    if (procRows.length) {
-      annexes.push({
-        key: 'proc',
-        title: 'Technical Annex — Procurement & Supply Chain',
-        head: ['Code', 'Deliverable / Subsystem', 'Manufacturer', 'Part Number', 'Proc. / Mfg. Status', 'Lead Time (wks)', 'Component Alternative'],
-        colStyles: {
-          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 145 }, 2: { cellWidth: 105 },
-          3: { cellWidth: 100 }, 4: { cellWidth: 98 }, 5: { cellWidth: 72, halign: 'right' }, 6: { cellWidth: 'auto' },
-        },
-        rows: procRows,
-      });
-    }
-
-    const docRows = [];
-    flat.forEach(({ item, depth }) => {
-      const hasDoc = Boolean(item.description || item.mechDrawing || item.elecDrawing || item.refDoc);
-      if (!hasDoc) return;
-      const dept = item.deptId ? deptMap.get(item.deptId) : null;
-      docRows.push({
-        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
-        cells: [
-          pdfSafe(item.code),
-          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
-          pdfSafe(item.description || '-'),
-          pdfSafe(item.mechDrawing || '-'),
-          pdfSafe(item.elecDrawing || '-'),
-          pdfSafe(item.refDoc || '-'),
-        ],
-      });
-    });
-    if (docRows.length) {
-      annexes.push({
-        key: 'docs',
-        title: 'Technical Annex — Documentation & Drawings',
-        head: ['Code', 'Deliverable / Subsystem', 'Description', 'Mechanical Drawing', 'Electrical Drawing', 'Reference Document'],
-        colStyles: {
-          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 140 }, 2: { cellWidth: 185 },
-          3: { cellWidth: 120 }, 4: { cellWidth: 120 }, 5: { cellWidth: 'auto' },
-        },
-        rows: docRows,
-      });
     }
 
     const swpSub = [];
     if (rollups && rollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(rollups.totalMass)} kg`);
     if (rollups && rollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(rollups.totalPowerConsumption)} W`);
     if (rollups && rollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(rollups.totalPowerDissipation)} W`);
+
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
       subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
       projectColor: project && project.color ? project.color : null,
-      head: REPORT_HEAD,
+      cols: activeCols,
+      colIdx,
+      head: activeCols.map(c => c.label),
       rows,
-      annexes,
+      totalRow,
+      hasOpt,
+      layout: { pageFormat, pageLabel, neededW, marginX, fontSize, cellPadding },
     };
   }
 
   /* JsPdf = window.jspdf.jsPDF. Returns the jsPDF instance (caller calls .save(filename)). Throws if autoTable is missing. */
   function renderPdf(JsPdf, model) {
     const projRgb = hexToRgb(model.projectColor, [79, 70, 229]);
-    const pdf = new JsPdf({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const lay = model.layout || { pageFormat: 'a4', marginX: 36, fontSize: 8.5, cellPadding: 6 };
+    const pdf = new JsPdf({ orientation: 'landscape', unit: 'pt', format: lay.pageFormat });
     if (typeof pdf.autoTable !== 'function') throw new Error('PDF table plugin (autoTable) is not available.');
     const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
+    const marginX = lay.marginX;
+    const printableW = Math.max(400, pageW - marginX * 2);
+
     pdf.setFillColor(15, 23, 42); pdf.rect(0, 0, pageW, 64, 'F');
     pdf.setFillColor(projRgb[0], projRgb[1], projRgb[2]); pdf.rect(0, 60, pageW, 4, 'F');
-    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.text(model.title, 36, 28);
-    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(203, 213, 225); pdf.text(model.subtitle, 36, 46);
+    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.text(model.title, marginX, 28);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(203, 213, 225); pdf.text(model.subtitle, marginX, 46);
 
-    const meta = model.rows.map(r => ({ depth: r.depth, maturity: r.maturity, deptRgb: r.deptColor ? hexToRgb(r.deptColor) : null }));
+    const cols = model.cols || REPORT_COLS.filter(c => c.always);
+    const colIdx = model.colIdx || { code: 0, name: 1, maturity: 2, dept: 3 };
+    const rawTotalW = cols.reduce((sum, c) => sum + (model.hasOpt ? c.w : (c.baseW || c.w)), 0);
+    const scale = rawTotalW > printableW ? (printableW / rawTotalW) : 1;
+    const columnStyles = {};
+    cols.forEach((c, i) => {
+      const style = {};
+      if (c.auto && scale >= 1) style.cellWidth = 'auto';
+      else style.cellWidth = Math.max(28, Math.floor((model.hasOpt ? c.w : (c.baseW || c.w)) * scale));
+      if (c.bold) style.fontStyle = 'bold';
+      if (c.align) style.halign = c.align;
+      columnStyles[i] = style;
+    });
+
+    const allRows = model.totalRow ? [...model.rows, model.totalRow] : model.rows;
+    const emptyBodyRow = cols.map((c, i) => (i === colIdx.name ? 'No PBS items recorded' : (c.key === 'notes' ? '' : '-')));
+    const meta = allRows.map(r => ({
+      depth: r.depth, maturity: r.maturity, isTotal: Boolean(r.isTotal),
+      rollupCols: r.rollupCols || new Set(),
+      deptRgb: r.deptColor ? hexToRgb(r.deptColor) : null,
+    }));
+
     pdf.autoTable({
       startY: 78,
       head: [model.head],
-      body: model.rows.length ? model.rows.map(r => r.cells) : [['-', 'No PBS items recorded', '-', '-', '-', '-', '']],
-      styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 6, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
-      headStyles: { fillColor: projRgb, textColor: [255, 255, 255], fontStyle: 'bold' },
+      body: allRows.length ? allRows.map(r => r.cells) : [emptyBodyRow],
+      styles: { font: 'helvetica', fontSize: lay.fontSize, cellPadding: lay.cellPadding, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5, overflow: 'linebreak' },
+      headStyles: { fillColor: projRgb, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: Math.max(7, lay.fontSize - 0.3) },
       alternateRowStyles: { fillColor: [248, 250, 252] },
-      columnStyles: { 0: { cellWidth: 54, fontStyle: 'bold' }, 1: { cellWidth: 195 }, 2: { cellWidth: 66, fontStyle: 'bold' }, 3: { cellWidth: 115 }, 4: { cellWidth: 85 }, 5: { cellWidth: 120 }, 6: { cellWidth: 'auto' } },
+      columnStyles,
       didParseCell(data) {
         if (data.section !== 'body') return;
         const m = meta[data.row.index];
         if (!m) return;
+        if (m.isTotal) {
+          data.cell.styles.fillColor = [226, 232, 240];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [15, 23, 42];
+          return;
+        }
         if (m.deptRgb) {
           data.cell.styles.fillColor = tint(m.deptRgb, 0.11);
-          if (data.column.index === 3) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
+          if (data.column.index === colIdx.dept) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
         }
-        if (data.column.index === 1) {
+        if (data.column.index === colIdx.name) {
           if (m.depth === 0) data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.cellPadding = { top: 6, right: 6, bottom: 6, left: 8 + m.depth * 14 };
+          const pad = lay.cellPadding;
+          data.cell.styles.cellPadding = { top: pad, right: pad, bottom: pad, left: pad + 2 + m.depth * (model.hasOpt ? 10 : 14) };
         }
-        if (data.column.index === 2) data.cell.styles.textColor = MAT_PDF_RGB[m.maturity] || [100, 116, 139];
+        if (data.column.index === colIdx.maturity) data.cell.styles.textColor = MAT_PDF_RGB[m.maturity] || [100, 116, 139];
+        if (m.rollupCols && m.rollupCols.has(data.column.index)) {
+          data.cell.styles.fontStyle = 'italic';
+          data.cell.styles.textColor = [100, 116, 139];
+        }
       },
       didDrawCell(data) {
         if (data.section !== 'body' || data.column.index !== 0) return;
         const m = meta[data.row.index];
-        if (m && m.deptRgb) { pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]); pdf.rect(data.cell.x, data.cell.y, 4, data.cell.height, 'F'); }
+        if (m && !m.isTotal && m.deptRgb) { pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]); pdf.rect(data.cell.x, data.cell.y, 4, data.cell.height, 'F'); }
       },
-      margin: { left: 36, right: 36, bottom: 36 },
-    });
-
-    (model.annexes || []).forEach(annex => {
-      let y = (pdf.lastAutoTable && pdf.lastAutoTable.finalY ? pdf.lastAutoTable.finalY : 90) + 22;
-      if (y > pageH - 110) {
-        pdf.addPage();
-        y = 44;
-      }
-      pdf.setFillColor(projRgb[0], projRgb[1], projRgb[2]);
-      pdf.rect(36, y - 10, 4, 14, 'F');
-      pdf.setTextColor(15, 23, 42);
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(10.5);
-      pdf.text(pdfSafe(annex.title), 46, y);
-
-      const aMeta = annex.rows.map(r => ({ isTotal: Boolean(r.isTotal), deptRgb: r.deptColor ? hexToRgb(r.deptColor) : null }));
-      pdf.autoTable({
-        startY: y + 8,
-        head: [annex.head],
-        body: annex.rows.map(r => r.cells),
-        styles: { font: 'helvetica', fontSize: 8, cellPadding: 5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
-        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
-        alternateRowStyles: { fillColor: [248, 250, 252] },
-        columnStyles: annex.colStyles || {},
-        didParseCell(data) {
-          if (data.section !== 'body') return;
-          const m = aMeta[data.row.index];
-          if (!m) return;
-          if (m.isTotal) {
-            data.cell.styles.fillColor = [226, 232, 240];
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.textColor = [15, 23, 42];
-          } else if (m.deptRgb) {
-            data.cell.styles.fillColor = tint(m.deptRgb, 0.08);
-          }
-        },
-        didDrawCell(data) {
-          if (data.section !== 'body' || data.column.index !== 0) return;
-          const m = aMeta[data.row.index];
-          if (m && !m.isTotal && m.deptRgb) { pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]); pdf.rect(data.cell.x, data.cell.y, 3.5, data.cell.height, 'F'); }
-        },
-        margin: { left: 36, right: 36, bottom: 36 },
-      });
+      margin: { left: marginX, right: marginX, bottom: 32 },
     });
 
     return pdf;
@@ -412,26 +408,33 @@
 
   /* Offline fallback: a standalone, print-ready HTML document (caller opens it in a window and prints). */
   function buildPrintHtml(model) {
-    const body = model.rows.map(r => {
+    const cols = model.cols || REPORT_COLS.filter(c => c.always);
+    const colIdx = model.colIdx || { code: 0, name: 1, maturity: 2, dept: 3 };
+    const allRows = model.totalRow ? [...model.rows, model.totalRow] : model.rows;
+    const dense = cols.length > 10;
+
+    const body = allRows.map(r => {
       const accent = r.deptColor || '#cbd5e1';
-      const c = r.cells;
-      return `<tr><td style="font-family:monospace;font-weight:700;border-left:4px solid ${htmlEsc(accent)}">${htmlEsc(c[0])}</td>`
-        + `<td style="padding-left:${8 + r.depth * 16}px;font-weight:${r.depth === 0 ? 700 : 500}">${htmlEsc(c[1])}</td>`
-        + `<td>${htmlEsc(c[2])}</td><td style="color:${htmlEsc(r.deptColor || '#475569')};font-weight:600">${htmlEsc(c[3])}</td>`
-        + `<td>${htmlEsc(c[4])}</td><td>${htmlEsc(c[5])}</td><td>${htmlEsc(c[6])}</td></tr>`;
-    }).join('');
-    const annexHtml = (model.annexes || []).map(annex => {
-      const aRows = annex.rows.map(r => {
-        const style = r.isTotal ? ' style="background:#e2e8f0;font-weight:700"' : '';
-        const accent = !r.isTotal && r.deptColor ? `border-left:4px solid ${htmlEsc(r.deptColor)};` : '';
-        return `<tr${style}>${r.cells.map((cell, idx) => `<td${idx === 0 ? ` style="font-family:monospace;font-weight:700;${accent}"` : ''}>${htmlEsc(cell)}</td>`).join('')}</tr>`;
+      const rowStyle = r.isTotal ? ' style="background:#e2e8f0;font-weight:700"' : '';
+      const tds = r.cells.map((cell, idx) => {
+        const col = cols[idx] || {};
+        const styles = [];
+        if (idx === 0) styles.push(`font-family:monospace;font-weight:700${r.isTotal ? '' : `;border-left:4px solid ${htmlEsc(accent)}`}`);
+        if (!r.isTotal && idx === colIdx.name) styles.push(`padding-left:${8 + r.depth * (dense ? 12 : 16)}px;font-weight:${r.depth === 0 ? 700 : 500}`);
+        if (!r.isTotal && idx === colIdx.dept && r.deptColor) styles.push(`color:${htmlEsc(r.deptColor)};font-weight:600`);
+        if (col.align) styles.push(`text-align:${col.align}`);
+        if (r.isTotal) styles.push('white-space:nowrap');
+        if (r.rollupCols && r.rollupCols.has(idx)) styles.push('font-style:italic;color:#64748b');
+        return `<td${styles.length ? ` style="${styles.join(';')}"` : ''}>${htmlEsc(cell)}</td>`;
       }).join('');
-      return `<section class="annex"><h2>${htmlEsc(annex.title)}</h2><table><thead><tr>${annex.head.map(h => `<th>${htmlEsc(h)}</th>`).join('')}</tr></thead><tbody>${aRows}</tbody></table></section>`;
+      return `<tr${rowStyle}>${tds}</tr>`;
     }).join('');
+
+    const ths = cols.map(c => `<th${c.align ? ` style="text-align:${c.align}"` : ''}>${htmlEsc(c.label)}</th>`).join('');
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${htmlEsc(model.title)}</title>`
-      + '<style>body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:24px;font-size:12px}h1{font-size:18px;margin:0 0 4px}h2{font-size:13.5px;margin:20px 0 8px;padding-left:8px;border-left:4px solid #4f46e5}p{color:#475569;margin:0 0 16px;font-size:11px}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:11px}.annex th{background:#1e293b}.annex{break-inside:avoid-page}</style>'
-      + `</head><body><h1>${htmlEsc(model.title)}</h1><p>${htmlEsc(model.subtitle)}</p><table><thead><tr>${model.head.map(h => `<th>${htmlEsc(h)}</th>`).join('')}</tr></thead>`
-      + `<tbody>${body || '<tr><td colspan="7">No PBS items recorded.</td></tr>'}</tbody></table>${annexHtml}</body></html>`;
+      + `<style>@page{size:landscape;margin:10mm}body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:20px;font-size:${dense ? '10.5px' : '12px'}}h1{font-size:17px;margin:0 0 4px}p{color:#475569;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:${dense ? '4px 5px' : '6px 8px'};text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:${dense ? '9.5px' : '11px'};white-space:nowrap}</style>`
+      + `</head><body><h1>${htmlEsc(model.title)}</h1><p>${htmlEsc(model.subtitle)}</p><table><thead><tr>${ths}</tr></thead>`
+      + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table></body></html>`;
   }
 
   P.report = { svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };

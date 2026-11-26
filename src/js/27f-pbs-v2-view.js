@@ -16,22 +16,24 @@
     : { identity: 0, docs: 0, proc: 0, eng: 0, total: 0 });
 
   const CSS = `
-    #ppPbsDialog { width: min(1160px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; }
+    #ppPbsDialog { width: min(1220px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; }
     #ppPbsDialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
     .pp-pbs-wrap { display: flex; flex-direction: column; max-height: 92vh; }
     .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-top: 4px solid var(--pbs-proj-color, #4f46e5); border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; }
     .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
-    .pp-pbs-viewbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; padding: .42rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
-    .pp-pbs-tabs { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem; border-radius: .6rem; background: var(--border-subtle, #e2e8f0); }
-    .pp-pbs-tab { display: inline-flex; align-items: center; gap: .3rem; padding: .24rem .58rem; border-radius: .46rem; border: 0; background: transparent; color: var(--text-muted, #475569); font-size: 11px; font-weight: 700; cursor: pointer; }
-    .pp-pbs-tab:hover { color: var(--text-primary, #0f172a); }
-    .pp-pbs-tab.is-active { background: var(--surface-card, #ffffff); color: #4f46e5; box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
-    .pp-pbs-tab-cnt { font-size: 9.5px; font-weight: 800; padding: .04rem .32rem; border-radius: 9999px; background: rgba(79, 70, 229, .12); color: #4338ca; }
+    .pp-pbs-colbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; padding: .42rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
+    .pp-pbs-colchips { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
+    .pp-pbs-colbar-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #64748b); margin-right: .15rem; }
+    .pp-pbs-chip { display: inline-flex; align-items: center; gap: .28rem; padding: .22rem .55rem; border-radius: 9999px; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-muted, #475569); font-size: 11px; font-weight: 700; cursor: pointer; }
+    .pp-pbs-chip:hover { background: var(--surface-subtle, #f1f5f9); color: var(--text-primary, #0f172a); }
+    .pp-pbs-chip.is-active { background: #eef2ff; border-color: #6366f1; color: #3730a3; }
+    .pp-pbs-chip-cnt { font-size: 9.5px; font-weight: 800; padding: .02rem .32rem; border-radius: 9999px; background: rgba(79, 70, 229, .12); color: #4338ca; }
+    .pp-pbs-colhint { font-size: 10.5px; color: var(--text-muted, #64748b); }
     .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; }
     .pp-pbs-btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
     .pp-pbs-btn:hover { background: var(--surface-subtle, #f1f5f9); }
-    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-tab:focus-visible, .pp-pbs-spec-btn:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
+    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-chip:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
     .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; }
     .pp-pbs-btn-primary:hover { background: #4338ca; }
     .pp-pbs-btn-emerald { background: #059669; border-color: #059669; color: #ffffff; }
@@ -45,17 +47,27 @@
     .pp-pbs-status-warn { background: #fef3c7; color: #92400e; }
     .pp-pbs-status-error { background: #ffe4e6; color: #9f1239; }
     .pp-pbs-status-idle { background: #f1f5f9; color: #475569; }
+    .pp-pbs-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .pp-pbs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .pp-pbs-table th, .pp-pbs-table td { padding: .45rem .55rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; vertical-align: middle; }
-    .pp-pbs-table.pp-pbs-dense th, .pp-pbs-table.pp-pbs-dense td { padding: .4rem .38rem; font-size: 11.5px; }
     .pp-pbs-table th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); white-space: nowrap; }
-    .pp-pbs-spares-stack { display: inline-flex; flex-direction: column; gap: .15rem; font-size: 10px; line-height: 1.15; }
-    .pp-pbs-spares-stack > span { display: inline-flex; align-items: center; gap: .22rem; white-space: nowrap; }
+    .pp-pbs-table.pp-pbs-sticky { border-collapse: separate; border-spacing: 0; }
+    .pp-pbs-table.pp-pbs-sticky th, .pp-pbs-table.pp-pbs-sticky td { padding: .42rem .48rem; font-size: 11.5px; }
+    .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-code, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-code, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-code { position: sticky; left: 0; z-index: 2; width: 64px; min-width: 64px; max-width: 64px; background: var(--surface-card, #ffffff); overflow: hidden; text-overflow: ellipsis; }
+    .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-name, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-name { position: sticky; left: 64px; z-index: 2; min-width: 215px; max-width: 265px; background: var(--surface-card, #ffffff); box-shadow: 4px 0 8px -4px rgba(15, 23, 42, .14); }
+    .pp-pbs-table.pp-pbs-sticky thead th.pp-pbs-th-code, .pp-pbs-table.pp-pbs-sticky thead th.pp-pbs-th-name { z-index: 4; }
+    .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-code, .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-name { z-index: 3; background: var(--surface-subtle, #f1f5f9); }
+    .pp-pbs-table tfoot tr.pp-pbs-total-row td { background: var(--surface-subtle, #f1f5f9); font-weight: 800; border-top: 2px solid var(--border-subtle, #cbd5e1); border-bottom: 0; }
+    .pp-pbs-th-opt { color: #4338ca !important; }
     .pp-pbs-row-ctx { opacity: .62; }
     .pp-pbs-row:focus-visible { outline: 2px solid #4f46e5; outline-offset: -2px; }
     .pp-pbs-dept-dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; margin-right: .35rem; vertical-align: middle; flex-shrink: 0; }
-    .pp-pbs-toggle { width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .35rem; border: 1px solid transparent; background: transparent; color: var(--text-muted, #64748b); cursor: pointer; font-size: 10px; margin-right: .25rem; }
+    .pp-pbs-name-flex { display: flex; align-items: flex-start; gap: .25rem; }
+    .pp-pbs-name-main { min-width: 0; flex: 1 1 auto; }
+    .pp-pbs-name-line { line-height: 1.35; }
+    .pp-pbs-toggle { width: 1.25rem; height: 1.25rem; flex: 0 0 1.25rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .35rem; border: 1px solid transparent; background: transparent; color: var(--text-muted, #64748b); cursor: pointer; font-size: 10px; }
     .pp-pbs-toggle:hover { background: var(--surface-subtle, #e2e8f0); color: var(--text-primary, #0f172a); }
+    .pp-pbs-toggle-spacer { display: inline-block; width: 1.25rem; flex: 0 0 1.25rem; }
     .pp-pbs-acr { display: inline-block; margin-left: .32rem; padding: .04rem .36rem; border-radius: .35rem; font-family: ui-monospace, monospace; font-size: 10px; font-weight: 700; background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; vertical-align: middle; }
     .pp-pbs-her { display: inline-block; margin-left: .28rem; padding: .04rem .38rem; border-radius: 9999px; font-size: 9.5px; font-weight: 700; vertical-align: middle; }
     .pp-pbs-her-Existing { background: #e2e8f0; color: #334155; }
@@ -64,18 +76,12 @@
     .pp-pbs-yn { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 10px; font-weight: 700; }
     .pp-pbs-yn-Yes { background: #d1fae5; color: #065f46; }
     .pp-pbs-yn-No { background: #f1f5f9; color: #64748b; }
-    .pp-pbs-spec-btn { display: inline-flex; align-items: center; gap: .2rem; margin-left: .35rem; padding: .08rem .42rem; border-radius: 9999px; border: 1px solid #cbd5e1; background: var(--surface-subtle, #f8fafc); color: #475569; font-size: 10px; font-weight: 700; cursor: pointer; vertical-align: middle; }
-    .pp-pbs-spec-btn:hover, .pp-pbs-spec-btn.is-open { background: #eef2ff; border-color: #818cf8; color: #3730a3; }
-    .pp-pbs-subtext { font-size: 10.5px; color: var(--text-muted, #64748b); margin-left: 1.5rem; line-height: 1.35; }
+    .pp-pbs-subtext { font-size: 10.5px; color: var(--text-muted, #64748b); line-height: 1.35; margin-top: .08rem; }
     .pp-pbs-num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right !important; }
+    .pp-pbs-center { text-align: center !important; white-space: nowrap; }
     .pp-pbs-rollup { font-style: italic; color: var(--text-muted, #64748b); font-size: 11px; }
-    .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; }
-    .pp-pbs-detail-row > td { padding: .35rem .55rem .65rem !important; background: var(--surface-subtle, #f8fafc); border-bottom: 1px solid var(--border-subtle, #e2e8f0); }
-    .pp-pbs-detail-card { margin-left: calc(min(var(--pbs-depth, 0), 5) * 18px + 1.25rem); padding: .6rem .75rem; border-radius: .65rem; border: 1px solid var(--border-subtle, #e2e8f0); border-left: 3px solid var(--pbs-dept-color, #6366f1); background: var(--surface-card, #ffffff); display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .65rem .9rem; font-size: 11px; }
-    .pp-pbs-detail-group h4 { margin: 0 0 .35rem; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #64748b); }
-    .pp-pbs-detail-list { display: grid; grid-template-columns: auto 1fr; gap: .2rem .55rem; margin: 0; }
-    .pp-pbs-detail-list dt { color: var(--text-muted, #64748b); font-weight: 600; white-space: nowrap; }
-    .pp-pbs-detail-list dd { margin: 0; color: var(--text-primary, #0f172a); font-weight: 600; word-break: break-word; }
+    .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
+    .pp-pbs-desc-cell { min-width: 150px; max-width: 240px; line-height: 1.3; }
     .pp-pbs-form { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
     .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; font-size: 11px; font-weight: 700; }
     .pp-pbs-section { grid-column: 1 / -1; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); overflow: hidden; }
@@ -96,20 +102,27 @@
     .pp-pbs-proj-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: .3rem; }
     .pp-pbs-proj-btn:hover { background: #e0e7ff; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-viewbar, body.dark .pp-pbs-viewbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #1e293b; border-bottom-color: #334155; }
     html.dark .pp-pbs-form, body.dark .pp-pbs-form { border-color: #334155; }
-    html.dark .pp-pbs-section, body.dark .pp-pbs-section, html.dark .pp-pbs-detail-card, body.dark .pp-pbs-detail-card { background: #0f172a; border-color: #334155; }
+    html.dark .pp-pbs-section, body.dark .pp-pbs-section { background: #0f172a; border-color: #334155; }
     html.dark .pp-pbs-section > summary, body.dark .pp-pbs-section > summary { color: #e2e8f0; }
     html.dark .pp-pbs-sec-grid, body.dark .pp-pbs-sec-grid { border-top-color: #334155; }
-    html.dark .pp-pbs-detail-row > td, body.dark .pp-pbs-detail-row > td { background: #1e293b; border-bottom-color: #334155; }
-    html.dark .pp-pbs-detail-list dd, body.dark .pp-pbs-detail-list dd { color: #e2e8f0; }
-    html.dark .pp-pbs-tabs, body.dark .pp-pbs-tabs { background: #0f172a; }
-    html.dark .pp-pbs-tab, body.dark .pp-pbs-tab { color: #94a3b8; }
-    html.dark .pp-pbs-tab.is-active, body.dark .pp-pbs-tab.is-active { background: #334155; color: #a5b4fc; }
-    html.dark .pp-pbs-tab-cnt, body.dark .pp-pbs-tab-cnt { background: rgba(165, 180, 252, .16); color: #c7d2fe; }
+    html.dark .pp-pbs-chip, body.dark .pp-pbs-chip { background: #0f172a; border-color: #475569; color: #cbd5e1; }
+    html.dark .pp-pbs-chip:hover, body.dark .pp-pbs-chip:hover { background: #334155; color: #f8fafc; }
+    html.dark .pp-pbs-chip.is-active, body.dark .pp-pbs-chip.is-active { background: rgba(79, 70, 229, .28); border-color: #818cf8; color: #c7d2fe; }
+    html.dark .pp-pbs-chip-cnt, body.dark .pp-pbs-chip-cnt { background: rgba(165, 180, 252, .16); color: #c7d2fe; }
+    html.dark .pp-pbs-th-opt, body.dark .pp-pbs-th-opt { color: #a5b4fc !important; }
+    html.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-code, body.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-code,
+    html.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-code, body.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-code,
+    html.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-name, body.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-name,
+    html.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name, body.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name { background: #0f172a; }
+    html.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-name, body.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-name,
+    html.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name, body.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name,
+    html.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-name, body.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-name { box-shadow: 4px 0 8px -4px rgba(0, 0, 0, .5); }
+    html.dark .pp-pbs-table tfoot tr.pp-pbs-total-row td, body.dark .pp-pbs-table tfoot tr.pp-pbs-total-row td,
+    html.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-code, body.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-code,
+    html.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-name, body.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-name { background: #1e293b; border-top-color: #475569; }
     html.dark .pp-pbs-acr, body.dark .pp-pbs-acr { background: #1e293b; color: #cbd5e1; border-color: #475569; }
-    html.dark .pp-pbs-spec-btn, body.dark .pp-pbs-spec-btn { background: #1e293b; border-color: #475569; color: #cbd5e1; }
-    html.dark .pp-pbs-spec-btn:hover, body.dark .pp-pbs-spec-btn:hover, html.dark .pp-pbs-spec-btn.is-open, body.dark .pp-pbs-spec-btn.is-open { background: rgba(79, 70, 229, .28); border-color: #818cf8; color: #c7d2fe; }
     html.dark .pp-pbs-pill-swp, body.dark .pp-pbs-pill-swp { background: rgba(79, 70, 229, .25); color: #c7d2fe; border-color: #4f46e5; }
     html.dark .pp-pbs-yn-No, body.dark .pp-pbs-yn-No { background: #334155; color: #cbd5e1; }
     html.dark .pp-pbs-her-Existing, body.dark .pp-pbs-her-Existing { background: #334155; color: #cbd5e1; }
@@ -120,46 +133,59 @@
     html.dark .pp-pbs-input, body.dark .pp-pbs-input, html.dark .pp-pbs-select, body.dark .pp-pbs-select { background: #0f172a; color: #e2e8f0; border-color: #475569; }
     html.dark .pp-pbs-conflict, body.dark .pp-pbs-conflict { background: rgba(180,83,9,.22); color: #fde68a; border-color: #d97706; }
     html.dark .pp-pbs-notice, body.dark .pp-pbs-notice { background: rgba(30,64,175,.25); color: #bfdbfe; border-color: #3b82f6; }
+    @media (min-width: 900px) {
+      .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-actions, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-actions, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-actions { position: sticky; right: 0; z-index: 2; background: var(--surface-card, #ffffff); box-shadow: -4px 0 8px -4px rgba(15, 23, 42, .14); }
+      .pp-pbs-table.pp-pbs-sticky thead th.pp-pbs-th-actions { z-index: 4; }
+      .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-actions { z-index: 3; background: var(--surface-subtle, #f1f5f9); }
+      html.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-actions, body.dark .pp-pbs-table.pp-pbs-sticky th.pp-pbs-th-actions,
+      html.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-actions, body.dark .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-actions { background: #0f172a; box-shadow: -4px 0 8px -4px rgba(0, 0, 0, .5); }
+      html.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-actions, body.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-actions { background: #1e293b; box-shadow: -4px 0 8px -4px rgba(0, 0, 0, .5); }
+    }
     @media (max-width: 767px) {
       #ppPbsDialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
       .pp-pbs-wrap { height: 100dvh; max-height: 100dvh; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
       .pp-pbs-head { padding: .65rem .8rem; gap: .4rem; }
-      .pp-pbs-tip { display: none; }
+      .pp-pbs-tip, .pp-pbs-colhint { display: none; }
       .pp-pbs-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: .45rem .8rem; gap: .35rem; }
       .pp-pbs-toolbar::-webkit-scrollbar { display: none; }
       .pp-pbs-toolbar > * { flex: 0 0 auto; }
       .pp-pbs-summary { padding: .45rem .8rem; gap: .35rem; }
-      .pp-pbs-viewbar { padding: .4rem .8rem; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-      .pp-pbs-viewbar::-webkit-scrollbar { display: none; }
-      .pp-pbs-viewbar > * { flex: 0 0 auto; }
+      .pp-pbs-colbar { padding: .4rem .8rem; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+      .pp-pbs-colbar::-webkit-scrollbar { display: none; }
+      .pp-pbs-colchips { flex-wrap: nowrap; }
+      .pp-pbs-colchips > * { flex: 0 0 auto; }
       .pp-pbs-filters { display: grid; grid-template-columns: 1fr 1fr; padding: .5rem .8rem; gap: .4rem; }
       .pp-pbs-filters #ppPbsFilterSearch { grid-column: 1 / -1; min-width: 0 !important; width: 100%; }
       .pp-pbs-filters #ppPbsClearFiltersBtn { grid-column: 1 / -1; }
       .pp-pbs-body { padding: .65rem .8rem 1rem; }
       .pp-pbs-btn { min-height: 38px; padding: .4rem .7rem; font-size: 12.5px; }
       .pp-pbs-btn-xs { min-height: 36px; padding: .3rem .55rem; font-size: 12px; }
-      .pp-pbs-tab { min-height: 32px; padding: .28rem .6rem; font-size: 12px; }
+      .pp-pbs-chip { min-height: 32px; padding: .28rem .6rem; font-size: 12px; }
       .pp-pbs-input, .pp-pbs-select { min-height: 38px; font-size: 16px; width: 100%; box-sizing: border-box; }
       .pp-pbs-toolbar .pp-pbs-select { width: auto; max-width: 210px; font-size: 13px; }
-      .pp-pbs-toggle { width: 2rem; height: 2rem; font-size: 12px; }
+      .pp-pbs-toggle { width: 2rem; height: 2rem; flex: 0 0 2rem; font-size: 12px; }
+      .pp-pbs-toggle-spacer { display: none; }
       .pp-pbs-form, .pp-pbs-sec-grid { grid-template-columns: 1fr; }
       .pp-pbs-form { padding: .75rem; }
       .pp-pbs-form .pp-pbs-field { grid-column: auto !important; }
-      .pp-pbs-table, .pp-pbs-table tbody { display: block; width: 100%; }
+      .pp-pbs-table, .pp-pbs-table tbody, .pp-pbs-table tfoot { display: block; width: 100%; }
       .pp-pbs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+      .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-code, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-cell-name,
+      .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-code, .pp-pbs-table.pp-pbs-sticky td.pp-pbs-foot-name { position: static; left: auto; width: auto; min-width: 0; max-width: none; box-shadow: none; background: transparent; overflow: visible; }
+      .pp-pbs-table td.pp-pbs-desc-cell { min-width: 0; max-width: none; }
       .pp-pbs-table tr.pp-pbs-row { display: block; margin: 0 0 .65rem calc(min(var(--pbs-depth, 0), 4) * 10px); padding: .55rem .7rem; border: 1px solid var(--border-subtle, #e2e8f0); border-left: 5px solid var(--pbs-dept-color, #94a3b8); border-radius: .75rem; background: var(--surface-card, #ffffff); background: color-mix(in srgb, var(--pbs-dept-color, transparent) 7%, var(--surface-card, #ffffff)); }
-      .pp-pbs-table tr.pp-pbs-detail-row { display: block; margin: -.45rem 0 .65rem calc(min(var(--pbs-depth, 0), 4) * 10px); border: 0; }
-      .pp-pbs-table tr.pp-pbs-detail-row > td { display: block; padding: 0 !important; background: transparent; border: 0; }
-      .pp-pbs-detail-card { margin-left: 0; grid-template-columns: 1fr; }
-      .pp-pbs-table tr:not(.pp-pbs-row):not(.pp-pbs-detail-row), .pp-pbs-table td[colspan] { display: block; width: 100%; border: 0; }
-      .pp-pbs-table tr.pp-pbs-row td { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .22rem 0 !important; border-bottom: 0; white-space: normal !important; text-align: left !important; }
+      .pp-pbs-table tfoot tr.pp-pbs-total-row { display: block; margin: .25rem 0 0; padding: .55rem .7rem; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .75rem; background: var(--surface-subtle, #f1f5f9); }
+      .pp-pbs-table tr:not(.pp-pbs-row):not(.pp-pbs-total-row), .pp-pbs-table td[colspan] { display: block; width: 100%; border: 0; }
+      .pp-pbs-table tr.pp-pbs-row td, .pp-pbs-table tfoot tr.pp-pbs-total-row td { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .22rem 0 !important; border-bottom: 0; white-space: normal !important; text-align: left !important; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-opt-empty, .pp-pbs-table tfoot tr.pp-pbs-total-row td.pp-pbs-opt-empty { display: none !important; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-code { display: inline-flex; font-size: 11px; color: var(--text-muted, #64748b); margin-right: .45rem; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-mat { display: inline-flex; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-name { display: block; padding: .2rem 0 .35rem !important; font-size: 13.5px; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-dept::before,
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-owner::before,
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-ms::before,
-      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-kv::before { content: attr(data-label); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); flex-shrink: 0; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-kv::before,
+      .pp-pbs-table tfoot tr.pp-pbs-total-row td.pp-pbs-cell-kv::before { content: attr(data-label); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); flex-shrink: 0; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions { display: block; margin-top: .4rem; padding-top: .45rem !important; border-top: 1px solid var(--border-subtle, #e2e8f0); }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions [role="group"] { display: flex; flex-wrap: wrap; gap: .3rem; }
       html.dark .pp-pbs-table tr.pp-pbs-row, body.dark .pp-pbs-table tr.pp-pbs-row { background: #1e293b; background: color-mix(in srgb, var(--pbs-dept-color, transparent) 14%, #1e293b); border-top-color: #334155; border-right-color: #334155; border-bottom-color: #334155; border-left-color: var(--pbs-dept-color, #64748b); }
@@ -179,100 +205,98 @@
   const herPill = (h) => (h ? `<span class="pp-pbs-her pp-pbs-her-${esc(h)}">${esc(h)}</span>` : '');
   const ynPill = (v) => (v ? `<span class="pp-pbs-yn pp-pbs-yn-${esc(v)}">${esc(v)}</span>` : '\u2014');
 
-  const VIEW_COLUMNS = {
-    overview: [
-      { label: 'Code' }, { label: 'Deliverable / Subsystem' }, { label: 'Maturity' },
-      { label: 'Department' }, { label: 'Owner' }, { label: 'Milestone' }, { label: 'Actions', right: true },
-    ],
-    engineering: [
-      { label: 'Code' }, { label: 'Deliverable / Subsystem' }, { label: 'Status' },
-      { label: 'Mass (kg)', right: true }, { label: 'Power Cons. (W)', right: true }, { label: 'Power Diss. (W)', right: true },
-      { label: 'MTBF (h)', right: true }, { label: 'LRU' }, { label: 'Actions', right: true },
-    ],
-    procurement: [
-      { label: 'Code' }, { label: 'Deliverable / Subsystem' }, { label: 'Manufacturer' },
-      { label: 'Part Number' }, { label: 'Proc. Status' }, { label: 'Lead (wks)', right: true },
-      { label: 'Spares' }, { label: 'Alternative' }, { label: 'Actions', right: true },
-    ],
+  const OPTIONAL_COL_GROUPS = {
     docs: [
-      { label: 'Code' }, { label: 'Deliverable / Subsystem' }, { label: 'Description' },
-      { label: 'Mech. Drawing' }, { label: 'Elec. Drawing' }, { label: 'Reference Doc' }, { label: 'Actions', right: true },
+      { key: 'description', label: 'Description', cls: 'pp-pbs-desc-cell', has: it => Boolean(it.description) },
+      { key: 'mechDrawing', label: 'Mech. Dwg', cls: 'pp-pbs-mono', has: it => Boolean(it.mechDrawing) },
+      { key: 'elecDrawing', label: 'Elec. Dwg', cls: 'pp-pbs-mono', has: it => Boolean(it.elecDrawing) },
+      { key: 'refDoc', label: 'Ref. Doc', cls: '', has: it => Boolean(it.refDoc) },
+    ],
+    proc: [
+      { key: 'manufacturer', label: 'Manufacturer', cls: '', has: it => Boolean(it.manufacturer) },
+      { key: 'partNumber', label: 'Part No.', cls: 'pp-pbs-mono', has: it => Boolean(it.partNumber) },
+      { key: 'procurementStatus', label: 'Proc. Status', cls: '', has: it => Boolean(it.procurementStatus) },
+      { key: 'leadTime', label: 'Lead (wks)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.leadTime) },
+      { key: 'componentAlt', label: 'Alternative', cls: '', has: it => Boolean(it.componentAlt) },
+    ],
+    swp: [
+      { key: 'heritage', label: 'Status', cls: 'pp-pbs-center', center: true, has: it => Boolean(it.heritage) },
+      { key: 'mass', label: 'Mass (kg)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.mass) },
+      { key: 'powerConsumption', label: 'Pwr Cons (W)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.powerConsumption) },
+      { key: 'powerDissipation', label: 'Pwr Diss (W)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.powerDissipation) },
+      { key: 'mtbf', label: 'MTBF (h)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.mtbf) },
+      { key: 'lru', label: 'LRU', cls: 'pp-pbs-center', center: true, has: it => Boolean(it.lru) },
+      { key: 'spareAvailable', label: 'Spare Avail.', cls: 'pp-pbs-center', center: true, has: it => Boolean(it.spareAvailable) },
+      { key: 'spareToDeliver', label: 'Spare Deliv.', cls: 'pp-pbs-center', center: true, has: it => Boolean(it.spareToDeliver) },
     ],
   };
 
-  function renderDetailRow(item, depth, colSpan, deptColor, sub) {
-    const id = esc(item.id);
-    const kv = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
-    const docPairs = [];
-    if (item.acronym) docPairs.push(kv('Acronym', `<span class="pp-pbs-mono">${esc(item.acronym)}</span>`));
-    if (item.heritage) docPairs.push(kv('Existing / Update / New', herPill(item.heritage)));
-    if (item.description) docPairs.push(kv('Description', esc(item.description)));
-    if (item.mechDrawing) docPairs.push(kv('Mechanical Drawing', `<span class="pp-pbs-mono">${esc(item.mechDrawing)}</span>`));
-    if (item.elecDrawing) docPairs.push(kv('Electrical Drawing', `<span class="pp-pbs-mono">${esc(item.elecDrawing)}</span>`));
-    if (item.refDoc) docPairs.push(kv('Reference Document', esc(item.refDoc)));
+  function getPopulatedGroupFlags(doc) {
+    const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
+    const check = (g) => OPTIONAL_COL_GROUPS[g].some(col => items.some(it => col.has(it)));
+    return { docs: check('docs'), proc: check('proc'), swp: check('swp') };
+  }
 
-    const procPairs = [];
-    if (item.manufacturer) procPairs.push(kv('Manufacturer', esc(item.manufacturer)));
-    if (item.partNumber) procPairs.push(kv('Part Number', `<span class="pp-pbs-mono">${esc(item.partNumber)}</span>`));
-    if (item.procurementStatus) procPairs.push(kv('Proc. / Mfg. Status', `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(item.procurementStatus)}</span>`));
-    if (isNum(item.leadTime)) procPairs.push(kv('Lead Time', `${esc(fmtNum(item.leadTime))} wks`));
-    if (item.componentAlt) procPairs.push(kv('Component Alternative', esc(item.componentAlt)));
-
-    const engPairs = [];
-    const fmtMetric = (own, desc, unit) => {
-      if (isNum(own)) {
-        const extra = isNum(desc) ? ` <span class="pp-pbs-rollup">(+ ${esc(fmtNum(desc))} ${unit} sub-items)</span>` : '';
-        return `${esc(fmtNum(own))} ${unit}${extra}`;
-      }
-      return isNum(desc) ? `<span class="pp-pbs-rollup">&Sigma; ${esc(fmtNum(desc))} ${unit} (sub-items)</span>` : '';
-    };
-    const mStr = fmtMetric(item.mass, sub && sub.descMass, 'kg');
-    const pcStr = fmtMetric(item.powerConsumption, sub && sub.descPowerCons, 'W');
-    const pdStr = fmtMetric(item.powerDissipation, sub && sub.descPowerDiss, 'W');
-    if (mStr) engPairs.push(kv('Mass', mStr));
-    if (pcStr) engPairs.push(kv('Power Consumption', pcStr));
-    if (pdStr) engPairs.push(kv('Power Dissipation', pdStr));
-    if (isNum(item.mtbf)) engPairs.push(kv('MTBF', `${esc(fmtNum(item.mtbf))} h`));
-    if (item.lru) engPairs.push(kv('LRU', ynPill(item.lru)));
-    if (item.spareAvailable) engPairs.push(kv('SPARE Available', ynPill(item.spareAvailable)));
-    if (item.spareToDeliver) engPairs.push(kv('SPARE to be Delivered', ynPill(item.spareToDeliver)));
-
-    const groups = [];
-    if (docPairs.length) groups.push(`<div class="pp-pbs-detail-group"><h4>Identity &amp; Documentation</h4><dl class="pp-pbs-detail-list">${docPairs.join('')}</dl></div>`);
-    if (procPairs.length) groups.push(`<div class="pp-pbs-detail-group"><h4>Procurement &amp; Supply</h4><dl class="pp-pbs-detail-list">${procPairs.join('')}</dl></div>`);
-    if (engPairs.length) groups.push(`<div class="pp-pbs-detail-group"><h4>Engineering Budgets &amp; Spares</h4><dl class="pp-pbs-detail-list">${engPairs.join('')}</dl></div>`);
-    if (!groups.length) return '';
-
-    return `<tr class="pp-pbs-detail-row" data-pbs-detail-for="${id}" style="--pbs-depth:${depth};${deptColor ? `--pbs-dept-color:${deptColor};` : ''}">
-      <td colspan="${colSpan}"><div class="pp-pbs-detail-card">${groups.join('')}</div></td></tr>`;
+  /* Returns active optional column descriptors: populated columns within each enabled group (or full group if toggled while empty). */
+  function resolveVisibleOptionalCols(doc, colGroups) {
+    const g = colGroups || { docs: false, proc: false, swp: false };
+    const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
+    const out = [];
+    ['docs', 'proc', 'swp'].forEach(groupKey => {
+      if (!g[groupKey]) return;
+      const defs = OPTIONAL_COL_GROUPS[groupKey];
+      const populated = defs.filter(col => items.some(it => col.has(it)));
+      out.push(...(populated.length ? populated : defs));
+    });
+    return out;
   }
 
   function formatMetricCell(own, desc, unit) {
     if (isNum(own)) {
       const tip = isNum(desc) ? ` title="Own: ${esc(fmtNum(own))} ${unit} + Sub-items: ${esc(fmtNum(desc))} ${unit}"` : '';
-      return `<span${tip}>${esc(fmtNum(own))}</span>`;
+      return { html: `<span${tip}>${esc(fmtNum(own))}</span>`, empty: false };
     }
     if (isNum(desc)) {
-      return `<span class="pp-pbs-rollup" title="Auto-rolled up from sub-items">&Sigma; ${esc(fmtNum(desc))}</span>`;
+      return { html: `<span class="pp-pbs-rollup" title="Auto-rolled up from sub-items">&Sigma; ${esc(fmtNum(desc))}</span>`, empty: false };
     }
-    return '\u2014';
+    return { html: '\u2014', empty: true };
   }
 
-  function formatSparesChips(item) {
-    const parts = [];
-    if (item.spareAvailable) parts.push(`<span><span style="color:var(--text-muted,#64748b)">Avail:</span>${ynPill(item.spareAvailable)}</span>`);
-    if (item.spareToDeliver) parts.push(`<span><span style="color:var(--text-muted,#64748b)">Deliv:</span>${ynPill(item.spareToDeliver)}</span>`);
-    return parts.length ? `<span class="pp-pbs-spares-stack">${parts.join('')}</span>` : '\u2014';
+  function renderOptionalCell(col, item, sub) {
+    let html = '\u2014';
+    let empty = true;
+    switch (col.key) {
+      case 'description': if (item.description) { html = esc(item.description); empty = false; } break;
+      case 'mechDrawing': if (item.mechDrawing) { html = esc(item.mechDrawing); empty = false; } break;
+      case 'elecDrawing': if (item.elecDrawing) { html = esc(item.elecDrawing); empty = false; } break;
+      case 'refDoc': if (item.refDoc) { html = esc(item.refDoc); empty = false; } break;
+      case 'manufacturer': if (item.manufacturer) { html = esc(item.manufacturer); empty = false; } break;
+      case 'partNumber': if (item.partNumber) { html = esc(item.partNumber); empty = false; } break;
+      case 'procurementStatus': if (item.procurementStatus) { html = `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(item.procurementStatus)}</span>`; empty = false; } break;
+      case 'leadTime': if (isNum(item.leadTime)) { html = `${esc(fmtNum(item.leadTime))} wks`; empty = false; } break;
+      case 'componentAlt': if (item.componentAlt) { html = esc(item.componentAlt); empty = false; } break;
+      case 'heritage': if (item.heritage) { html = herPill(item.heritage); empty = false; } break;
+      case 'mass': ({ html, empty } = formatMetricCell(item.mass, sub && sub.descMass, 'kg')); break;
+      case 'powerConsumption': ({ html, empty } = formatMetricCell(item.powerConsumption, sub && sub.descPowerCons, 'W')); break;
+      case 'powerDissipation': ({ html, empty } = formatMetricCell(item.powerDissipation, sub && sub.descPowerDiss, 'W')); break;
+      case 'mtbf': if (isNum(item.mtbf)) { html = esc(fmtNum(item.mtbf)); empty = false; } break;
+      case 'lru': if (item.lru) { html = ynPill(item.lru); empty = false; } break;
+      case 'spareAvailable': if (item.spareAvailable) { html = ynPill(item.spareAvailable); empty = false; } break;
+      case 'spareToDeliver': if (item.spareToDeliver) { html = ynPill(item.spareToDeliver); empty = false; } break;
+      default: break;
+    }
+    const cls = `pp-pbs-cell-kv${col.cls ? ` ${col.cls}` : ''}${empty ? ' pp-pbs-opt-empty' : ''}`;
+    return `<td class="${cls}" data-label="${esc(col.label)}">${html}</td>`;
   }
 
-  /* ctx.rows: [{ item, depth, hasChildren, isContextOnly }]; ctx.summary; ctx.rollups; ctx.viewMode; ctx.expandedDetailIds */
-  function renderRows(ctx) {
-    const viewMode = VIEW_COLUMNS[ctx.viewMode] ? ctx.viewMode : 'overview';
-    const colSpan = VIEW_COLUMNS[viewMode].length;
+  /* ctx.rows: [{ item, depth, hasChildren, isContextOnly }]; ctx.summary; ctx.rollups; ctx.colGroups */
+  function renderRows(ctx, optColsArg) {
+    const optCols = optColsArg || resolveVisibleOptionalCols(ctx.doc, ctx.colGroups);
+    const colSpan = 7 + optCols.length;
     const deptMap = new Map((ctx.db.departments || []).map(d => [d.id, d]));
     const msMap = new Map((ctx.db.milestones || []).map(m => [m.id, m]));
     const rollupsById = (ctx.rollups && ctx.rollups.byId) ? ctx.rollups.byId : new Map();
-    const expandedDetails = ctx.expandedDetailIds || new Set();
+    const hasHeritageCol = optCols.some(c => c.key === 'heritage');
 
     if (!ctx.rows.length) {
       const msg = ctx.doc.items.length ? 'No PBS items match the active filters.' : 'No PBS deliverables yet. Use <strong>+ Add Root Item</strong>, import a CSV, or clone another project.';
@@ -289,24 +313,24 @@
       const id = esc(item.id);
       const deptColor = dept && dept.color ? esc(dept.color) : '';
       const sub = rollupsById.get(item.id) || null;
-      const counts = countSpecs(item);
-      const hasRollupOnly = counts.total === 0 && sub && (isNum(sub.descMass) || isNum(sub.descPowerCons) || isNum(sub.descPowerDiss));
-      const detailOpen = expandedDetails.has(item.id) && (counts.total > 0 || hasRollupOnly);
 
       const toggle = hasChildren
         ? `<button type="button" class="pp-pbs-toggle" data-pbs-toggle="${id}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${nm}">${collapsed ? '\u25b6' : '\u25bc'}</button>`
-        : '<span style="display:inline-block;width:1.5rem" aria-hidden="true"></span>';
-
-      const specBtn = counts.total > 0
-        ? `<button type="button" class="pp-pbs-spec-btn${detailOpen ? ' is-open' : ''}" data-pbs-details="${id}" aria-expanded="${detailOpen ? 'true' : 'false'}" aria-label="${detailOpen ? 'Hide' : 'Show'} optional specifications for ${nm}">${detailOpen ? '\u25be' : '\u25b8'} Specs (${counts.total})</button>`
-        : '';
+        : '<span class="pp-pbs-toggle-spacer" aria-hidden="true"></span>';
 
       const acrBadge = item.acronym ? `<span class="pp-pbs-acr">${esc(item.acronym)}</span>` : '';
-      const inlineHer = (viewMode === 'overview' && item.heritage) ? herPill(item.heritage) : '';
-      const overviewSubtext = viewMode === 'overview'
-        ? `${item.description ? `<div class="pp-pbs-subtext">${esc(item.description)}</div>` : ''}${item.notes ? `<div class="pp-pbs-subtext">${item.description ? '<strong>Note:</strong> ' : ''}${esc(item.notes)}</div>` : ''}`
-        : '';
-      const nameCell = `<td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 18}px">${toggle}<span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${acrBadge}${inlineHer}${viewMode === 'overview' && bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}${specBtn}${overviewSubtext}</td>`;
+      const inlineHer = (!hasHeritageCol && item.heritage) ? herPill(item.heritage) : '';
+      const subNotes = item.notes ? `<div class="pp-pbs-subtext">${esc(item.notes)}</div>` : '';
+      const nameCell = `<td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 16}px"><div class="pp-pbs-name-flex">${toggle}<div class="pp-pbs-name-main"><div class="pp-pbs-name-line"><span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${acrBadge}${inlineHer}${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}</div>${subNotes}</div></div></td>`;
+
+      const msCell = ms
+        ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}`
+        : '\u2014';
+      const deptCell = dept
+        ? `<span>${deptColor ? `<span class="pp-pbs-dept-dot" style="background:${deptColor}" aria-hidden="true"></span>` : ''}${esc(`[${dept.code}] ${dept.name}`)}</span>`
+        : '\u2014';
+
+      const optCells = optCols.map(col => renderOptionalCell(col, item, sub)).join('');
 
       const btn = (act, label, text) => `<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-move="${act}" data-pbs-id="${id}" aria-label="${label} ${nm}">${text}</button>`;
       const actionsCell = `<td class="pp-pbs-cell-actions" data-label="Actions" style="text-align:right;white-space:nowrap"><span role="group" aria-label="Actions for ${nm}">${btn('up', 'Move up', '\u2191')} ${btn('down', 'Move down', '\u2193')} ${btn('outdent', 'Outdent', '\u2190')} ${btn('indent', 'Indent', '\u2192')}
@@ -314,46 +338,49 @@
         <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-edit="${id}" aria-label="Edit ${nm}">Edit</button>
         <button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-danger" data-pbs-del="${id}" aria-label="Delete ${nm}">\u00d7</button></span></td>`;
 
-      let middleCells = '';
-      if (viewMode === 'overview') {
-        const msCell = ms
-          ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}`
-          : '\u2014';
-        const deptCell = dept
-          ? `<span>${deptColor ? `<span class="pp-pbs-dept-dot" style="background:${deptColor}" aria-hidden="true"></span>` : ''}${esc(`[${dept.code}] ${dept.name}`)}</span>`
-          : '\u2014';
-        middleCells = `<td class="pp-pbs-cell-mat" data-label="Maturity">${matPill(item.maturity)}</td>
-          <td class="pp-pbs-cell-dept" data-label="Department" style="color:${deptColor || 'inherit'};font-weight:600;white-space:nowrap">${deptCell}</td>
-          <td class="pp-pbs-cell-owner" data-label="Owner" style="white-space:nowrap">${esc(item.owner || '\u2014')}</td>
-          <td class="pp-pbs-cell-ms" data-label="Milestone" style="white-space:nowrap">${msCell}</td>`;
-      } else if (viewMode === 'engineering') {
-        middleCells = `<td class="pp-pbs-cell-kv" data-label="Status" style="white-space:nowrap">${item.heritage ? herPill(item.heritage) : '\u2014'}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-num" data-label="Mass (kg)">${formatMetricCell(item.mass, sub && sub.descMass, 'kg')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-num" data-label="Power Cons. (W)">${formatMetricCell(item.powerConsumption, sub && sub.descPowerCons, 'W')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-num" data-label="Power Diss. (W)">${formatMetricCell(item.powerDissipation, sub && sub.descPowerDiss, 'W')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-num" data-label="MTBF (h)">${isNum(item.mtbf) ? esc(fmtNum(item.mtbf)) : '\u2014'}</td>
-          <td class="pp-pbs-cell-kv" data-label="LRU" style="white-space:nowrap">${ynPill(item.lru)}</td>`;
-      } else if (viewMode === 'procurement') {
-        middleCells = `<td class="pp-pbs-cell-kv" data-label="Manufacturer">${esc(item.manufacturer || '\u2014')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-mono" data-label="Part Number" style="white-space:nowrap">${esc(item.partNumber || '\u2014')}</td>
-          <td class="pp-pbs-cell-kv" data-label="Proc. Status" style="white-space:nowrap">${item.procurementStatus ? `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(item.procurementStatus)}</span>` : '\u2014'}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-num" data-label="Lead Time (wks)">${isNum(item.leadTime) ? `${esc(fmtNum(item.leadTime))} wks` : '\u2014'}</td>
-          <td class="pp-pbs-cell-kv" data-label="Spares" style="white-space:nowrap">${formatSparesChips(item)}</td>
-          <td class="pp-pbs-cell-kv" data-label="Alternative">${esc(item.componentAlt || '\u2014')}</td>`;
-      } else if (viewMode === 'docs') {
-        middleCells = `<td class="pp-pbs-cell-kv" data-label="Description" style="max-width:260px">${esc(item.description || '\u2014')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-mono" data-label="Mech. Drawing">${esc(item.mechDrawing || '\u2014')}</td>
-          <td class="pp-pbs-cell-kv pp-pbs-mono" data-label="Elec. Drawing">${esc(item.elecDrawing || '\u2014')}</td>
-          <td class="pp-pbs-cell-kv" data-label="Reference Doc">${esc(item.refDoc || '\u2014')}</td>`;
-      }
-
-      const mainRow = `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="--pbs-depth:${depth};${deptColor ? `--pbs-dept-color:${deptColor};` : ''}border-left:4px solid ${deptColor || 'transparent'}">
+      return `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="--pbs-depth:${depth};${deptColor ? `--pbs-dept-color:${deptColor};` : ''}border-left:4px solid ${deptColor || 'transparent'}">
         <td class="pp-pbs-cell-code" data-label="Code" style="font-family:ui-monospace,monospace;font-weight:700;white-space:nowrap">${esc(item.code)}</td>
-        ${nameCell}${middleCells}${actionsCell}
+        ${nameCell}
+        <td class="pp-pbs-cell-mat" data-label="Maturity">${matPill(item.maturity)}</td>
+        <td class="pp-pbs-cell-dept" data-label="Department" style="color:${deptColor || 'inherit'};font-weight:600;white-space:nowrap">${deptCell}</td>
+        <td class="pp-pbs-cell-owner" data-label="Owner" style="white-space:nowrap">${esc(item.owner || '\u2014')}</td>
+        <td class="pp-pbs-cell-ms" data-label="Milestone" style="white-space:nowrap">${msCell}</td>
+        ${optCells}
+        ${actionsCell}
       </tr>`;
-
-      return detailOpen ? mainRow + renderDetailRow(item, depth, colSpan, deptColor, sub) : mainRow;
     }).join('');
+  }
+
+  function renderTotalFoot(ctx, optCols) {
+    const r = ctx.rollups;
+    if (!r || !ctx.rows.length || !optCols.length) return '';
+    const hasSummaryCol = optCols.some(c =>
+      (c.key === 'mass' && r.totalMass !== null)
+      || (c.key === 'powerConsumption' && r.totalPowerConsumption !== null)
+      || (c.key === 'powerDissipation' && r.totalPowerDissipation !== null)
+      || (c.key === 'lru' && r.lruCount > 0)
+      || (c.key === 'spareAvailable' && r.spareAvailCount > 0)
+      || (c.key === 'spareToDeliver' && r.spareDelivCount > 0)
+    );
+    if (!hasSummaryCol) return '';
+
+    const optTds = optCols.map(col => {
+      if (col.key === 'mass' && r.totalMass !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Mass (kg)">${esc(fmtNum(r.totalMass))}</td>`;
+      if (col.key === 'powerConsumption' && r.totalPowerConsumption !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Power Cons. (W)">${esc(fmtNum(r.totalPowerConsumption))}</td>`;
+      if (col.key === 'powerDissipation' && r.totalPowerDissipation !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Power Diss. (W)">${esc(fmtNum(r.totalPowerDissipation))}</td>`;
+      if (col.key === 'lru' && r.lruCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Total LRU">${r.lruCount} Yes</td>`;
+      if (col.key === 'spareAvailable' && r.spareAvailCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Spares Avail.">${r.spareAvailCount} Yes</td>`;
+      if (col.key === 'spareToDeliver' && r.spareDelivCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Spares Deliv.">${r.spareDelivCount} Yes</td>`;
+      return '<td class="pp-pbs-opt-empty"></td>';
+    }).join('');
+
+    return `<tfoot><tr class="pp-pbs-total-row">
+      <td class="pp-pbs-foot-code" style="font-family:ui-monospace,monospace">TOTAL</td>
+      <td class="pp-pbs-foot-name">${ctx.doc.items.length} item${ctx.doc.items.length === 1 ? '' : 's'}</td>
+      <td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td><td class="pp-pbs-opt-empty"></td>
+      ${optTds}
+      <td class="pp-pbs-foot-actions pp-pbs-opt-empty"></td>
+    </tr></tfoot>`;
   }
 
   function renderEditForm(ctx) {
@@ -492,21 +519,30 @@
       <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${s.qualifiedPct}" aria-label="Qualified or delivered share" style="width:90px;height:8px;border-radius:9999px;background:#e2e8f0;overflow:hidden"><div style="width:${s.qualifiedPct}%;height:100%;background:#059669"></div></div></div></div>`;
   }
 
-  function renderViewBar(ctx) {
-    const cur = VIEW_COLUMNS[ctx.viewMode] ? ctx.viewMode : 'overview';
-    const r = ctx.rollups || { docsItemsCount: 0, procItemsCount: 0, engItemsCount: 0, anySpecsCount: 0 };
-    const expanded = ctx.expandedDetailIds || new Set();
-    const tabs = [
-      { id: 'overview', label: 'Overview', count: 0 },
-      { id: 'engineering', label: 'Engineering', count: r.engItemsCount },
-      { id: 'procurement', label: 'Procurement', count: r.procItemsCount },
-      { id: 'docs', label: 'Docs', count: r.docsItemsCount },
-    ];
-    const tabHtml = tabs.map(t => `<button type="button" role="tab" aria-selected="${cur === t.id ? 'true' : 'false'}" class="pp-pbs-tab${cur === t.id ? ' is-active' : ''}" data-pbs-view="${t.id}">${t.label}${t.count > 0 ? `<span class="pp-pbs-tab-cnt">${t.count}</span>` : ''}</button>`).join('');
-    const specsBtn = r.anySpecsCount > 0
-      ? `<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" id="ppPbsToggleAllSpecsBtn">${expanded.size > 0 ? 'Hide All Specs' : `Show All Specs (${r.anySpecsCount})`}</button>`
+  function renderColBar(ctx, optCols) {
+    const g = ctx.colGroups || { docs: false, proc: false, swp: false };
+    const r = ctx.rollups || { docsItemsCount: 0, procItemsCount: 0, engItemsCount: 0 };
+    const pop = getPopulatedGroupFlags(ctx.doc);
+    const anyOn = Boolean(g.docs || g.proc || g.swp);
+    const anyPop = Boolean(pop.docs || pop.proc || pop.swp);
+    const allPopOn = anyPop && (!pop.docs || g.docs) && (!pop.proc || g.proc) && (!pop.swp || g.swp);
+
+    const chip = (key, label, count) => {
+      const on = Boolean(g[key]);
+      return `<button type="button" class="pp-pbs-chip${on ? ' is-active' : ''}" data-pbs-col-group="${key}" aria-pressed="${on ? 'true' : 'false'}">${on ? '\u2713 ' : '+ '}${label}${count > 0 ? `<span class="pp-pbs-chip-cnt">${count}</span>` : ''}</button>`;
+    };
+    const hint = optCols.length
+      ? `<span class="pp-pbs-colhint">${optCols.length} spec col${optCols.length === 1 ? '' : 's'} inline &middot; Code, Deliverable &amp; Actions pinned</span>`
       : '';
-    return `<div class="pp-pbs-viewbar"><div class="pp-pbs-tabs" role="tablist" aria-label="PBS column view">${tabHtml}</div>${specsBtn}</div>`;
+
+    return `<div class="pp-pbs-colbar" role="region" aria-label="Optional PBS columns"><div class="pp-pbs-colchips">
+      <span class="pp-pbs-colbar-label">Columns:</span>
+      <button type="button" id="ppPbsColsMainBtn" class="pp-pbs-chip${!anyOn ? ' is-active' : ''}" aria-pressed="${!anyOn ? 'true' : 'false'}">Main Only</button>
+      ${chip('docs', 'Docs & Drawings', r.docsItemsCount)}
+      ${chip('proc', 'Procurement', r.procItemsCount)}
+      ${chip('swp', 'SWaP & Spares', r.engItemsCount)}
+      ${anyPop && !allPopOn ? '<button type="button" id="ppPbsColsAllBtn" class="pp-pbs-btn pp-pbs-btn-xs">Show All Used</button>' : ''}
+    </div>${hint}</div>`;
   }
 
   function renderFilters(ctx) {
@@ -527,31 +563,44 @@
     return `<div class="pp-pbs-notice" role="status"><strong>Import notes</strong><ul style="margin:.3rem 0 0 1rem;list-style:disc">${w.slice(0, 8).map(x => `<li>${esc(x)}</li>`).join('')}</ul>${w.length > 8 ? `<div>\u2026and ${w.length - 8} more.</div>` : ''}</div>`;
   }
 
-  /* ctx: { doc, db, project, summary, rollups, rows, collapsedIds, expandedDetailIds, viewMode, filter, edit, conflict, notices,
+  /* ctx: { doc, db, project, summary, rollups, rows, collapsedIds, colGroups, filter, edit, conflict, notices,
    *        owners, manufacturers, procStatuses, projectMilestones, cloneSources:[{id,code,name,count}],
    *        canDirSync, dirName, hasRemembered, status:{text,tone} } */
   function buildDialogHtml(ctx) {
     const p = ctx.project;
     const n = ctx.summary.total;
-    const viewMode = VIEW_COLUMNS[ctx.viewMode] ? ctx.viewMode : 'overview';
-    const cols = VIEW_COLUMNS[viewMode];
+    const optCols = resolveVisibleOptionalCols(ctx.doc, ctx.colGroups);
     const projStyle = p && p.color ? ` style="--pbs-proj-color:${esc(p.color)}"` : '';
-    const theadCells = cols.map(c => `<th scope="col"${c.right ? ' style="text-align:right"' : ''}>${esc(c.label)}</th>`).join('');
+    const optHeads = optCols.map(c => `<th scope="col" class="pp-pbs-th-opt"${c.right ? ' style="text-align:right"' : (c.center ? ' style="text-align:center"' : '')}>${esc(c.label)}</th>`).join('');
+    const stickyCls = optCols.length ? ' pp-pbs-sticky' : '';
+
     return `<div class="pp-pbs-wrap"${projStyle}>
       <header class="pp-pbs-head"><div>
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
         <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: focus a row, then Alt+Arrows to move or indent, Enter to edit</span></div></div>
         <div style="display:flex;align-items:center;gap:.45rem"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite">${esc(ctx.status.text)}</span>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
-      ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderViewBar(ctx)}
+      ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}
       <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderEditForm(ctx)}
-        <div style="overflow-x:auto"><table class="pp-pbs-table${cols.length > 7 ? ' pp-pbs-dense' : ''}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
-          <thead><tr>${theadCells}</tr></thead>
-          <tbody>${renderRows(ctx)}</tbody></table></div></div></div>`;
+        <div class="pp-pbs-table-wrap"><table class="pp-pbs-table${stickyCls}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
+          <thead><tr>
+            <th scope="col" class="pp-pbs-th-code">Code</th>
+            <th scope="col" class="pp-pbs-th-name">Deliverable / Subsystem</th>
+            <th scope="col">Maturity</th>
+            <th scope="col">Department</th>
+            <th scope="col">Owner</th>
+            <th scope="col">Milestone</th>
+            ${optHeads}
+            <th scope="col" class="pp-pbs-th-actions" style="text-align:right">Actions</th>
+          </tr></thead>
+          <tbody>${renderRows(ctx, optCols)}</tbody>
+          ${renderTotalFoot(ctx, optCols)}
+        </table></div></div></div>`;
   }
 
   P.view = {
-    esc, CSS, VIEW_COLUMNS, injectStyles, renderRows, renderEditForm, renderConflictPanel,
-    renderToolbar, renderSummary, renderViewBar, renderFilters, renderNotice, buildDialogHtml,
+    esc, CSS, OPTIONAL_COL_GROUPS, getPopulatedGroupFlags, resolveVisibleOptionalCols,
+    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderConflictPanel,
+    renderToolbar, renderSummary, renderColBar, renderFilters, renderNotice, buildDialogHtml,
   };
 })();

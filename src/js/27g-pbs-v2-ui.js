@@ -4,7 +4,7 @@
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
   const ui = {
     dialog: null, wired: false, filter: { search: '', deptId: '', maturity: '', milestoneId: '' },
-    viewMode: 'overview', collapsedIds: new Set(), expandedDetailIds: new Set(),
+    colGroups: { docs: false, proc: false, swp: false }, collapsedIds: new Set(),
     edit: null, editSeq: 0, draft: null, notices: [], badgeRefresh: null,
   };
   const C = () => P.core;
@@ -69,7 +69,7 @@
       summary: T().computeMaturitySummary(d, db.milestones || [], todayIso()),
       rollups: T().computeSwpRollups(d),
       rows: T().getFilteredTreeRows(d, ui.filter, ui.collapsedIds),
-      collapsedIds: ui.collapsedIds, expandedDetailIds: ui.expandedDetailIds, viewMode: ui.viewMode,
+      collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
       filter: ui.filter, edit,
       conflict: S.conflictRemoteText ? { diff: S.conflictRemoteDoc ? D().computeConflictDiff(d, S.conflictRemoteDoc) : null } : null,
       notices: ui.notices,
@@ -90,7 +90,7 @@
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-details', 'data-pbs-view', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -129,14 +129,28 @@
     if (draft && ui.edit && draft.seq === ui.edit.seq) ui.edit.openSections = draft.sections;
     const body = q('.pp-pbs-body');
     const scrollTop = body ? body.scrollTop : 0;
+    const tblWrap = q('.pp-pbs-table-wrap');
+    const scrollLeft = tblWrap ? tblWrap.scrollLeft : 0;
     ui.dialog.innerHTML = V().buildDialogHtml(buildCtx());
     const newBody = q('.pp-pbs-body');
     if (newBody) newBody.scrollTop = scrollTop;
+    const newTblWrap = q('.pp-pbs-table-wrap');
+    if (newTblWrap) newTblWrap.scrollLeft = scrollLeft;
     if (draft && ui.edit && draft.seq === ui.edit.seq && q('#ppPbsItemForm')) {
       Object.keys(draft.values).forEach(id => { const el = q(`#${id}`); if (el) el.value = draft.values[id]; });
     }
-    if (focusSel && q(focusSel)) q(focusSel).focus({ preventScroll: false });
-    else restoreFocus(focus);
+    if (focusSel) {
+      const target = q(focusSel);
+      if (target) {
+        if (target.matches('[data-pbs-row]')) {
+          target.focus({ preventScroll: true });
+          if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          if (newTblWrap) newTblWrap.scrollLeft = scrollLeft;
+        } else {
+          target.focus({ preventScroll: false });
+        }
+      }
+    } else restoreFocus(focus);
   }
 
   function updateStatusPill(text, tone) {
@@ -244,6 +258,7 @@
       summary = `Added PBS item ${code} ${name}`;
     }
     ui.edit = null;
+    syncPopulatedColGroups(false);
     commit(summary, attr('data-pbs-row', id));
   }
 
@@ -256,7 +271,7 @@
     const n = ids.size - 1;
     if (!askOk(`Delete "${item.name}"${n ? ` and its ${n} sub-item${n === 1 ? '' : 's'}` : ''}?`)) return;
     d.items = d.items.filter(i => !ids.has(i.id));
-    ids.forEach(x => { ui.collapsedIds.delete(x); ui.expandedDetailIds.delete(x); });
+    ids.forEach(x => ui.collapsedIds.delete(x));
     if (ui.edit && ids.has(ui.edit.itemId)) ui.edit = null;
     commit(`Deleted PBS item ${item.code} ${item.name}${n ? ` (+${n} sub-items)` : ''}`, '#ppPbsAddRootBtn');
   }
@@ -281,23 +296,29 @@
     if (collapse) doc().items.forEach(i => { if (T().getChildren(doc(), i.id).length) ui.collapsedIds.add(i.id); });
     render();
   }
-  function toggleDetails(id) {
-    if (ui.expandedDetailIds.has(id)) ui.expandedDetailIds.delete(id); else ui.expandedDetailIds.add(id);
-    render();
-  }
-  function toggleAllSpecs() {
-    if (ui.expandedDetailIds.size > 0) {
-      ui.expandedDetailIds.clear();
+
+  function syncPopulatedColGroups(reset) {
+    const pop = V().getPopulatedGroupFlags ? V().getPopulatedGroupFlags(doc()) : { docs: false, proc: false, swp: false };
+    if (reset) {
+      ui.colGroups = { docs: pop.docs, proc: pop.proc, swp: pop.swp };
     } else {
-      (doc().items || []).forEach(it => { if (D().countOptionalFields(it).total > 0) ui.expandedDetailIds.add(it.id); });
+      if (pop.docs) ui.colGroups.docs = true;
+      if (pop.proc) ui.colGroups.proc = true;
+      if (pop.swp) ui.colGroups.swp = true;
     }
+  }
+  function toggleColGroup(groupKey) {
+    if (!['docs', 'proc', 'swp'].includes(groupKey)) return;
+    ui.colGroups[groupKey] = !ui.colGroups[groupKey];
     render();
   }
-  function setViewMode(mode) {
-    if (V().VIEW_COLUMNS && V().VIEW_COLUMNS[mode]) {
-      ui.viewMode = mode;
-      render();
-    }
+  function setMainOnlyCols() {
+    ui.colGroups = { docs: false, proc: false, swp: false };
+    render();
+  }
+  function showAllUsedCols() {
+    syncPopulatedColGroups(true);
+    render();
   }
 
   /* ---------- Files, exports, clone ---------- */
@@ -322,7 +343,8 @@
     if (d.items.length && !askOk(`Replace the ${d.items.length} existing items with ${loaded.items.length} items from "${file.name}"?`)) return;
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.expandedDetailIds.clear(); ui.edit = null;
+    ui.collapsedIds.clear(); ui.edit = null;
+    syncPopulatedColGroups(true);
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
 
@@ -339,6 +361,7 @@
     if (d.items.length && !askOk(`Append ${items.length} imported items to the ${d.items.length} existing items?`)) return;
     d.items.push(...items);
     ui.notices = [`Imported ${items.length} item${items.length === 1 ? '' : 's'} from ${file.name}.`, ...warnings];
+    syncPopulatedColGroups(false);
     commit(`Imported ${items.length} items from CSV`);
   }
 
@@ -380,6 +403,7 @@
     const label = sp ? `[${sp.code || sp.id}] ${sp.name}` : srcId;
     if (d.items.length && !askOk(`Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links, procurement status and spare availability are not copied.`)) { render(); return; }
     d.items.push(...items);
+    syncPopulatedColGroups(false);
     commit(`Cloned ${items.length} items from ${label}`);
   }
 
@@ -393,11 +417,13 @@
     S.activeFileModified = remoteModified;
     await C().writeToFolder(false);
     C().logChange(`Merged ${added} remote item${added === 1 ? '' : 's'} after sync conflict (local wins on edits to the same item)`);
+    syncPopulatedColGroups(false);
     render();
   }
   async function conflictLoad() {
     if (!askOk('Discard your unsaved local changes and load the shared folder version?')) return;
     await C().syncFromFolder({});
+    syncPopulatedColGroups(true);
     render();
   }
   async function conflictOverwrite() {
@@ -413,7 +439,8 @@
     ppPbsAddRootBtn: () => openForm(null, null),
     ppPbsExpandAllBtn: () => setAllCollapsed(false),
     ppPbsCollapseAllBtn: () => setAllCollapsed(true),
-    ppPbsToggleAllSpecsBtn: () => toggleAllSpecs(),
+    ppPbsColsMainBtn: () => setMainOnlyCols(),
+    ppPbsColsAllBtn: () => showAllUsedCols(),
     ppPbsLinkFolderBtn: safe(async () => { await C().linkFolder(); render(); }),
     ppPbsRelinkBtn: safe(async () => { await C().linkFolder(); render(); }),
     ppPbsReconnectBtn: safe(async () => { await C().reconnectFolder(); render(); }),
@@ -434,8 +461,7 @@
     const t = e.target.closest ? e.target.closest('button') : null;
     if (!t || !ui.dialog.contains(t)) return;
     const d = t.dataset;
-    if (d.pbsView) return setViewMode(d.pbsView);
-    if (d.pbsDetails) return toggleDetails(d.pbsDetails);
+    if (d.pbsColGroup) return toggleColGroup(d.pbsColGroup);
     if (d.pbsToggle) return toggleItem(d.pbsToggle);
     if (d.pbsMove) return moveItem(d.pbsId, d.pbsMove);
     if (d.pbsAddChild) return openForm(null, d.pbsAddChild);
@@ -521,7 +547,8 @@
     ensureDialog();
     V().injectStyles();
     ui.filter = { search: '', deptId: '', maturity: '', milestoneId: '' };
-    ui.viewMode = 'overview'; ui.collapsedIds = new Set(); ui.expandedDetailIds = new Set(); ui.edit = null; ui.notices = [];
+    ui.collapsedIds = new Set(); ui.edit = null; ui.notices = [];
+    syncPopulatedColGroups(true);
     const hooks = core.state.hooks;
     hooks.rerender = () => render();
     hooks.onStatus = updateStatusPill;
@@ -530,6 +557,7 @@
     if (!ui.dialog.open) ui.dialog.showModal();
     render();
     await core.initFolder();
+    syncPopulatedColGroups(true);
     render();
   }
 

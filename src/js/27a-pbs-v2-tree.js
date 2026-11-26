@@ -206,8 +206,8 @@
       if (it.spareToDeliver === 'Yes') spareDelivCount++;
 
       const hasDocs = Boolean(it.description || it.mechDrawing || it.elecDrawing || it.refDoc);
-      const hasProc = Boolean(it.manufacturer || it.partNumber || it.procurementStatus || isNum(it.leadTime) || it.componentAlt || it.spareAvailable || it.spareToDeliver);
-      const hasEng = Boolean(it.heritage || isNum(it.mass) || isNum(it.powerConsumption) || isNum(it.powerDissipation) || isNum(it.mtbf) || it.lru);
+      const hasProc = Boolean(it.manufacturer || it.partNumber || it.procurementStatus || isNum(it.leadTime) || it.componentAlt);
+      const hasEng = Boolean(it.heritage || isNum(it.mass) || isNum(it.powerConsumption) || isNum(it.powerDissipation) || isNum(it.mtbf) || it.lru || it.spareAvailable || it.spareToDeliver);
       if (hasDocs) docsItemsCount++;
       if (hasProc) procItemsCount++;
       if (hasEng) engItemsCount++;
