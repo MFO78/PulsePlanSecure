@@ -323,11 +323,14 @@
     if (!lockEl) return;
 
     const reason = ppLockedState?.reason || 'manual';
-    const hasUnlockTarget = Boolean(
-      (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) ||
-      ppLockedState?.envelope
-    );
-    const fileLabel = ppLockedState?.fileName || (typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name) || '';
+    const activeHandle = (typeof linkedFileHandle !== 'undefined' && linkedFileHandle)
+      || (typeof rememberedFileHandle !== 'undefined' && rememberedFileHandle)
+      || null;
+    const hasUnlockTarget = Boolean(activeHandle || ppLockedState?.envelope);
+    const rawFileName = ppLockedState?.fileName || activeHandle?.name || '';
+    const fileLabel = rawFileName && typeof getFormattedLinkedFilePath === 'function'
+      ? (getFormattedLinkedFilePath(rawFileName) || rawFileName)
+      : rawFileName;
     const title = reason === 'inactivity'
       ? 'Session Locked for Security'
       : (reason === 'revoked' ? 'Access Revoked — Signed Out' : 'You Are Signed Out');
@@ -355,10 +358,10 @@
         <p class="text-xs leading-relaxed" style="color:var(--text-muted,#64748b)">${esc(subtitle)}</p>
 
         ${fileLabel ? `
-          <div class="px-3 py-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
+          <div class="px-3 py-2 rounded-xl border text-[11px] space-y-0.5"
             style="border-color:var(--border-subtle,#e2e8f0);background:var(--surface-subtle,#f8fafc)">
-            <span style="color:var(--text-muted,#64748b)">Locked workspace:</span>
-            <span class="font-bold truncate" style="color:var(--text-primary,#0f172a)">${esc(fileLabel)}</span>
+            <div style="color:var(--text-muted,#64748b)">Remembered database location:</div>
+            <div class="font-bold truncate font-mono text-[10.5px]" title="${esc(fileLabel)}" style="color:var(--text-primary,#0f172a)">${esc(fileLabel)}</div>
           </div>` : ''}
 
         <div class="space-y-2.5 pt-1">
@@ -412,7 +415,9 @@
     isSigningOut = true;
 
     try {
-      const linkedName = (typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name) ? linkedFileHandle.name : '';
+      const linkedName = (typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name)
+        ? linkedFileHandle.name
+        : ((typeof rememberedFileHandle !== 'undefined' && rememberedFileHandle?.name) ? rememberedFileHandle.name : '');
       const hadLinkedFile = Boolean(typeof linkedFileHandle !== 'undefined' && linkedFileHandle);
 
       // Flush pending linked-file auto-save before wiping key from memory
@@ -437,7 +442,7 @@
         } catch (_e) {}
       }
 
-      // Lock & strip Finance Vault
+      // Lock & strip Finance Vault (while keeping remembered Finance handle in IndexedDB)
       if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
         window.ppLockFinanceVaultSilently(true);
       }
@@ -447,7 +452,7 @@
       if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
       if (typeof stopFilePolling === 'function') stopFilePolling();
 
-      // Scrub ALL in-memory DBs and localStorage plaintext caches
+      // Scrub ALL in-memory DBs and localStorage plaintext caches (browser still remembers file handles in IndexedDB!)
       if (typeof liveDB !== 'undefined' && typeof createEmptyDB === 'function') {
         liveDB = createEmptyDB();
       }
@@ -503,16 +508,30 @@
     let fromLinkedDisk = false;
     let diskLastModified = 0;
 
-    if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) {
+    let diskHandle = (typeof linkedFileHandle !== 'undefined' && linkedFileHandle)
+      || (typeof rememberedFileHandle !== 'undefined' && rememberedFileHandle)
+      || null;
+
+    if (diskHandle) {
       try {
-        const file = await linkedFileHandle.getFile();
-        diskLastModified = file.lastModified || 0;
-        const raw = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(file) : await file.text();
-        const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
-        if (parsed && parsed.format === 'pulseplan-encrypted-v1') {
-          envelope = parsed;
-          sourceFileName = linkedFileHandle.name || sourceFileName;
-          fromLinkedDisk = true;
+        if (typeof diskHandle.queryPermission === 'function') {
+          let perm = await diskHandle.queryPermission({ mode: 'readwrite' });
+          if (perm !== 'granted' && typeof diskHandle.requestPermission === 'function') {
+            perm = await diskHandle.requestPermission({ mode: 'readwrite' });
+          }
+          if (perm !== 'granted') diskHandle = null;
+        }
+        if (diskHandle) {
+          const file = await diskHandle.getFile();
+          diskLastModified = file.lastModified || 0;
+          const raw = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(file) : await file.text();
+          const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
+          if (parsed && parsed.format === 'pulseplan-encrypted-v1') {
+            envelope = parsed;
+            sourceFileName = diskHandle.name || sourceFileName;
+            fromLinkedDisk = true;
+            if (typeof linkedFileHandle !== 'undefined') linkedFileHandle = diskHandle;
+          }
         }
       } catch (_e) {
         // Fall back to in-memory locked ciphertext envelope
@@ -555,6 +574,11 @@
     ppApplyAuthenticatedSession(res.authRole, res.userRecord, envelope.auth?.adminName);
     if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
     if (typeof renderAll === 'function') renderAll();
+
+    // Auto-open the linked Finance Vault if stored path/handle is remembered and user has Finance access
+    if (typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+      window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: false }).catch(() => {});
+    }
 
     const who = res.authRole === 'admin'
       ? (normalized.accessControl?.adminName || 'Administrator')
@@ -1007,6 +1031,9 @@
       onAuthenticate: async (accountId, password) => {
         const res = await authenticateInMemoryAccount(accountId, password);
         if (typeof renderAll === 'function') renderAll();
+        if (typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+          window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: true }).catch(() => {});
+        }
         if (res.authRole === 'admin') {
           toast(`Signed in as ${ac.adminName || 'Administrator'} (Main Administrator)`, 'success');
         } else {
@@ -2119,6 +2146,14 @@
 
     const demoToggleBtn = document.getElementById('demoToggleBtn');
     if (demoToggleBtn) demoToggleBtn.classList.toggle('hidden', isStd);
+
+    const encChip = document.getElementById('ppSyncEncChip');
+    if (encChip) {
+      const encActive = getMasterKeyActive();
+      encChip.textContent = encActive ? 'ON' : 'OFF';
+      encChip.className = encActive ? 'text-[10px] font-bold text-emerald-600' : 'text-[10px] font-bold text-slate-400';
+    }
+    if (typeof ppUpdateHeaderShieldBadge === 'function') ppUpdateHeaderShieldBadge();
   }
 
   function ppRefreshSyncHubUI() {
@@ -2129,6 +2164,14 @@
     const isNamed = ppIsNamedUser();
     const encActive = getMasterKeyActive();
     const activeUsers = ac.users.filter(u => u && u.enabled !== false).length;
+
+    const encBadge = document.getElementById('ppSyncTabEncBadge');
+    if (encBadge) {
+      encBadge.textContent = encActive ? 'AES-256-GCM Active' : 'Plaintext JSON';
+      encBadge.className = encActive
+        ? 'px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px] uppercase whitespace-nowrap'
+        : 'px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-bold text-[10px] uppercase whitespace-nowrap';
+    }
 
     // Tile 1: Sync Connection
     const connTitle = document.getElementById('syncHeroConnTitle');
@@ -2174,7 +2217,7 @@
       teamBtn.textContent = activeUsers > 0 ? `Team Users (${activeUsers})` : 'Team Users';
     }
 
-    // Tile 3: Separate Finance Vault
+    // Tile 3: Separate Finance Vault (shows stored Main DB path + 1-click reconnect when remembered)
     const finTile = document.getElementById('syncHeroFinanceTile');
     const finBadge = document.getElementById('syncHeroFinBadge');
     const finTitle = document.getElementById('syncHeroFinTitle');
@@ -2185,19 +2228,36 @@
     if (canFin && finTitle && finSub && typeof window !== 'undefined' && typeof window.ppGetFinanceVaultStatus === 'function') {
       const st = window.ppGetFinanceVaultStatus();
       const dotCls = st.unlocked ? 'pp-status-dot-ok' : (st.splitMode ? 'pp-status-dot-warn' : 'pp-status-dot-neutral');
-      finTitle.innerHTML = `<span id="syncHeroFinDot" class="pp-status-dot ${dotCls}" aria-hidden="true"></span><span class="truncate">${esc(st.unlocked ? st.fileName : 'Separate Finance Vault')}</span>`;
+      finTitle.innerHTML = `<span id="syncHeroFinDot" class="pp-status-dot ${dotCls}" aria-hidden="true"></span><span class="truncate">${esc(st.unlocked || st.linkedInMainDb ? st.fileName : 'Separate Finance Vault')}</span>`;
       if (finBadge) {
-        finBadge.textContent = st.unlocked ? 'Unlocked' : (st.splitMode ? 'Split · Locked' : 'Ready');
+        finBadge.textContent = st.unlocked ? 'Unlocked' : (st.hasPendingReconnect ? '1-Click Open' : (st.splitMode ? 'Split · Locked' : 'Ready'));
         finBadge.className = st.unlocked
           ? 'px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase whitespace-nowrap'
-          : 'px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600 uppercase whitespace-nowrap';
+          : (st.hasPendingReconnect
+              ? 'px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 uppercase whitespace-nowrap'
+              : 'px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600 uppercase whitespace-nowrap');
       }
       finSub.textContent = st.unlocked
-        ? 'Separate encrypted file auto-syncing with your unified session key.'
-        : (st.hasSessionKey
-            ? 'Kept in its own encrypted file using your session key — no separate finance password needed.'
-            : 'Enable Administrator encryption first to create or open the separate Finance Vault.');
-      if (finBtn) finBtn.textContent = st.unlocked ? 'Manage Vault' : 'Open Finance Vault';
+        ? `Auto-syncing separate file: ${st.filePath || st.fileName}`
+        : (st.hasPendingReconnect
+            ? `Remembered file ready (${st.filePath || st.fileName}) — click once to grant access & unlock.`
+            : (st.linkedInMainDb
+                ? `Linked in main DB: ${st.filePath || st.fileName} (auto-opens once remembered on this device).`
+                : (st.hasSessionKey
+                    ? 'Kept in its own encrypted file using your session key — no separate finance password needed.'
+                    : 'Enable Administrator encryption first to create or open the separate Finance Vault.')));
+      if (finBtn) {
+        finBtn.textContent = st.unlocked
+          ? 'Manage Vault'
+          : (st.hasPendingReconnect ? 'Reconnect Finance' : 'Open Finance Vault');
+        finBtn.onclick = () => {
+          if (!st.unlocked && st.hasPendingReconnect && typeof window.ppReconnectFinanceVault === 'function') {
+            window.ppReconnectFinanceVault();
+          } else if (typeof window.ppOpenFinanceVaultModal === 'function') {
+            window.ppOpenFinanceVaultModal();
+          }
+        };
+      }
     }
 
     const strip = document.querySelector('.pp-sync-strip');

@@ -26,18 +26,22 @@
       setMobileSeg('m-color-fte', activeColorMode === 'fte');
       setMobileSeg('m-color-fte3', activeColorMode === 'fte3');
 
-      // Mobile header Demo/What-If/Live chip & Cards/Grid toggle
+      // Mobile header Demo/What-If/Encrypted/Live chip & Cards/Grid toggle
       const mChip = document.getElementById('mobileHeaderModeChip');
       if (mChip) {
+        const isEnc = typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8;
         if (ui.whatIfMode && whatIfDB) {
           mChip.textContent = 'What-If';
-          mChip.className = 'md:hidden text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-violet-100 text-violet-800 border border-violet-300';
+          mChip.className = 'md:hidden text-[9.5px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-violet-100 text-violet-800 border border-violet-300 shrink-0';
         } else if (ui.demoMode) {
           mChip.textContent = 'Demo';
-          mChip.className = 'md:hidden text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300';
+          mChip.className = 'md:hidden text-[9.5px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300 shrink-0';
+        } else if (isEnc) {
+          mChip.textContent = 'Encrypted';
+          mChip.className = 'md:hidden text-[9.5px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-300 shrink-0';
         } else {
           mChip.textContent = 'Live';
-          mChip.className = 'md:hidden text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200';
+          mChip.className = 'md:hidden text-[9.5px] font-bold uppercase px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0';
         }
       }
 

@@ -1261,6 +1261,14 @@
           if (!isSilentAutoReload) {
             saveRememberedHandle(handle);
           }
+
+          // Automatically open the linked Finance Vault if its path/handle is remembered and the user has Finance access
+          if (typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
+            window.ppTryAutoOpenFinanceVault({
+              allowPermissionPrompt: !isAutoReconnect && !isSilentAutoReload,
+              silent: isSilentAutoReload,
+            }).catch(() => {});
+          }
         } catch (postErr) {
           ppDebug('ERROR', 'Post-load attach error', { name: postErr?.name, message: postErr?.message });
           if (!isSilentAutoReload) showToast(`Loaded "${handle.name}", but setup failed: ${postErr?.message || 'unexpected error'}`, 'error');
@@ -1795,9 +1803,11 @@
         const displayPath = getConnectedFileDisplayPath(linkedFileHandle.name);
         const hasFullPath = hasStoredPathForFile(linkedFileHandle.name);
         const safeNameArg = escapeHtml(linkedFileHandle.name).replace(/'/g, "\\'");
-        badge.className = 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap shrink-0';
-        badge.textContent = ui.autoReloadFromFile ? 'Auto-Sync Active' : 'Live Linked';
-        statusBox.innerHTML = `
+        if (badge) {
+          badge.className = 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap shrink-0';
+          badge.textContent = ui.autoReloadFromFile ? 'Auto-Sync Active' : 'Live Linked';
+        }
+        if (statusBox) statusBox.innerHTML = `
           <div class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
             <span class="text-slate-500 shrink-0">Connected File:</span>
             <div class="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5 min-w-0">
@@ -1811,19 +1821,23 @@
         if (btnReconnect) btnReconnect.classList.add('hidden');
         if (btnUnlink) btnUnlink.classList.remove('hidden');
       } else if (!hasFsApi) {
-        badge.className = 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-100 text-indigo-800 whitespace-nowrap shrink-0';
-        badge.textContent = 'Mobile / Local';
-        statusBox.innerHTML = `
+        if (badge) {
+          badge.className = 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-100 text-indigo-800 whitespace-nowrap shrink-0';
+          badge.textContent = 'Mobile / Local';
+        }
+        if (statusBox) statusBox.innerHTML = `
           <div class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"><span class="text-slate-500 shrink-0">Storage:</span><span class="font-bold text-slate-900">Saved on Device (Rev ${db.meta?.revision || 1})</span></div>
           <div class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"><span class="text-slate-500 shrink-0">Last Updated:</span><span class="text-slate-700 text-right">${new Date(db.meta?.lastModifiedAt || Date.now()).toLocaleString()}</span></div>
           <div class="text-[11px] text-slate-600 pt-1 leading-relaxed">Tap <strong>Share / Save JSON</strong> below to push updates straight to Google Drive, Files, or Teams, or tap <strong>Import JSON</strong> to open a colleague&rsquo;s latest file.</div>`;
       } else {
         const remDisplayPath = rememberedFileHandle ? getConnectedFileDisplayPath(rememberedFileHandle.name) : '';
-        badge.className = syncWarningState.type === 'missing'
-          ? 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-100 text-rose-700 whitespace-nowrap shrink-0'
-          : 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-100 text-amber-800 whitespace-nowrap shrink-0';
-        badge.textContent = syncWarningState.type === 'missing' ? 'File Missing' : 'Local Only';
-        statusBox.innerHTML = `
+        if (badge) {
+          badge.className = syncWarningState.type === 'missing'
+            ? 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-100 text-rose-700 whitespace-nowrap shrink-0'
+            : 'px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-100 text-amber-800 whitespace-nowrap shrink-0';
+          badge.textContent = syncWarningState.type === 'missing' ? 'File Missing' : 'Local Only';
+        }
+        if (statusBox) statusBox.innerHTML = `
           <div class="text-slate-700 break-words">
             ${rememberedFileHandle
               ? `Last linked file: <code class="font-mono font-bold break-all">${escapeHtml(remDisplayPath)}</code> — click <strong>Reconnect Remembered File</strong> or relink it.`

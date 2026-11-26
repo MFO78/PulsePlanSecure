@@ -162,6 +162,8 @@
             ? `${escapeHtml(s.label)}: Committed ${formatValue(s.committedDisp)} + Pipeline ${formatValue(s.tentativeDisp)} = ${formatValue(s.allocDisp)} / Cap ${formatValue(s.capDisp)} (${s.pct}%)`
             : `${escapeHtml(s.label)}: Allocated ${formatValue(s.allocDisp)} / Capacity ${formatValue(s.capDisp)} (${s.pct}%)`;
 
+          const yCap = yScale(s.capDisp);
+          const pctLabelY = Math.max(12, Math.min(yAlloc, yCap) - 8);
           barsHtml += `
             <g role="button" tabindex="0" aria-label="${escapeHtml(s.label)}: ${formatValue(s.allocDisp)} of ${formatValue(s.capDisp)} (${s.pct}%)"
               onclick="selectHealthChartBar(${idx})"
@@ -170,7 +172,7 @@
               <rect x="${pad.left + idx * slotW}" y="${pad.top}" width="${slotW}" height="${plotH + 22}" fill="transparent" />
               ${hComm > 0 ? `<rect x="${x}" y="${yComm}" width="${barW}" height="${hComm}" rx="${hTent > 0.5 ? 2 : 6}" fill="${fillComm}" opacity="0.92"><title>${titleTxt}</title></rect>` : ''}
               ${hTent > 0.5 ? `<rect x="${x}" y="${yAlloc}" width="${barW}" height="${hTent}" rx="4" fill="${fillTent}" stroke="${isOver ? '#e11d48' : '#7c3aed'}" stroke-width="1" stroke-dasharray="3,2" opacity="0.88"><title>${titleTxt}</title></rect>` : ''}
-              <text x="${cx}" y="${Math.max(14, yAlloc - 6)}" text-anchor="middle" font-size="10" font-weight="700" fill="${isOver ? '#fb7185' : pctTextNormal}">${s.pct}%</text>
+              <text x="${cx}" y="${pctLabelY}" text-anchor="middle" font-size="10" font-weight="700" fill="${isOver ? '#fb7185' : pctTextNormal}">${s.pct}%</text>
               <text x="${cx}" y="${height - 14}" text-anchor="middle" font-size="10" font-weight="600" fill="${labelText}">${escapeHtml(s.label)}</text>
             </g>`;
         });
@@ -183,7 +185,8 @@
             return `<circle cx="${cx}" cy="${cy}" r="4" fill="${capDotFill}" stroke="${capStroke}" stroke-width="2" pointer-events="none"></circle>`;
           }).join('')}`;
 
-        chartBox.innerHTML = `<svg role="img" aria-label="Organisation load versus variable capacity chart" viewBox="0 0 ${width} ${height}" class="w-full min-w-[480px] h-auto">${gridHtml}${barsHtml}${capLineHtml}</svg>`;
+        const svgMinWCls = stats.length > 6 ? 'min-w-[480px]' : 'min-w-0';
+        chartBox.innerHTML = `<svg role="img" aria-label="Organisation load versus variable capacity chart" viewBox="0 0 ${width} ${height}" class="w-full ${svgMinWCls} h-auto">${gridHtml}${barsHtml}${capLineHtml}</svg>`;
 
         if (ui.selectedChartPeriodIdx >= 0 && ui.selectedChartPeriodIdx < stats.length) {
           selectHealthChartBar(ui.selectedChartPeriodIdx);

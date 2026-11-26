@@ -6,7 +6,7 @@
   const css = document.createElement('style');
   css.textContent = `
 @media (max-width: 767px) {
-  #pp-mobile-layout { font-size: 10px !important; width: calc(7ch + 1.25rem); max-width: none; min-height: 0; height: auto; line-height: 1.2; padding: .125rem 1rem .125rem .25rem; border-radius: .375rem; }
+  #pp-mobile-layout { font-size: 10px !important; width: auto !important; min-width: 3.9rem; max-width: 4.8rem; min-height: 0; height: 26px !important; line-height: 1.15; padding: .12rem .22rem; border-radius: .45rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); }
 }
 .pp-period-pair [class~="p-2"], .pp-period-pair [class~="p-2.5"], .pp-period-pair [class~="p-3"], .pp-period-pair [class~="p-3.5"], .pp-period-pair [class~="p-4"] { padding: .3rem; }
 .pp-period-pair [class~="px-2.5"], .pp-period-pair [class~="px-3"] { padding-left: .3rem; padding-right: .3rem; }

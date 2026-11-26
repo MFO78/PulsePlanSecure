@@ -217,6 +217,50 @@
       #headerWorkspacePopover {
         max-width: calc(100vw - 1.25rem);
       }
+      header > .layout-container {
+        padding: 0.42rem 0.55rem !important;
+        gap: 0.3rem !important;
+      }
+      header > .layout-container > :first-child {
+        flex: 0 1 auto !important;
+        gap: 0.35rem !important;
+      }
+      header > .layout-container > :first-child > .w-8 {
+        width: 1.75rem !important;
+        height: 1.75rem !important;
+      }
+      header h1 {
+        font-size: 0.85rem !important;
+        flex-shrink: 0 !important;
+        overflow: visible !important;
+      }
+      header #mobileHeaderModeChip {
+        padding: 0.14rem 0.36rem !important;
+        font-size: 9px !important;
+        letter-spacing: 0.01em;
+      }
+      header #headerMenuBtn {
+        height: 2rem !important;
+        padding-left: 0.35rem !important;
+        padding-right: 0.35rem !important;
+        gap: 0.2rem !important;
+      }
+      header #headerUserAvatar {
+        width: 1.35rem !important;
+        height: 1.35rem !important;
+        font-size: 9px !important;
+      }
+      #syncWarningBanner {
+        padding: 0.4rem 0.65rem !important;
+      }
+      #syncWarningBanner .layout-container {
+        gap: 0.4rem !important;
+        font-size: 11px !important;
+      }
+      #syncWarningBanner button {
+        padding: 0.25rem 0.55rem !important;
+        font-size: 11px !important;
+      }
       .mobile-wrap-anywhere {
         overflow-wrap: anywhere;
         word-break: break-word;

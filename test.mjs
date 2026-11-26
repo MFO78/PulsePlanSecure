@@ -2670,6 +2670,134 @@ test('Delegated Admin rights, full-hide sign-out lock gate, dropdown sign-in & M
   assert.equal(out.allUsersFlaggedReset, true, 'Main Admin password rotation scrubs stale wrapped key slots and flags users for reset');
 });
 
+test('Encrypted badges stay synced, Main DB stores Finance Vault path with handle/dir auto-open, and logout remembers DB location', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    const fin = globalThis.__ppFinanceVaultTestApi;
+    if (!auth || !fin) throw new Error('Missing auth or finance test API');
+
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.activeTab = 'matrix';
+    ui.linkedFilePaths = { 'company_roadmap.json': 'G:/Shared drives/PMO/company_roadmap.json' };
+    const fakeMainHandle = { name: 'company_roadmap.json', getFile: async () => ({ lastModified: Date.now(), text: async () => '{}' }) };
+    linkedFileHandle = fakeMainHandle;
+    rememberedFileHandle = fakeMainHandle;
+
+    const origGetById = document.getElementById;
+    const mockNodes = {
+      mobileHeaderModeChip: { textContent: '', className: '' },
+      ppSyncTabEncBadge: { textContent: '', className: '' },
+    };
+    document.getElementById = (id) => mockNodes[id] || origGetById.call(document, id);
+
+    let mobileChipEnc = '', syncBadgeEnc = '', mobileChipPlain = '';
+    try {
+      const adminPw = 'AdminMaster#2026!';
+      ppSyncPassphrase = adminPw;
+      auth.ppApplyAuthenticatedSession('admin', null, 'Lead Admin');
+      syncMobileControlsUI(liveDB);
+      auth.ppRefreshSyncHubUI();
+
+      // 1. Verify all encryption badges consistently show Encrypted / AES-256-GCM Active (never stale Live / Plain / Plaintext JSON)
+      mobileChipEnc = mockNodes.mobileHeaderModeChip.textContent;
+      syncBadgeEnc = mockNodes.ppSyncTabEncBadge.textContent;
+
+      // 2. Store Finance Vault path inside Main DB (auto-deriving sibling path from linkedFilePaths) & verify migration preserves it
+      const origPayload = fin.extractFinancialsFromDb(liveDB);
+      const encFinJson = await fin.encryptFinancePayload(origPayload, adminPw);
+      fin.syncFinanceMetaToMainDb('pulseplan-finance.enc.json');
+      const savedMeta = fin.getMainDbFinanceMeta(liveDB);
+      const migrated = normalizeAndMigrateDB(JSON.parse(JSON.stringify(liveDB)));
+      const migratedMeta = migrated.settings.financeVault;
+
+      // 3. Strip financials in memory, then auto-open via remembered Shared Folder handle looking up filename stored in Main DB!
+      fin.lockFinanceVaultSilently(true);
+      const rateWhileLocked = liveDB.departments.find(d => d.id === 'd_eng').dayRate;
+      const fakeDirHandle = {
+        name: 'PMO',
+        queryPermission: async () => 'granted',
+        getFileHandle: async (fname) => {
+          if (fname !== 'pulseplan-finance.enc.json') throw new Error('NotFoundError');
+          return {
+            name: fname,
+            queryPermission: async () => 'granted',
+            getFile: async () => ({ text: async () => encFinJson }),
+          };
+        },
+      };
+      fin.setTestHandles({ fileHandle: null, dirHandle: fakeDirHandle });
+      const autoRes = await fin.tryAutoOpenFinanceVault({ allowPermissionPrompt: false, silent: true });
+      const rateAfterAutoOpen = liveDB.departments.find(d => d.id === 'd_eng').dayRate;
+      const costAfterAutoOpen = liveDB.projects.find(p => p.id === 'p_nova').budgetCost;
+
+      // 4. Verify non-finance user CANNOT auto-open the Finance Vault
+      const noFinUser = await auth.createOrUpdateUserAccount({
+        name: 'Viewer NoFin',
+        roleTitle: 'Viewer',
+        isAdmin: false,
+        permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+        tempPassword: 'ViewerTemp#123',
+        mustChangePassword: false,
+      });
+      fin.lockFinanceVaultSilently(true);
+      await auth.authenticateInMemoryAccount(noFinUser.id, 'ViewerTemp#123');
+      const blockedAutoRes = await fin.tryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: true });
+      const rateForNoFin = liveDB.departments.find(d => d.id === 'd_eng').dayRate;
+
+      // 5. Sign out & verify browser still remembers database location (handle + path) while clearing plaintext data
+      await auth.authenticateInMemoryAccount('__ADMIN__', adminPw);
+      await auth.ppSignOutAndLockSession('manual');
+      const rememberedAfterLogout = Boolean(rememberedFileHandle && rememberedFileHandle.name === 'company_roadmap.json');
+      const pathRememberedAfterLogout = ui.linkedFilePaths['company_roadmap.json'];
+      const lockedFileLabel = auth.getLockedState()?.fileName;
+
+      // Cleanup
+      fin.setTestHandles({ fileHandle: null, dirHandle: null });
+      linkedFileHandle = null;
+      rememberedFileHandle = null;
+      ppSyncPassphrase = '';
+      auth.ppApplyAuthenticatedSession('open');
+      syncMobileControlsUI(liveDB);
+      mobileChipPlain = mockNodes.mobileHeaderModeChip.textContent;
+
+      return {
+        mobileChipEnc, syncBadgeEnc, mobileChipPlain,
+        savedFileName: savedMeta.fileName,
+        savedFilePath: savedMeta.filePath,
+        migratedEnabled: migratedMeta.enabled,
+        migratedPath: migratedMeta.filePath,
+        rateWhileLocked,
+        autoOpened: autoRes.opened,
+        rateAfterAutoOpen, costAfterAutoOpen,
+        blockedAutoOpened: blockedAutoRes.opened,
+        rateForNoFin,
+        rememberedAfterLogout, pathRememberedAfterLogout, lockedFileLabel,
+      };
+    } finally {
+      document.getElementById = origGetById;
+    }
+  })()`, ctx);
+
+  assert.equal(out.mobileChipEnc, 'Encrypted', 'Mobile header badge shows Encrypted when encryption key is active');
+  assert.equal(out.syncBadgeEnc, 'AES-256-GCM Active', 'Sync Hub encryption badge shows AES-256-GCM Active');
+  assert.equal(out.mobileChipPlain, 'Live', 'Mobile header badge returns to Live when unencrypted');
+  assert.equal(out.savedFileName, 'pulseplan-finance.enc.json', 'Main DB stores Finance Vault filename');
+  assert.equal(out.savedFilePath, 'G:/Shared drives/PMO/pulseplan-finance.enc.json', 'Main DB auto-derives sibling folder path for Finance Vault');
+  assert.equal(out.migratedEnabled, true, 'normalizeAndMigrateDB preserves financeVault.enabled');
+  assert.equal(out.migratedPath, 'G:/Shared drives/PMO/pulseplan-finance.enc.json', 'normalizeAndMigrateDB preserves financeVault.filePath');
+  assert.equal(out.rateWhileLocked, 0, 'Financial rates are stripped while Finance Vault is locked');
+  assert.equal(out.autoOpened, true, 'Finance Vault auto-opens seamlessly from remembered folder using filename stored in Main DB');
+  assert.equal(out.rateAfterAutoOpen, 650, 'Auto-opened Finance Vault restores department day rates');
+  assert.equal(out.costAfterAutoOpen, 450000, 'Auto-opened Finance Vault restores project budget costs');
+  assert.equal(out.blockedAutoOpened, false, 'Non-finance user is blocked from auto-opening Finance Vault');
+  assert.equal(out.rateForNoFin, 0, 'Non-finance user sees zeroed financial rates');
+  assert.equal(out.rememberedAfterLogout, true, 'Browser keeps remembered database file handle across sign-out');
+  assert.equal(out.pathRememberedAfterLogout, 'G:/Shared drives/PMO/company_roadmap.json', 'Saved database path stays remembered after sign-out');
+  assert.equal(out.lockedFileLabel, 'company_roadmap.json', 'Locked screen tracks remembered database filename for one-click Sign In');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

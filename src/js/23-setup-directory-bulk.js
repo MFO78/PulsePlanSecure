@@ -136,6 +136,15 @@
       .pp-people-table { width: 100%; border-collapse: collapse; font-size: 12px; }
       .pp-people-table th, .pp-people-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; }
       .pp-people-table th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); }
+      @media (max-width: 767px) {
+        .pp-people-card { padding: .8rem; }
+        .pp-people-table { font-size: 11px; }
+        .pp-people-table th, .pp-people-table td { padding: .4rem .3rem; }
+        .pp-people-table .pp-people-select { max-width: 115px; font-size: 11px; padding: .28rem .35rem; }
+        .pp-people-table .pp-bulk-btn { padding: .25rem .45rem; font-size: 10.5px; }
+        .pp-people-form { width: 100%; }
+        .pp-people-form .pp-people-input { flex: 1 1 140px; min-width: 0; }
+      }
       html.dark .pp-bulk-bar, body.dark .pp-bulk-bar { background: rgba(79,70,229,.22); border-color: rgba(129,140,248,.4); color: #e0e7ff; }
     `;
     document.head.appendChild(style);

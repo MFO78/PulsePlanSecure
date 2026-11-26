@@ -136,21 +136,21 @@
     function ppUpdateHeaderShieldBadge() {
       const badge = document.getElementById('ppHeaderShieldBtn');
       if (!badge) return;
-      const active = typeof ppSyncPassphrase !== 'undefined' && Boolean(ppSyncPassphrase);
+      const active = typeof ppSyncPassphrase === 'string' && ppSyncPassphrase.length >= 8;
       badge.className = active
-        ? 'hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold transition cursor-pointer shrink-0'
-        : 'hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-semibold hover:bg-slate-200 transition cursor-pointer shrink-0';
+        ? 'hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold transition cursor-pointer shrink-0'
+        : 'hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 border border-slate-200 text-[10px] font-semibold hover:bg-slate-200 transition cursor-pointer shrink-0';
       badge.title = active
-        ? 'Sync JSON Encryption: AES-256-GCM Active (click to configure)'
-        : 'Sync JSON Encryption: Plaintext (click to enable AES-256-GCM)';
+        ? 'Database Encryption: AES-256-GCM Active (click to manage)'
+        : 'Database Encryption: Plaintext (click to enable AES-256-GCM)';
       const lbl = document.getElementById('ppHeaderShieldLabel');
-      if (lbl) lbl.textContent = active ? 'AES-256' : 'Plain';
+      if (lbl) lbl.textContent = active ? 'Encrypted' : 'Plain';
     }
 
     function initVisualPolishUI() {
       if (typeof document === 'undefined' || !document.body) return;
 
-      // 1. Header Security Shield Badge next to <h1> (hidden on tiny mobile screens to avoid overlapping Install button)
+      // 1. Header Security Shield Badge next to <h1> (desktop only; mobile uses #mobileHeaderModeChip to avoid crowding)
       const h1 = typeof document.querySelector === 'function' ? document.querySelector('header h1') : null;
       if (h1 && h1.parentElement && !document.getElementById('ppHeaderShieldBtn')) {
         const btn = document.createElement('button');
@@ -175,7 +175,7 @@
         ppUpdateHeaderShieldBadge();
       }
 
-      // 2. Hook updateSyncEncryptionBadges so the header shield stays in sync
+      // 2. Hook updateSyncEncryptionBadges and renderAll so the header shield always stays in sync
       if (typeof updateSyncEncryptionBadges === 'function' && !updateSyncEncryptionBadges.__ppShieldWrapped) {
         const origUpdate = updateSyncEncryptionBadges;
         updateSyncEncryptionBadges = function (...args) {
@@ -183,6 +183,15 @@
           ppUpdateHeaderShieldBadge();
         };
         updateSyncEncryptionBadges.__ppShieldWrapped = true;
+      }
+      if (typeof renderAll === 'function' && !renderAll.__ppShieldWrapped) {
+        const origRenderAll = renderAll;
+        renderAll = function (...args) {
+          const res = origRenderAll.apply(this, args);
+          ppUpdateHeaderShieldBadge();
+          return res;
+        };
+        renderAll.__ppShieldWrapped = true;
       }
 
       // 3. Hook renderPlanningIntelligenceDialog so the Critical Path SVG renders automatically

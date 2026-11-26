@@ -149,6 +149,7 @@
           currency: '€',
           retention: { ...DEFAULT_RETENTION },
           fte3Scheme: { ...DEFAULT_FTE3_SCHEME },
+          financeVault: { enabled: false, fileName: '', filePath: '', linkedAt: '' },
         },
         departments: [],
         projects: [],
@@ -444,6 +445,12 @@
           redPct: Math.max(10, Math.min(150, Number(rawFte3.redPct ?? DEFAULT_FTE3_SCHEME.redPct) || 50)),
           yellowFte: Math.max(0.25, Math.min(50, Number(rawFte3.yellowFte ?? DEFAULT_FTE3_SCHEME.yellowFte) || 1.0)),
           redFte: Math.max(0.5, Math.min(100, Number(rawFte3.redFte ?? DEFAULT_FTE3_SCHEME.redFte) || 2.5)),
+        },
+        financeVault: {
+          enabled: Boolean(rawSet.financeVault && rawSet.financeVault.enabled),
+          fileName: String(rawSet.financeVault?.fileName || '').trim(),
+          filePath: String(rawSet.financeVault?.filePath || '').trim(),
+          linkedAt: String(rawSet.financeVault?.linkedAt || ''),
         },
       };
 

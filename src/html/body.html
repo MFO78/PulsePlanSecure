@@ -715,16 +715,16 @@
 
     <!-- ==================== TAB 3: DATA & SETUP ==================== -->
     <section id="tab-data" role="tabpanel" aria-labelledby="nav-data" class="hidden space-y-4">
-      <!-- Sub-tabs Bar (horizontally scrollable on mobile) -->
+      <!-- Sub-tabs Bar (2x2 clean grid on mobile, inline pill strip on sm+) -->
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <div role="tablist" aria-label="Data and setup sections" class="inline-flex rounded-xl bg-white p-1 border border-slate-200 shadow-xs overflow-x-auto no-scrollbar max-w-full">
-          <button id="subnav-departments" type="button" role="tab" aria-controls="subtab-departments" aria-selected="true" onclick="switchDataSubTab('departments')" class="px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap">Departments</button>
-          <button id="subnav-projects" type="button" role="tab" aria-controls="subtab-projects" aria-selected="false" onclick="switchDataSubTab('projects')" class="px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap">Projects</button>
-          <button id="subnav-milestones" type="button" role="tab" aria-controls="subtab-milestones" aria-selected="false" onclick="switchDataSubTab('milestones')" class="px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap">Milestones</button>
-          <button id="subnav-settings" type="button" role="tab" aria-controls="subtab-settings" aria-selected="false" onclick="switchDataSubTab('settings')" class="px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap">Units &amp; Thresholds</button>
+        <div role="tablist" aria-label="Data and setup sections" class="grid grid-cols-2 sm:inline-flex gap-1 w-full sm:w-auto rounded-xl bg-white p-1 border border-slate-200 shadow-xs">
+          <button id="subnav-departments" type="button" role="tab" aria-controls="subtab-departments" aria-selected="true" onclick="switchDataSubTab('departments')" class="px-2.5 sm:px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition text-center whitespace-nowrap">Departments</button>
+          <button id="subnav-projects" type="button" role="tab" aria-controls="subtab-projects" aria-selected="false" onclick="switchDataSubTab('projects')" class="px-2.5 sm:px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition text-center whitespace-nowrap">Projects</button>
+          <button id="subnav-milestones" type="button" role="tab" aria-controls="subtab-milestones" aria-selected="false" onclick="switchDataSubTab('milestones')" class="px-2.5 sm:px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition text-center whitespace-nowrap">Milestones</button>
+          <button id="subnav-settings" type="button" role="tab" aria-controls="subtab-settings" aria-selected="false" onclick="switchDataSubTab('settings')" class="px-2.5 sm:px-3 py-2 md:py-1.5 rounded-lg text-xs font-semibold transition text-center whitespace-nowrap">Units &amp; Thresholds</button>
         </div>
 
-        <div id="dataSubTabAction"></div>
+        <div id="dataSubTabAction" class="w-full sm:w-auto"></div>
       </div>
 
       <!-- Departments Panel -->
