@@ -16,7 +16,7 @@
     .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; }
     .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
     .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; }
-    .pp-pbs-btn { display: inline-flex; align-items: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
+    .pp-pbs-btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
     .pp-pbs-btn:hover { background: var(--surface-subtle, #f1f5f9); }
     .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
     .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; }
@@ -57,6 +57,42 @@
     html.dark .pp-pbs-input, body.dark .pp-pbs-input, html.dark .pp-pbs-select, body.dark .pp-pbs-select { background: #0f172a; color: #e2e8f0; border-color: #475569; }
     html.dark .pp-pbs-conflict, body.dark .pp-pbs-conflict { background: rgba(180,83,9,.22); color: #fde68a; border-color: #d97706; }
     html.dark .pp-pbs-notice, body.dark .pp-pbs-notice { background: rgba(30,64,175,.25); color: #bfdbfe; border-color: #3b82f6; }
+    @media (max-width: 767px) {
+      #ppPbsDialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+      .pp-pbs-wrap { height: 100dvh; max-height: 100dvh; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      .pp-pbs-head { padding: .65rem .8rem; gap: .4rem; }
+      .pp-pbs-tip { display: none; }
+      .pp-pbs-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: .45rem .8rem; gap: .35rem; }
+      .pp-pbs-toolbar::-webkit-scrollbar { display: none; }
+      .pp-pbs-toolbar > * { flex: 0 0 auto; }
+      .pp-pbs-summary { padding: .45rem .8rem; gap: .35rem; }
+      .pp-pbs-filters { display: grid; grid-template-columns: 1fr 1fr; padding: .5rem .8rem; gap: .4rem; }
+      .pp-pbs-filters #ppPbsFilterSearch { grid-column: 1 / -1; min-width: 0 !important; width: 100%; }
+      .pp-pbs-filters #ppPbsClearFiltersBtn { grid-column: 1 / -1; }
+      .pp-pbs-body { padding: .65rem .8rem 1rem; }
+      .pp-pbs-btn { min-height: 38px; padding: .4rem .7rem; font-size: 12.5px; }
+      .pp-pbs-btn-xs { min-height: 36px; padding: .3rem .55rem; font-size: 12px; }
+      .pp-pbs-input, .pp-pbs-select { min-height: 38px; font-size: 16px; width: 100%; box-sizing: border-box; }
+      .pp-pbs-toolbar .pp-pbs-select { width: auto; max-width: 210px; font-size: 13px; }
+      .pp-pbs-toggle { width: 2rem; height: 2rem; font-size: 12px; }
+      .pp-pbs-form { grid-template-columns: 1fr; padding: .75rem; }
+      .pp-pbs-form .pp-pbs-field { grid-column: auto !important; }
+      .pp-pbs-table, .pp-pbs-table tbody { display: block; width: 100%; }
+      .pp-pbs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+      .pp-pbs-table tr.pp-pbs-row { display: block; margin: 0 0 .65rem calc(min(var(--pbs-depth, 0), 4) * 10px); padding: .55rem .7rem; border: 1px solid var(--border-subtle, #e2e8f0); border-left-width: 4px; border-radius: .75rem; background: var(--surface-card, #ffffff); }
+      .pp-pbs-table tr:not(.pp-pbs-row), .pp-pbs-table td[colspan] { display: block; width: 100%; border: 0; }
+      .pp-pbs-table tr.pp-pbs-row td { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .22rem 0 !important; border-bottom: 0; white-space: normal !important; text-align: left !important; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-code { display: inline-flex; font-size: 11px; color: var(--text-muted, #64748b); margin-right: .45rem; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-mat { display: inline-flex; float: right; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-name { display: block; padding: .2rem 0 .35rem !important; font-size: 13.5px; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-dept::before,
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-owner::before,
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-ms::before { content: attr(data-label); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); flex-shrink: 0; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions { display: block; margin-top: .4rem; padding-top: .45rem !important; border-top: 1px solid var(--border-subtle, #e2e8f0); }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions [role="group"] { display: flex; flex-wrap: wrap; gap: .3rem; }
+      html.dark .pp-pbs-table tr.pp-pbs-row, body.dark .pp-pbs-table tr.pp-pbs-row { background: #1e293b; border-color: #334155; }
+      html.dark .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions, body.dark .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions { border-top-color: #334155; }
+    }
   `;
 
   function injectStyles() {
@@ -92,14 +128,14 @@
         ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}`
         : '\u2014';
       const btn = (act, label, text) => `<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-move="${act}" data-pbs-id="${id}" aria-label="${label} ${nm}">${text}</button>`;
-      return `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="border-left:4px solid ${esc(dept && dept.color ? dept.color : 'transparent')}">
-        <td style="font-family:ui-monospace,monospace;font-weight:700;white-space:nowrap">${esc(item.code)}</td>
-        <td style="padding-left:${6 + depth * 18}px">${toggle}<span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}${item.notes ? `<div style="font-size:10.5px;color:var(--text-muted,#64748b);margin-left:1.5rem">${esc(item.notes)}</div>` : ''}</td>
-        <td>${matPill(item.maturity)}</td>
-        <td style="color:${esc(dept && dept.color ? dept.color : 'inherit')};font-weight:600;white-space:nowrap">${dept ? esc(`[${dept.code}] ${dept.name}`) : '\u2014'}</td>
-        <td style="white-space:nowrap">${esc(item.owner || '\u2014')}</td>
-        <td style="white-space:nowrap">${msCell}</td>
-        <td style="text-align:right;white-space:nowrap"><span role="group" aria-label="Actions for ${nm}">${btn('up', 'Move up', '\u2191')} ${btn('down', 'Move down', '\u2193')} ${btn('outdent', 'Outdent', '\u2190')} ${btn('indent', 'Indent', '\u2192')}
+      return `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="--pbs-depth:${depth};border-left:4px solid ${esc(dept && dept.color ? dept.color : 'transparent')}">
+        <td class="pp-pbs-cell-code" data-label="Code" style="font-family:ui-monospace,monospace;font-weight:700;white-space:nowrap">${esc(item.code)}</td>
+        <td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 18}px">${toggle}<span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}${item.notes ? `<div style="font-size:10.5px;color:var(--text-muted,#64748b);margin-left:1.5rem">${esc(item.notes)}</div>` : ''}</td>
+        <td class="pp-pbs-cell-mat" data-label="Maturity">${matPill(item.maturity)}</td>
+        <td class="pp-pbs-cell-dept" data-label="Department" style="color:${esc(dept && dept.color ? dept.color : 'inherit')};font-weight:600;white-space:nowrap">${dept ? esc(`[${dept.code}] ${dept.name}`) : '\u2014'}</td>
+        <td class="pp-pbs-cell-owner" data-label="Owner" style="white-space:nowrap">${esc(item.owner || '\u2014')}</td>
+        <td class="pp-pbs-cell-ms" data-label="Milestone" style="white-space:nowrap">${msCell}</td>
+        <td class="pp-pbs-cell-actions" data-label="Actions" style="text-align:right;white-space:nowrap"><span role="group" aria-label="Actions for ${nm}">${btn('up', 'Move up', '\u2191')} ${btn('down', 'Move down', '\u2193')} ${btn('outdent', 'Outdent', '\u2190')} ${btn('indent', 'Indent', '\u2192')}
           <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-add-child="${id}" aria-label="Add child to ${nm}">+Child</button>
           <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-edit="${id}" aria-label="Edit ${nm}">Edit</button>
           <button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-danger" data-pbs-del="${id}" aria-label="Delete ${nm}">\u00d7</button></span></td>
@@ -213,7 +249,7 @@
     return `<div class="pp-pbs-wrap">
       <header class="pp-pbs-head"><div>
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
-        <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'} &middot; Tip: focus a row, then Alt+Arrows to move or indent, Enter to edit</div></div>
+        <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: focus a row, then Alt+Arrows to move or indent, Enter to edit</span></div></div>
         <div style="display:flex;align-items:center;gap:.45rem"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite">${esc(ctx.status.text)}</span>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}
