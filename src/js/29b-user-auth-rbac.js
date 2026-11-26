@@ -1,5 +1,5 @@
-/* Multi-User Login, Wrapped-Key Auth, Role-Based Access Control (Tabs + Finance),
- * Self-Service Password Selection, Admin Password Reset & Modernized Sync/Login Hub */
+/* Multi-User Login, Wrapped-Key Auth, Role-Based Access Control (Tabs + Finance + Delegated Admin),
+ * Full-Hide Logout Gate, Dropdown Sign-In, Self-Service & Main Admin Password Change, and Mobile Permissions Cards */
 (function ppUserAuthRbacModule() {
   const ALL_TABS = ['matrix', 'health', 'data', 'sync'];
   const TAB_META = {
@@ -8,12 +8,14 @@
     data: { short: 'Setup', label: 'Setup & Data' },
     sync: { short: 'Sync', label: 'Sync & Snapshots' },
   };
+  const PLAINTEXT_CACHE_KEYS = ['pulseplan_live_db_v2', 'pulseplan_people_dir_v1', 'pulseplan_pbs_cache_v1'];
 
   const ppAuthSession = {
-    mode: 'open', // 'open' | 'admin' | 'user'
+    mode: 'open', // 'open' | 'admin' | 'user' | 'locked'
     userId: null,
     userName: '',
     roleTitle: '',
+    isAdmin: false,
     mustChangePassword: false,
     permissions: {
       tabs: { matrix: true, health: true, data: true, sync: true },
@@ -22,6 +24,8 @@
   };
 
   let pendingResetUserId = '';
+  let ppLockedState = null; // { envelope, reason, fileName, hadLinkedFile, lockedAt } — ciphertext ONLY, zero plaintext
+  let isSigningOut = false;
 
   function esc(str) {
     if (typeof escapeHtml === 'function') return escapeHtml(String(str ?? ''));
@@ -84,6 +88,19 @@
     }
   }
 
+  function preserveScrollPosition(fn) {
+    const modalCard = typeof document !== 'undefined' ? document.getElementById('modalCard') : null;
+    const mainEl = typeof document !== 'undefined' ? document.getElementById('mainWorkspace') : null;
+    const prevModalTop = modalCard ? modalCard.scrollTop : 0;
+    const prevMainTop = mainEl ? mainEl.scrollTop : 0;
+    fn();
+    if (modalCard) modalCard.scrollTop = prevModalTop;
+    if (mainEl) mainEl.scrollTop = prevMainTop;
+    if (typeof window !== 'undefined' && typeof isMobileViewport === 'function' && isMobileViewport() && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+  }
+
   /* ==================== RBAC CORE PREDICATES ==================== */
 
   function ppGetAuthSession() {
@@ -96,21 +113,40 @@
     };
   }
 
-  function ppIsStandardUser() {
+  function ppIsSessionLocked() {
+    return ppAuthSession.mode === 'locked';
+  }
+
+  function ppIsMainAdmin() {
+    return ppAuthSession.mode === 'admin';
+  }
+
+  function ppIsDelegatedAdmin() {
+    return ppAuthSession.mode === 'user' && Boolean(ppAuthSession.isAdmin);
+  }
+
+  function ppIsNamedUser() {
     return ppAuthSession.mode === 'user';
   }
 
+  function ppIsStandardUser() {
+    return ppAuthSession.mode === 'user' && !ppAuthSession.isAdmin;
+  }
+
   function ppHasAdminAccess() {
-    return ppAuthSession.mode !== 'user';
+    if (ppIsSessionLocked()) return false;
+    return ppAuthSession.mode === 'open' || ppAuthSession.mode === 'admin' || ppIsDelegatedAdmin();
   }
 
   function ppCanAccessTab(tab) {
-    if (!ppIsStandardUser()) return true;
+    if (ppIsSessionLocked()) return false;
+    if (ppHasAdminAccess()) return true;
     return Boolean(ppAuthSession.permissions?.tabs?.[tab]);
   }
 
   function ppCanAccessFinance() {
-    if (!ppIsStandardUser()) return true;
+    if (ppIsSessionLocked()) return false;
+    if (ppHasAdminAccess()) return true;
     return Boolean(ppAuthSession.permissions?.finance);
   }
 
@@ -133,29 +169,49 @@
     return { tabs, finance: Boolean(rawPerm && rawPerm.finance) };
   }
 
+  function exitLockedScreenUI() {
+    if (typeof document === 'undefined') return;
+    document.documentElement?.classList?.remove('pp-session-locked');
+    const lockEl = document.getElementById('ppLockedScreen');
+    if (lockEl) {
+      lockEl.classList.add('hidden');
+      lockEl.innerHTML = '';
+    }
+  }
+
   function ppApplyAuthenticatedSession(role, userRecord = null, adminNameOverride = '') {
     const db = getDb();
     const ac = ensureAccessControl(db);
+    exitLockedScreenUI();
+    ppLockedState = null;
+
     if (role === 'user' && userRecord) {
-      const perms = normalizeUserPermissions(userRecord.permissions);
+      const delegatedAdmin = Boolean(userRecord.isAdmin);
+      const perms = delegatedAdmin
+        ? { tabs: { matrix: true, health: true, data: true, sync: true }, finance: true }
+        : normalizeUserPermissions(userRecord.permissions);
+
       ppAuthSession.mode = 'user';
       ppAuthSession.userId = userRecord.id;
       ppAuthSession.userName = userRecord.name;
-      ppAuthSession.roleTitle = userRecord.roleTitle || 'Team Member';
+      ppAuthSession.roleTitle = userRecord.roleTitle || (delegatedAdmin ? 'Administrator' : 'Team Member');
+      ppAuthSession.isAdmin = delegatedAdmin;
       ppAuthSession.mustChangePassword = Boolean(userRecord.mustChangePassword);
       ppAuthSession.permissions = perms;
 
       if (typeof ui !== 'undefined') {
         ui.userName = userRecord.name;
-        ui.demoMode = false;
-        ui.whatIfMode = false;
-        if (typeof whatIfDB !== 'undefined') whatIfDB = null;
+        if (!delegatedAdmin) {
+          ui.demoMode = false;
+          ui.whatIfMode = false;
+          if (typeof whatIfDB !== 'undefined') whatIfDB = null;
+        }
         if (!ppCanAccessTab(ui.activeTab)) {
           ui.activeTab = ppGetFirstAllowedTab();
         }
         if (typeof persistUIPrefs === 'function') persistUIPrefs();
       }
-      if (!perms.finance && typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
+      if (!ppCanAccessFinance() && typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
         window.ppLockFinanceVaultSilently(true);
       }
     } else if (role === 'admin') {
@@ -163,7 +219,8 @@
       ppAuthSession.mode = 'admin';
       ppAuthSession.userId = '__ADMIN__';
       ppAuthSession.userName = adminLabel;
-      ppAuthSession.roleTitle = 'Administrator';
+      ppAuthSession.roleTitle = 'Main Administrator';
+      ppAuthSession.isAdmin = true;
       ppAuthSession.mustChangePassword = false;
       ppAuthSession.permissions = {
         tabs: { matrix: true, health: true, data: true, sync: true },
@@ -180,6 +237,7 @@
       ppAuthSession.userId = null;
       ppAuthSession.userName = (typeof ui !== 'undefined' && ui.userName) || 'Project Mgr';
       ppAuthSession.roleTitle = '';
+      ppAuthSession.isAdmin = false;
       ppAuthSession.mustChangePassword = false;
       ppAuthSession.permissions = {
         tabs: { matrix: true, health: true, data: true, sync: true },
@@ -192,11 +250,18 @@
 
   function ppSyncAuthAfterDbLoad(db) {
     const ac = ensureAccessControl(db);
+    if (ppAuthSession.mode === 'locked') {
+      if (getMasterKeyActive()) {
+        ppApplyAuthenticatedSession('admin', null, ac.adminName);
+      } else {
+        ppApplyAuthenticatedSession('open');
+      }
+      return;
+    }
     if (ppAuthSession.mode === 'user' && ppAuthSession.userId) {
       const fresh = ac.users.find(u => u && u.id === ppAuthSession.userId);
       if (!fresh || fresh.enabled === false) {
-        if (typeof ppSyncPassphrase !== 'undefined') ppSyncPassphrase = '';
-        ppOnSessionLocked('revoked');
+        ppSignOutAndLockSession('revoked');
         toast('Your account was disabled or removed by the Administrator.', 'warning');
         return;
       }
@@ -209,21 +274,310 @@
     }
   }
 
-  function ppOnSessionLocked(reason = 'manual') {
-    if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
-      window.ppLockFinanceVaultSilently(true);
-    }
-    if (reason === 'disabled') {
-      ppApplyAuthenticatedSession('open');
-    } else if (ppAuthSession.mode === 'user' || ppAuthSession.mode === 'admin') {
-      ppApplyAuthenticatedSession('open');
-    }
-    if (typeof renderAll === 'function') renderAll();
+  /* ==================== FULL-HIDE SIGN OUT & LOCKED WORKSPACE GATE ==================== */
+
+  function clearPlaintextLocalCaches() {
+    try {
+      if (typeof STORAGE_KEYS !== 'undefined' && STORAGE_KEYS.LIVE_DB && typeof localStorage !== 'undefined') {
+        localStorage.removeItem(STORAGE_KEYS.LIVE_DB);
+      }
+      if (typeof localStorage !== 'undefined') {
+        PLAINTEXT_CACHE_KEYS.forEach(k => {
+          try { localStorage.removeItem(k); } catch (_e) {}
+        });
+      }
+    } catch (_err) {}
   }
 
-  /* ==================== CRYPTO ACTIONS: PROVISION, RESET, SELF-CHANGE PASSWORD ==================== */
+  function closeAllOverlaysForLock() {
+    removeAuthOverlay();
+    if (typeof closeModal === 'function') {
+      try { closeModal(); } catch (_e) {}
+    }
+    if (typeof closeHeaderWorkspaceMenu === 'function') {
+      try { closeHeaderWorkspaceMenu(); } catch (_e) {}
+    }
+    if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+      document.querySelectorAll('dialog[open]').forEach(dlg => {
+        try {
+          if (typeof dlg.close === 'function') dlg.close();
+          else dlg.removeAttribute('open');
+        } catch (_e) {}
+      });
+      const toastContainer = document.getElementById('toastContainer');
+      if (toastContainer) toastContainer.innerHTML = '';
+    }
+  }
 
-  async function createOrUpdateUserAccount({ name, roleTitle = '', permissions, tempPassword, mustChangePassword = true }) {
+  function renderLockedScreenUI() {
+    if (typeof document === 'undefined') return;
+    document.documentElement?.classList?.add('pp-session-locked');
+    let lockEl = document.getElementById('ppLockedScreen');
+    if (!lockEl && document.body) {
+      lockEl = document.createElement('section');
+      lockEl.id = 'ppLockedScreen';
+      lockEl.setAttribute('aria-label', 'Workspace signed out');
+      if (typeof document.body.prepend === 'function') document.body.prepend(lockEl);
+      else if (typeof document.body.appendChild === 'function') document.body.appendChild(lockEl);
+    }
+    if (!lockEl) return;
+
+    const reason = ppLockedState?.reason || 'manual';
+    const hasUnlockTarget = Boolean(
+      (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) ||
+      ppLockedState?.envelope
+    );
+    const fileLabel = ppLockedState?.fileName || (typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name) || '';
+    const title = reason === 'inactivity'
+      ? 'Session Locked for Security'
+      : (reason === 'revoked' ? 'Access Revoked — Signed Out' : 'You Are Signed Out');
+    const subtitle = reason === 'inactivity'
+      ? 'Your session timed out due to inactivity. All workspace data was cleared from screen and memory.'
+      : (reason === 'revoked'
+          ? 'Your account access was updated by an Administrator. All workspace information has been cleared.'
+          : 'All roadmap, team, and financial information has been completely hidden and cleared from view.');
+
+    lockEl.classList.remove('hidden');
+    lockEl.innerHTML = `
+      <div class="pp-locked-card" role="region" aria-labelledby="ppLockedTitle">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shrink-0">
+            <svg class="w-5 h-5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <div class="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">PulsePlanSecure · Protected</div>
+            <h2 id="ppLockedTitle" class="text-lg font-extrabold leading-tight" style="color:var(--text-heading,#0f172a)">${esc(title)}</h2>
+          </div>
+        </div>
+
+        <p class="text-xs leading-relaxed" style="color:var(--text-muted,#64748b)">${esc(subtitle)}</p>
+
+        ${fileLabel ? `
+          <div class="px-3 py-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
+            style="border-color:var(--border-subtle,#e2e8f0);background:var(--surface-subtle,#f8fafc)">
+            <span style="color:var(--text-muted,#64748b)">Locked workspace:</span>
+            <span class="font-bold truncate" style="color:var(--text-primary,#0f172a)">${esc(fileLabel)}</span>
+          </div>` : ''}
+
+        <div class="space-y-2.5 pt-1">
+          ${hasUnlockTarget ? `
+            <button type="button" id="ppLockedSignInBtn"
+              class="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition cursor-pointer">
+              Sign In to Workspace
+            </button>` : ''}
+          <button type="button" id="ppLockedOpenFileBtn"
+            class="w-full py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold transition cursor-pointer">
+            Open Encrypted Database File...
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between gap-2 pt-3 border-t text-[11px]" style="border-color:var(--border-subtle,#e2e8f0);color:var(--text-faint,#64748b)">
+          <span>AES-256-GCM · Zero data displayed</span>
+          <button type="button" id="ppLockedFreshBtn" class="font-semibold hover:underline cursor-pointer" style="color:var(--text-muted,#64748b)">
+            Start Empty Workspace
+          </button>
+        </div>
+      </div>`;
+
+    lockEl.querySelector('#ppLockedSignInBtn')?.addEventListener('click', () => {
+      ppUnlockFromLockedScreen();
+    });
+    lockEl.querySelector('#ppLockedOpenFileBtn')?.addEventListener('click', () => {
+      if (typeof openSharedDatabaseFile === 'function') openSharedDatabaseFile();
+    });
+    lockEl.querySelector('#ppLockedFreshBtn')?.addEventListener('click', () => {
+      ppLockedState = null;
+      if (typeof linkedFileHandle !== 'undefined') linkedFileHandle = null;
+      if (typeof liveDB !== 'undefined' && typeof createEmptyDB === 'function') {
+        liveDB = createEmptyDB();
+      }
+      ppApplyAuthenticatedSession('open');
+      if (typeof renderAll === 'function') renderAll();
+      toast('Started a fresh empty workspace.', 'info');
+    });
+  }
+
+  async function ppSignOutAndLockSession(reason = 'manual') {
+    if (reason === 'disabled') {
+      if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
+        window.ppLockFinanceVaultSilently(true);
+      }
+      ppApplyAuthenticatedSession('open');
+      if (typeof renderAll === 'function') renderAll();
+      return;
+    }
+    if (isSigningOut) return;
+    isSigningOut = true;
+
+    try {
+      const linkedName = (typeof linkedFileHandle !== 'undefined' && linkedFileHandle?.name) ? linkedFileHandle.name : '';
+      const hadLinkedFile = Boolean(typeof linkedFileHandle !== 'undefined' && linkedFileHandle);
+
+      // Flush pending linked-file auto-save before wiping key from memory
+      if (hadLinkedFile && getMasterKeyActive() && typeof writeDBToLinkedFile === 'function') {
+        try {
+          if ((typeof saveDebounceTimer !== 'undefined' && saveDebounceTimer) || (typeof saveQueued !== 'undefined' && saveQueued)) {
+            if (typeof saveDebounceTimer !== 'undefined' && saveDebounceTimer) {
+              clearTimeout(saveDebounceTimer);
+              saveDebounceTimer = null;
+            }
+            await writeDBToLinkedFile();
+          }
+        } catch (_e) {}
+      }
+
+      // Encrypt an in-memory ciphertext-only envelope BEFORE wiping plaintext so user can sign right back in
+      let lockedEnvelope = null;
+      const curLive = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
+      if (curLive && getMasterKeyActive() && typeof encryptPulsePlanData === 'function') {
+        try {
+          lockedEnvelope = await encryptPulsePlanData(curLive, ppSyncPassphrase);
+        } catch (_e) {}
+      }
+
+      // Lock & strip Finance Vault
+      if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
+        window.ppLockFinanceVaultSilently(true);
+      }
+
+      // Clear master key, inactivity timer & file polling
+      if (typeof ppSyncPassphrase !== 'undefined') ppSyncPassphrase = '';
+      if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
+      if (typeof stopFilePolling === 'function') stopFilePolling();
+
+      // Scrub ALL in-memory DBs and localStorage plaintext caches
+      if (typeof liveDB !== 'undefined' && typeof createEmptyDB === 'function') {
+        liveDB = createEmptyDB();
+      }
+      if (typeof whatIfDB !== 'undefined') whatIfDB = null;
+      if (typeof ui !== 'undefined') {
+        ui.whatIfMode = false;
+        ui.demoMode = false;
+      }
+      if (typeof lastSyncedSnapshot !== 'undefined') lastSyncedSnapshot = null;
+      if (typeof pendingAutoReload !== 'undefined') pendingAutoReload = false;
+      if (typeof clearUndoHistory === 'function') clearUndoHistory();
+      clearPlaintextLocalCaches();
+      closeAllOverlaysForLock();
+
+      ppAuthSession.mode = 'locked';
+      ppAuthSession.userId = null;
+      ppAuthSession.userName = '';
+      ppAuthSession.roleTitle = '';
+      ppAuthSession.isAdmin = false;
+      ppAuthSession.mustChangePassword = false;
+      ppAuthSession.permissions = {
+        tabs: { matrix: false, health: false, data: false, sync: false },
+        finance: false,
+      };
+      ppLockedState = {
+        envelope: lockedEnvelope,
+        reason,
+        fileName: linkedName,
+        hadLinkedFile,
+        lockedAt: new Date().toISOString(),
+      };
+
+      // Re-render once against the empty DB so no stale text remains even in hidden DOM nodes
+      if (typeof renderAll === 'function') {
+        try { renderAll(); } catch (_e) {}
+      }
+      renderLockedScreenUI();
+      if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
+
+      if (reason === 'inactivity') {
+        toast('Session locked after inactivity. All workspace info cleared from screen.', 'info');
+      } else if (reason === 'manual') {
+        toast('Signed out. All workspace information cleared from screen.', 'info');
+      }
+    } finally {
+      isSigningOut = false;
+    }
+  }
+
+  async function ppUnlockFromLockedScreen() {
+    let envelope = null;
+    let sourceFileName = ppLockedState?.fileName || 'Encrypted Workspace';
+    let fromLinkedDisk = false;
+    let diskLastModified = 0;
+
+    if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle) {
+      try {
+        const file = await linkedFileHandle.getFile();
+        diskLastModified = file.lastModified || 0;
+        const raw = typeof ppReadRawFileText === 'function' ? await ppReadRawFileText(file) : await file.text();
+        const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        if (parsed && parsed.format === 'pulseplan-encrypted-v1') {
+          envelope = parsed;
+          sourceFileName = linkedFileHandle.name || sourceFileName;
+          fromLinkedDisk = true;
+        }
+      } catch (_e) {
+        // Fall back to in-memory locked ciphertext envelope
+      }
+    }
+
+    if (!envelope && ppLockedState?.envelope) {
+      envelope = ppLockedState.envelope;
+    }
+
+    if (!envelope) {
+      if (typeof openSharedDatabaseFile === 'function') {
+        openSharedDatabaseFile();
+      } else {
+        toast('Open an encrypted PulsePlan file to sign back in.', 'info');
+      }
+      return;
+    }
+
+    const res = await ppPromptEncryptedFileLogin(envelope, { fileName: sourceFileName });
+    if (!res || !res.plainJson || !res.masterPass) return;
+
+    const parsedDb = JSON.parse(res.plainJson);
+    const normalized = typeof normalizeAndMigrateDB === 'function' ? normalizeAndMigrateDB(parsedDb) : parsedDb;
+    if (typeof liveDB !== 'undefined') liveDB = normalized;
+    if (typeof ppSyncPassphrase !== 'undefined') ppSyncPassphrase = res.masterPass;
+    if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
+
+    if (typeof STORAGE_KEYS !== 'undefined' && typeof safeSetStorage === 'function') {
+      safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(normalized));
+    }
+    if (fromLinkedDisk) {
+      if (typeof lastKnownFileModified !== 'undefined') lastKnownFileModified = diskLastModified;
+      if (typeof lastSyncedSnapshot !== 'undefined' && typeof cloneSyncSnapshot === 'function') {
+        lastSyncedSnapshot = cloneSyncSnapshot(normalized);
+      }
+      if (typeof startFilePolling === 'function') startFilePolling();
+    }
+
+    ppApplyAuthenticatedSession(res.authRole, res.userRecord, envelope.auth?.adminName);
+    if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
+    if (typeof renderAll === 'function') renderAll();
+
+    const who = res.authRole === 'admin'
+      ? (normalized.accessControl?.adminName || 'Administrator')
+      : (res.userRecord?.name || 'User');
+    toast(`Welcome back, ${who}.`, 'success');
+    ppCheckForcedPasswordChange();
+  }
+
+  function ppOnSessionLocked(reason = 'manual') {
+    if (reason === 'disabled') {
+      if (typeof window !== 'undefined' && typeof window.ppLockFinanceVaultSilently === 'function') {
+        window.ppLockFinanceVaultSilently(true);
+      }
+      ppApplyAuthenticatedSession('open');
+      if (typeof renderAll === 'function') renderAll();
+      return;
+    }
+    ppSignOutAndLockSession(reason);
+  }
+
+  /* ==================== CRYPTO ACTIONS: PROVISION, RESET, SELF-CHANGE & MAIN ADMIN CHANGE PASSWORD ==================== */
+
+  async function createOrUpdateUserAccount({ name, roleTitle = '', isAdmin = false, permissions, tempPassword, mustChangePassword = true }) {
     if (!ppHasAdminAccess()) throw new Error('Administrator privileges required.');
     if (!getMasterKeyActive()) throw new Error('Enable the Administrator encryption password first.');
     const cleanName = String(name || '').trim();
@@ -237,20 +591,24 @@
 
     const userId = typeof uid === 'function' ? uid('usr') : `usr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     const keySlot = await ppWrapMasterPassphrase(ppSyncPassphrase, tempPassword, userId);
+    const grantedAdmin = Boolean(isAdmin);
     const record = {
       id: userId,
       name: cleanName,
       roleTitle: String(roleTitle || '').trim(),
       enabled: true,
+      isAdmin: grantedAdmin,
       mustChangePassword: Boolean(mustChangePassword),
       needsAdminKeyReset: false,
-      permissions: normalizeUserPermissions(permissions),
+      permissions: normalizeUserPermissions(
+        grantedAdmin ? { tabs: { matrix: true, health: true, data: true, sync: true }, finance: true } : permissions
+      ),
       keySlot,
       updatedAt: new Date().toISOString(),
     };
     ac.users.push(record);
     if (typeof recordChange === 'function') {
-      recordChange('Access', `Added user login "${cleanName}" (${record.permissions.finance ? 'Finance ON' : 'No Finance'})`);
+      recordChange('Access', `Added user login "${cleanName}" (${grantedAdmin ? 'Admin Rights' : (record.permissions.finance ? 'Finance ON' : 'No Finance')})`);
     }
     persistDbChanges();
     return record;
@@ -280,8 +638,8 @@
   }
 
   async function changeCurrentUserPassword({ currentPassword = '', newPassword, skipCurrentVerify = false }) {
-    if (!ppIsStandardUser() || !ppAuthSession.userId) {
-      throw new Error('Only signed-in standard users can use personal password change.');
+    if (!ppIsNamedUser() || !ppAuthSession.userId) {
+      throw new Error('Only signed-in team users can use personal password change.');
     }
     if (!getMasterKeyActive()) {
       throw new Error('Active encrypted session required.');
@@ -313,6 +671,74 @@
     return user;
   }
 
+  async function changeMainAdminPassword({ currentPassword, newPassword }) {
+    if (ppIsNamedUser()) {
+      throw new Error('Only the Main Administrator can change the Main Administrator password.');
+    }
+    if (!getMasterKeyActive()) {
+      throw new Error('Administrator encryption is not active yet. Enable encryption first.');
+    }
+    if (!currentPassword) {
+      throw new Error('Enter your current Administrator password.');
+    }
+    if (currentPassword !== ppSyncPassphrase) {
+      throw new Error('Current Administrator password is incorrect.');
+    }
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error('New Administrator password must be at least 8 characters long.');
+    }
+    if (newPassword === currentPassword) {
+      throw new Error('New password must be different from your current password.');
+    }
+
+    const db = getDb();
+    const ac = ensureAccessControl(db);
+    const nowIso = new Date().toISOString();
+
+    // Rotate master encryption password
+    ppSyncPassphrase = newPassword;
+    if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
+
+    // Scrub old wrapped key slots (encrypted against previous Admin key) and flag users for reset
+    let resetUserCount = 0;
+    ac.users.forEach(u => {
+      if (!u) return;
+      u.keySlot = null;
+      u.needsAdminKeyReset = true;
+      u.mustChangePassword = true;
+      u.updatedAt = nowIso;
+      if (u.enabled !== false) resetUserCount++;
+    });
+
+    if (typeof recordChange === 'function') {
+      recordChange('Security', 'Main Administrator changed the master encryption password');
+    }
+    persistDbChanges();
+
+    // Immediately flush encrypted main DB to linked disk file if connected
+    let mainFileReencrypted = false;
+    if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+      try {
+        await writeDBToLinkedFile({ forceOverwrite: true });
+        mainFileReencrypted = true;
+      } catch (_e) {}
+    }
+
+    // Re-encrypt unlocked separate Finance Vault with the new master password
+    let financeResult = { unlocked: false, reencryptedOnDisk: false, needsManualDownload: false };
+    if (typeof window !== 'undefined' && typeof window.ppReencryptFinanceVaultNow === 'function') {
+      try {
+        financeResult = await window.ppReencryptFinanceVaultNow(newPassword);
+      } catch (_e) {}
+    }
+
+    ppApplyAuthenticatedSession('admin', null, ac.adminName);
+    if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
+    if (typeof renderAll === 'function') renderAll();
+
+    return { resetUserCount, mainFileReencrypted, financeResult };
+  }
+
   async function authenticateInMemoryAccount(accountId, password) {
     if (!password) throw new Error('Please enter your password.');
     const db = getDb();
@@ -328,7 +754,6 @@
         if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
         return { authRole: 'admin', userRecord: null };
       }
-      // If session was locked but we have at least one user, we can't verify admin key without a file; accept min-8 to re-establish session
       if (password.length < 8) throw new Error('Administrator password must be at least 8 characters.');
       ppSyncPassphrase = password;
       ppApplyAuthenticatedSession('admin', null, ac.adminName);
@@ -355,7 +780,7 @@
     return { authRole: 'user', userRecord: user };
   }
 
-  /* ==================== MODERN SIGN-IN DIALOG (ENCRYPTED FILE & ACCOUNT SWITCH) ==================== */
+  /* ==================== MODERN SIGN-IN DIALOG WITH USER DROPDOWN ==================== */
 
   function removeAuthOverlay() {
     document.getElementById('ppAuthOverlay')?.remove();
@@ -369,28 +794,35 @@
     overlay.style.background = 'rgba(15, 23, 42, 0.58)';
     overlay.style.backdropFilter = 'blur(4px)';
 
-    let selectedId = defaultAccountId || (accounts.length > 0 ? accounts[0].id : '__ADMIN__');
-    const allCards = [
-      { id: '__ADMIN__', name: adminName || 'Administrator', roleTitle: 'Administrator · Full Access', isAdmin: true, mustChange: false },
+    const allAccounts = [
+      {
+        id: '__ADMIN__',
+        name: adminName || 'Administrator',
+        roleTitle: 'Main Administrator · Full Access',
+        isMainAdmin: true,
+        isAdmin: true,
+        mustChange: false,
+      },
       ...accounts.map(u => ({
         id: u.id,
         name: u.name,
-        roleTitle: u.roleTitle || 'Team Member',
-        isAdmin: false,
+        roleTitle: u.isAdmin ? (u.roleTitle ? `${u.roleTitle} · Admin` : 'Administrator') : (u.roleTitle || 'Team Member'),
+        isMainAdmin: false,
+        isAdmin: Boolean(u.isAdmin),
         mustChange: Boolean(u.mustChangePassword),
       })),
     ];
 
-    const renderCards = () => allCards.map(acct => {
-      const sel = acct.id === selectedId;
-      return `
-        <button type="button" data-pp-login-acct="${esc(acct.id)}" class="pp-auth-acct-card ${sel ? 'is-selected' : ''}">
-          <span class="pp-auth-avatar ${acct.isAdmin ? 'pp-auth-avatar-admin' : ''}">${acct.isAdmin ? 'AD' : esc(getInitials(acct.name))}</span>
-          <span class="min-w-0 flex-1">
-            <span class="block text-xs font-bold truncate">${esc(acct.name)}</span>
-            <span class="block text-[10px] text-slate-500 truncate">${esc(acct.roleTitle)}${acct.mustChange ? ' · Reset' : ''}</span>
-          </span>
-        </button>`;
+    let selectedId = allAccounts.some(a => a.id === defaultAccountId)
+      ? defaultAccountId
+      : (accounts.length > 0 ? accounts[0].id : '__ADMIN__');
+
+    const optionsHtml = allAccounts.map(acct => {
+      const roleSuffix = acct.isMainAdmin
+        ? 'Main Administrator'
+        : (acct.isAdmin ? 'Admin' : (acct.roleTitle || 'Team Member'));
+      const tempSuffix = acct.mustChange ? ' · Temp Password' : '';
+      return `<option value="${esc(acct.id)}" ${acct.id === selectedId ? 'selected' : ''}>${esc(acct.name)} (${esc(roleSuffix)}${tempSuffix})</option>`;
     }).join('');
 
     overlay.innerHTML = `
@@ -398,14 +830,14 @@
         class="w-full max-w-md rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden text-xs"
         style="background:var(--surface-card,#ffffff);color:var(--text-primary,#0f172a);border-color:var(--border-subtle,#cbd5e1)">
         <div class="p-5 space-y-4">
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex items-start gap-3">
+          <div class="flex items-start justify-between gap-3 pp-modal-header-row">
+            <div class="flex items-start gap-3 min-w-0">
               <div class="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center shrink-0">
                 <svg class="w-5 h-5" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                 </svg>
               </div>
-              <div>
+              <div class="min-w-0">
                 <h2 id="ppLoginTitle" class="text-base font-extrabold" style="color:var(--text-heading,#0f172a)">${esc(title)}</h2>
                 <p class="text-[11px] mt-0.5 leading-relaxed" style="color:var(--text-muted,#64748b)">${esc(subtitle)}</p>
               </div>
@@ -413,15 +845,16 @@
             <button type="button" id="ppLoginCloseBtn" aria-label="Close sign in dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold cursor-pointer shrink-0">&times;</button>
           </div>
 
-          <div class="space-y-1.5">
-            <div class="text-[10.5px] font-extrabold uppercase tracking-wider" style="color:var(--text-faint,#64748b)">Select Account</div>
-            <div id="ppLoginAcctGrid" class="pp-auth-acct-grid">${renderCards()}</div>
-          </div>
+          <form id="ppLoginForm" class="space-y-3.5" onsubmit="return false;">
+            <div class="space-y-1.5">
+              <label for="ppLoginAcctSelect" class="block text-[11px] font-bold uppercase tracking-wider" style="color:var(--text-faint,#64748b)">Select User Account</label>
+              <select id="ppLoginAcctSelect" class="pp-login-select" aria-label="Select user account">${optionsHtml}</select>
+              <div id="ppLoginSelectedPreview" class="pp-login-preview"></div>
+            </div>
 
-          <form id="ppLoginForm" class="space-y-3" onsubmit="return false;">
             <div class="space-y-1.5">
               <label for="ppLoginPassword" id="ppLoginPwLabel" class="block font-semibold" style="color:var(--text-secondary,#334155)">Password</label>
-              <div class="flex items-center gap-1.5">
+              <div class="pp-pw-input-row">
                 <input id="ppLoginPassword" type="password" autocomplete="current-password" placeholder="Enter your password..."
                   class="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-medium"
                   style="background:var(--surface-subtle,#f8fafc);color:var(--text-primary,#0f172a);border-color:var(--border-subtle,#cbd5e1)" />
@@ -433,7 +866,7 @@
 
             <div class="flex items-center justify-between gap-2 pt-2 border-t" style="border-color:var(--border-subtle,#e2e8f0)">
               <span class="text-[10.5px]" style="color:var(--text-faint,#64748b)">AES-256-GCM · Local Zero-Server Auth</span>
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2 shrink-0">
                 <button type="button" id="ppLoginCancelBtn" class="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold transition cursor-pointer">Cancel</button>
                 <button type="submit" id="ppLoginSubmitBtn" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition cursor-pointer">Sign In</button>
               </div>
@@ -444,28 +877,41 @@
 
     document.body.appendChild(overlay);
 
+    const acctSel = overlay.querySelector('#ppLoginAcctSelect');
+    const previewEl = overlay.querySelector('#ppLoginSelectedPreview');
     const pwInput = overlay.querySelector('#ppLoginPassword');
     const pwLabel = overlay.querySelector('#ppLoginPwLabel');
     const errBox = overlay.querySelector('#ppLoginErr');
     const submitBtn = overlay.querySelector('#ppLoginSubmitBtn');
     const eyeBtn = overlay.querySelector('#ppLoginEyeBtn');
-    const grid = overlay.querySelector('#ppLoginAcctGrid');
 
     const updateSelectedUI = () => {
-      const acct = allCards.find(a => a.id === selectedId) || allCards[0];
-      if (pwLabel) pwLabel.textContent = acct.isAdmin ? `${acct.name} Password` : `Password for ${acct.name}`;
-      if (pwInput) pwInput.placeholder = acct.isAdmin ? 'Enter Administrator password...' : `Enter ${acct.name}'s password...`;
-      grid?.querySelectorAll('[data-pp-login-acct]').forEach(btn => {
-        btn.classList.toggle('is-selected', btn.getAttribute('data-pp-login-acct') === selectedId);
-      });
+      const acct = allAccounts.find(a => a.id === selectedId) || allAccounts[0];
+      if (acctSel && acctSel.value !== acct.id) acctSel.value = acct.id;
+      if (pwLabel) pwLabel.textContent = acct.isMainAdmin ? `${acct.name} Password` : `Password for ${acct.name}`;
+      if (pwInput) pwInput.placeholder = acct.isMainAdmin ? 'Enter Main Administrator password...' : `Enter ${acct.name}'s password...`;
+      if (previewEl) {
+        const badgeText = acct.isMainAdmin ? 'Main Admin' : (acct.isAdmin ? 'Admin' : 'Member');
+        const badgeCls = acct.isAdmin ? 'pp-role-admin' : 'pp-role-user';
+        previewEl.innerHTML = `
+          <span class="pp-auth-avatar ${acct.isAdmin ? 'pp-auth-avatar-admin' : ''}">${acct.isMainAdmin ? 'AD' : esc(getInitials(acct.name))}</span>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-xs font-extrabold truncate" style="color:var(--text-heading,#0f172a)">${esc(acct.name)}</span>
+              <span class="pp-role-badge ${badgeCls}">${badgeText}</span>
+              ${acct.mustChange ? '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9.5px] font-bold">Temp Password</span>' : ''}
+            </div>
+            <div class="text-[11px] truncate" style="color:var(--text-muted,#64748b)">
+              ${acct.mustChange ? 'You will choose your personal password right after signing in.' : esc(acct.roleTitle)}
+            </div>
+          </div>`;
+      }
       if (errBox) errBox.classList.add('hidden');
       pwInput?.focus();
     };
 
-    grid?.addEventListener('click', (ev) => {
-      const card = ev.target?.closest?.('[data-pp-login-acct]');
-      if (!card) return;
-      selectedId = card.getAttribute('data-pp-login-acct') || '__ADMIN__';
+    acctSel?.addEventListener('change', () => {
+      selectedId = acctSel.value || '__ADMIN__';
       updateSelectedUI();
     });
 
@@ -534,7 +980,7 @@
       renderModernLoginDialog({
         title: authUsers.length > 0 ? 'Sign In to Workspace' : 'Unlock Encrypted Workspace',
         subtitle: authUsers.length > 0
-          ? `Choose your account to unlock ${fileLabel}. Encryption stays protected by the Administrator master key.`
+          ? `Select your account from the dropdown to unlock ${fileLabel}. Encryption stays protected by the Administrator master key.`
           : `Enter the Administrator password to decrypt and open ${fileLabel}.`,
         adminName,
         accounts: authUsers,
@@ -554,17 +1000,17 @@
     const activeUsers = ac.users.filter(u => u && u.enabled !== false && u.keySlot && !u.needsAdminKeyReset);
     renderModernLoginDialog({
       title: 'Switch Account / Sign In',
-      subtitle: 'Sign in as Administrator or any team member. Permissions and Finance access update immediately.',
+      subtitle: 'Choose Administrator or any team user from the dropdown. Permissions and Finance access update immediately.',
       adminName: ac.adminName || 'Administrator',
       accounts: activeUsers,
-      defaultAccountId: preferredAccountId || (ppIsStandardUser() ? '__ADMIN__' : (activeUsers[0]?.id || '__ADMIN__')),
+      defaultAccountId: preferredAccountId || (ppIsNamedUser() ? '__ADMIN__' : (activeUsers[0]?.id || '__ADMIN__')),
       onAuthenticate: async (accountId, password) => {
         const res = await authenticateInMemoryAccount(accountId, password);
         if (typeof renderAll === 'function') renderAll();
         if (res.authRole === 'admin') {
-          toast(`Signed in as ${ac.adminName || 'Administrator'} (Full Access)`, 'success');
+          toast(`Signed in as ${ac.adminName || 'Administrator'} (Main Administrator)`, 'success');
         } else {
-          toast(`Signed in as ${res.userRecord.name}`, 'success');
+          toast(`Signed in as ${res.userRecord.name}${res.userRecord.isAdmin ? ' (Admin)' : ''}`, 'success');
           if (res.userRecord.mustChangePassword) {
             setTimeout(() => ppOpenChangeMyPasswordModal(true), 120);
           }
@@ -574,26 +1020,181 @@
     });
   }
 
-  /* ==================== SELF-SERVICE CHANGE PASSWORD (FORCED & VOLUNTARY) ==================== */
+  /* ==================== PASSWORD CHANGE MODALS (PERSONAL USER & MAIN ADMINISTRATOR) ==================== */
 
   function ppCheckForcedPasswordChange() {
-    if (ppIsStandardUser() && ppAuthSession.mustChangePassword) {
+    if (ppIsNamedUser() && ppAuthSession.mustChangePassword) {
       ppOpenChangeMyPasswordModal(true);
     }
   }
 
-  function ppOpenChangeMyPasswordModal(isForced = false) {
-    if (!ppIsStandardUser()) {
+  function ppOpenPasswordActionModal() {
+    if (ppIsNamedUser()) {
+      ppOpenChangeMyPasswordModal(false);
+    } else if (getMasterKeyActive()) {
+      ppOpenChangeAdminPasswordModal();
+    } else if (typeof openSyncEncryptionDialog === 'function') {
+      openSyncEncryptionDialog();
+    }
+  }
+
+  function ppOpenChangeAdminPasswordModal() {
+    if (ppIsNamedUser()) {
+      toast('Only the Main Administrator can change the Main Administrator password.', 'warning');
+      return;
+    }
+    if (!getMasterKeyActive()) {
       if (typeof openSyncEncryptionDialog === 'function') openSyncEncryptionDialog();
+      return;
+    }
+    const db = getDb();
+    const ac = ensureAccessControl(db);
+    const activeUsersCount = ac.users.filter(u => u && u.enabled !== false).length;
+
+    showModal(`
+      <form id="ppChangeAdminPwForm" class="p-5 space-y-4 text-xs" onsubmit="return false;">
+        <div class="flex items-start justify-between gap-3 pp-modal-header-row">
+          <div class="flex items-start gap-2.5 min-w-0">
+            <span class="pp-auth-avatar pp-auth-avatar-admin">AD</span>
+            <div class="min-w-0">
+              <h3 id="modalTitle" class="text-base font-extrabold text-slate-900">Change Administrator Password</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                Verify your current Main Administrator password, then choose a new master password (min 8 chars). Synced files and any unlocked Finance Vault re-encrypt automatically.
+              </p>
+            </div>
+          </div>
+          <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0 cursor-pointer">&times;</button>
+        </div>
+
+        ${activeUsersCount > 0 ? `
+          <div class="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-[11px] leading-relaxed">
+            <strong>Team Password Notice:</strong> ${activeUsersCount} team user${activeUsersCount === 1 ? '' : 's'} currently wrap your existing master key. After changing your Administrator password, their temporary passwords will be flagged so you can reset them in <strong>Team Access Manager</strong>.
+          </div>` : ''}
+
+        <div class="space-y-1">
+          <label for="ppCurAdminPw" class="block font-semibold text-slate-700">Current Administrator Password</label>
+          <input id="ppCurAdminPw" type="password" autocomplete="current-password" placeholder="Enter your current Administrator password..."
+            class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs" />
+        </div>
+
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <label for="ppNewAdminPw" class="block font-semibold text-slate-700">New Administrator Password (min 8 chars)</label>
+            <span id="ppAdminPwStrengthLbl" class="text-[10px] font-bold text-slate-400"></span>
+          </div>
+          <div class="pp-pw-input-row">
+            <input id="ppNewAdminPw" type="password" autocomplete="new-password" placeholder="Choose a strong new Administrator password..."
+              class="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs" />
+            <button type="button" id="ppAdminPwEyeBtn" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-semibold cursor-pointer">Show</button>
+          </div>
+          <div class="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
+            <div id="ppAdminPwStrengthBar" class="h-full rounded-full bg-slate-200 transition-all" style="width:0%"></div>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <label for="ppConfAdminPw" class="block font-semibold text-slate-700">Confirm New Administrator Password</label>
+          <input id="ppConfAdminPw" type="password" autocomplete="new-password" placeholder="Repeat new Administrator password..."
+            class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs" />
+        </div>
+
+        <div id="ppChangeAdminPwErr" role="alert" class="hidden rounded-xl px-3 py-2 bg-rose-50 text-rose-700 border border-rose-200 font-semibold"></div>
+
+        <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+          <button type="button" onclick="closeModal()" class="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold cursor-pointer">Cancel</button>
+          <button type="submit" id="ppChangeAdminPwSubmit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer">Update Admin Password</button>
+        </div>
+      </form>`, 'max-w-md');
+
+    const curInp = document.getElementById('ppCurAdminPw');
+    const newInp = document.getElementById('ppNewAdminPw');
+    const confInp = document.getElementById('ppConfAdminPw');
+    const eyeBtn = document.getElementById('ppAdminPwEyeBtn');
+    const errEl = document.getElementById('ppChangeAdminPwErr');
+    const submitBtn = document.getElementById('ppChangeAdminPwSubmit');
+
+    newInp?.addEventListener('input', () => {
+      if (typeof ppEvaluatePassphraseStrength !== 'function') return;
+      const st = ppEvaluatePassphraseStrength(newInp.value || '');
+      const bar = document.getElementById('ppAdminPwStrengthBar');
+      const lbl = document.getElementById('ppAdminPwStrengthLbl');
+      if (bar) {
+        bar.style.width = `${st.pct}%`;
+        bar.className = `h-full rounded-full transition-all ${st.color}`;
+      }
+      if (lbl) {
+        lbl.textContent = st.label;
+        lbl.className = `text-[10px] font-bold ${st.text}`;
+      }
+    });
+
+    eyeBtn?.addEventListener('click', () => {
+      const show = newInp.type === 'password';
+      [curInp, newInp, confInp].forEach(inp => { if (inp) inp.type = show ? 'text' : 'password'; });
+      eyeBtn.textContent = show ? 'Hide' : 'Show';
+    });
+
+    document.getElementById('ppChangeAdminPwForm')?.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const curPw = (curInp?.value || '').trim();
+      const nextPw = (newInp?.value || '').trim();
+      const confPw = (confInp?.value || '').trim();
+      if (!curPw) {
+        errEl.textContent = 'Enter your current Administrator password.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (nextPw.length < 8) {
+        errEl.textContent = 'New Administrator password must be at least 8 characters long.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (nextPw !== confPw) {
+        errEl.textContent = 'New passwords do not match.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Re-encrypting...';
+      errEl.classList.add('hidden');
+      try {
+        const res = await changeMainAdminPassword({ currentPassword: curPw, newPassword: nextPw });
+        closeModal();
+        const extra = [];
+        if (res.financeResult?.reencryptedOnDisk) extra.push('Finance Vault re-encrypted');
+        else if (res.financeResult?.needsManualDownload) extra.push('Save Finance Vault to export updated file');
+        if (res.resetUserCount > 0) extra.push(`${res.resetUserCount} team user(s) need password reset`);
+        toast(
+          `Main Administrator password updated.${extra.length ? ' ' + extra.join(' · ') + '.' : ''}`,
+          'success'
+        );
+        if (res.resetUserCount > 0) {
+          setTimeout(() => ppOpenTeamAccessModal(), 160);
+        }
+      } catch (err) {
+        errEl.textContent = err?.message || 'Could not update Administrator password.';
+        errEl.classList.remove('hidden');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Update Admin Password';
+        }
+      }
+    });
+  }
+
+  function ppOpenChangeMyPasswordModal(isForced = false) {
+    if (!ppIsNamedUser()) {
+      ppOpenChangeAdminPasswordModal();
       return;
     }
     const userName = ppAuthSession.userName || 'Team Member';
     showModal(`
       <form id="ppChangeMyPwForm" class="p-5 space-y-4 text-xs" onsubmit="return false;">
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-start gap-2.5">
-            <span class="pp-auth-avatar">${esc(getInitials(userName))}</span>
-            <div>
+        <div class="flex items-start justify-between gap-3 pp-modal-header-row">
+          <div class="flex items-start gap-2.5 min-w-0">
+            <span class="pp-auth-avatar ${ppIsDelegatedAdmin() ? 'pp-auth-avatar-admin' : ''}">${esc(getInitials(userName))}</span>
+            <div class="min-w-0">
               <h3 id="modalTitle" class="text-base font-extrabold text-slate-900">${isForced ? 'Choose Your Personal Password' : 'Change My Password'}</h3>
               <p class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
                 ${isForced
@@ -602,7 +1203,7 @@
               </p>
             </div>
           </div>
-          ${isForced ? '' : '<button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>'}
+          ${isForced ? '' : '<button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0 cursor-pointer">&times;</button>'}
         </div>
 
         ${isForced ? '' : `
@@ -617,7 +1218,7 @@
             <label for="ppNewUserPw" class="block font-semibold text-slate-700">New Personal Password (min 8 chars)</label>
             <span id="ppUserPwStrengthLbl" class="text-[10px] font-bold text-slate-400"></span>
           </div>
-          <div class="flex items-center gap-1.5">
+          <div class="pp-pw-input-row">
             <input id="ppNewUserPw" type="password" autocomplete="new-password" placeholder="Choose a strong personal password..."
               class="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs" />
             <button type="button" id="ppUserPwEyeBtn" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-semibold cursor-pointer">Show</button>
@@ -700,106 +1301,156 @@
         errEl.textContent = err?.message || 'Could not update password.';
         errEl.classList.remove('hidden');
       } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Save Personal Password';
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save Personal Password';
+        }
       }
     });
   }
 
-  /* ==================== ADMIN TEAM ACCESS & PERMISSIONS MANAGER ==================== */
+  /* ==================== ADMIN TEAM ACCESS & RESPONSIVE PERMISSIONS MANAGER ==================== */
+
+  function buildTeamUsersListHtml(db) {
+    const ac = ensureAccessControl(db);
+    if (ac.users.length === 0) {
+      return `
+        <div class="p-6 rounded-xl border border-dashed border-slate-200 text-center text-slate-400 text-xs">
+          No team user logins created yet. Add an owner or lead above to grant tailored tab, financial, or Administrator access.
+        </div>`;
+    }
+
+    return `
+      <div class="pp-user-list">
+        ${ac.users.map(u => {
+          const perms = normalizeUserPermissions(u.permissions);
+          const isUserAdmin = Boolean(u.isAdmin);
+          const isSelf = ppIsNamedUser() && ppAuthSession.userId === u.id;
+          const isResetting = pendingResetUserId === u.id;
+          const statusChip = u.needsAdminKeyReset
+            ? '<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold whitespace-nowrap">Key Reset Needed</span>'
+            : (u.mustChangePassword
+                ? '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold whitespace-nowrap">Temp Password</span>'
+                : '<span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold whitespace-nowrap">Personal Key Active</span>');
+
+          return `
+            <article class="pp-user-card ${isUserAdmin ? 'is-delegated-admin' : ''}" data-pp-user-row="${esc(u.id)}">
+              <div class="pp-user-card-head">
+                <div class="pp-user-card-id">
+                  <span class="pp-auth-avatar ${isUserAdmin ? 'pp-auth-avatar-admin' : ''}">${esc(getInitials(u.name))}</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <span class="font-extrabold text-[13px] text-slate-900 truncate">${esc(u.name)}</span>
+                      <span class="pp-role-badge ${isUserAdmin ? 'pp-role-admin' : 'pp-role-user'}">${isUserAdmin ? 'Admin' : 'Member'}</span>
+                      ${isSelf ? '<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9.5px] font-bold">You</span>' : ''}
+                      ${statusChip}
+                    </div>
+                    <div class="text-[11px] text-slate-500 mt-0.5">${esc(u.roleTitle || (isUserAdmin ? 'Delegated Administrator' : 'Team Member'))}</div>
+                  </div>
+                </div>
+
+                <div class="pp-user-card-actions">
+                  <button type="button" data-pp-reset-open="${esc(u.id)}"
+                    class="pp-user-action-btn border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-700">
+                    Reset Password
+                  </button>
+                  <button type="button" data-pp-delete-user="${esc(u.id)}" ${isSelf ? 'disabled title="Cannot remove your currently signed-in account"' : ''}
+                    class="pp-user-action-btn border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                    Remove
+                  </button>
+                </div>
+              </div>
+
+              <div class="pp-user-card-perms">
+                <div class="pp-perm-group">
+                  <div class="pp-perm-group-label">Allowed Workspace Tabs</div>
+                  <div class="pp-perm-pills-row">
+                    ${ALL_TABS.map(t => {
+                      const active = isUserAdmin || perms.tabs[t];
+                      return `
+                        <button type="button" data-pp-toggle-tab="${t}" data-pp-uid="${esc(u.id)}"
+                          ${isUserAdmin ? 'disabled title="Admin Rights grants access to all tabs"' : `title="Toggle access to ${TAB_META[t].label}"`}
+                          aria-pressed="${String(active)}"
+                          class="pp-perm-pill ${active ? 'is-on' : ''}">
+                          <span>${active ? '&#10003;' : '&times;'}</span>
+                          <span>${TAB_META[t].short}</span>
+                        </button>`;
+                    }).join('')}
+                  </div>
+                  ${isUserAdmin ? '<div class="text-[10.5px] text-emerald-700 font-semibold">All tabs &amp; team management unlocked via Admin Rights.</div>' : ''}
+                </div>
+
+                <div class="pp-perm-group">
+                  <div class="pp-perm-group-label">Financial Data &amp; Role Rights</div>
+                  <div class="pp-perm-pills-row">
+                    <button type="button" data-pp-toggle-fin="${esc(u.id)}"
+                      ${isUserAdmin ? 'disabled title="Admin Rights includes full Financial Data access"' : 'title="Toggle access to Day Rates, Project Costs & Finance Vault"'}
+                      aria-pressed="${String(isUserAdmin || perms.finance)}"
+                      class="pp-perm-pill is-fin ${(isUserAdmin || perms.finance) ? 'is-on' : ''}">
+                      <span>${(isUserAdmin || perms.finance) ? '&#10003; Financial Data' : '&times; Finance Restricted'}</span>
+                    </button>
+                    <button type="button" data-pp-toggle-admin="${esc(u.id)}"
+                      ${isSelf ? 'disabled title="You cannot remove your own Admin rights while signed in"' : 'title="Grant or revoke full Administrator rights (all tabs, Finance, and Team Access)"'}
+                      aria-pressed="${String(isUserAdmin)}"
+                      class="pp-perm-pill is-admin-pill ${isUserAdmin ? 'is-on' : ''}">
+                      <span>${isUserAdmin ? '&#9733; Admin Rights' : 'Grant Admin'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              ${isResetting ? `
+                <div class="pp-user-reset-panel">
+                  <div class="text-[11px] font-bold text-indigo-900">Set new temporary password for ${esc(u.name)}:</div>
+                  <div class="pp-pw-input-row">
+                    <input type="text" data-pp-reset-input="${esc(u.id)}" value="${esc(generateTempPassword())}" class="px-2.5 py-2 rounded-lg border border-indigo-200 bg-white font-mono text-xs font-semibold" />
+                    <button type="button" data-pp-reset-gen="${esc(u.id)}" class="px-2.5 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold cursor-pointer">New</button>
+                    <button type="button" data-pp-reset-copy="${esc(u.id)}" class="px-2.5 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold cursor-pointer">Copy</button>
+                  </div>
+                  <div class="flex items-center justify-end gap-2">
+                    <button type="button" data-pp-reset-cancel="${esc(u.id)}" class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-[11px] font-semibold cursor-pointer">Cancel</button>
+                    <button type="button" data-pp-reset-save="${esc(u.id)}" class="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold cursor-pointer">Save Reset</button>
+                  </div>
+                </div>` : ''}
+            </article>`;
+        }).join('')}
+      </div>`;
+  }
 
   function buildTeamAccessInnerHtml(db) {
     const ac = ensureAccessControl(db);
     const hasKey = getMasterKeyActive();
+    const canEditMainAdmin = !ppIsNamedUser();
     const people = typeof window !== 'undefined' && typeof window.ppGetPeopleDirectory === 'function'
       ? window.ppGetPeopleDirectory()
       : (Array.isArray(db?.peopleDirectory) ? db.peopleDirectory : []);
     const existingNames = new Set(ac.users.map(u => u.name.toLowerCase()));
     const availablePeople = people.filter(p => p && p.name && !existingNames.has(p.name.toLowerCase()));
 
-    const rowsHtml = ac.users.length === 0
-      ? `<tr><td colspan="4" class="py-6 text-center text-slate-400">No team user logins created yet. Add an owner or lead above to grant tailored access.</td></tr>`
-      : ac.users.map(u => {
-          const perms = normalizeUserPermissions(u.permissions);
-          const isResetting = pendingResetUserId === u.id;
-          const statusChip = u.needsAdminKeyReset
-            ? '<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold">Key Reset Needed</span>'
-            : (u.mustChangePassword
-                ? '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">Temp Password</span>'
-                : '<span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">Personal Key Active</span>');
-
-          return `
-            <tr data-pp-user-row="${esc(u.id)}">
-              <td>
-                <div class="flex items-center gap-2.5">
-                  <span class="pp-auth-avatar">${esc(getInitials(u.name))}</span>
-                  <div class="min-w-0">
-                    <div class="font-bold text-slate-900 flex flex-wrap items-center gap-1.5">
-                      <span>${esc(u.name)}</span>
-                      ${statusChip}
-                    </div>
-                    <div class="text-[11px] text-slate-500">${esc(u.roleTitle || 'Team Member')}</div>
-                  </div>
-                </div>
-              </td>
-              <td>
-                <div class="flex flex-wrap gap-1">
-                  ${ALL_TABS.map(t => `
-                    <button type="button" data-pp-toggle-tab="${t}" data-pp-uid="${esc(u.id)}"
-                      class="pp-perm-pill ${perms.tabs[t] ? 'is-on' : ''}"
-                      title="Toggle access to ${TAB_META[t].label}">
-                      ${perms.tabs[t] ? '&#10003;' : '&times;'} ${TAB_META[t].short}
-                    </button>`).join('')}
-                </div>
-              </td>
-              <td>
-                <button type="button" data-pp-toggle-fin="${esc(u.id)}"
-                  class="pp-perm-pill is-fin ${perms.finance ? 'is-on' : ''}"
-                  title="Toggle access to Day Rates, Project Costs & Finance Vault">
-                  ${perms.finance ? '&#10003; Finance ON' : 'Restricted'}
-                </button>
-              </td>
-              <td style="text-align:right;white-space:nowrap">
-                <div class="inline-flex items-center gap-1.5">
-                  <button type="button" data-pp-reset-open="${esc(u.id)}" class="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-700 text-[11px] font-semibold cursor-pointer">Reset Pw</button>
-                  <button type="button" data-pp-delete-user="${esc(u.id)}" class="px-2 py-1 rounded-lg text-rose-600 hover:bg-rose-50 text-[11px] font-semibold cursor-pointer">Remove</button>
-                </div>
-              </td>
-            </tr>
-            ${isResetting ? `
-            <tr>
-              <td colspan="4" class="bg-indigo-50/50">
-                <div class="flex flex-wrap items-center gap-2 py-1">
-                  <span class="text-[11px] font-bold text-indigo-900">New temp password for ${esc(u.name)}:</span>
-                  <input type="text" data-pp-reset-input="${esc(u.id)}" value="${esc(generateTempPassword())}" class="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-white font-mono text-xs font-semibold w-44" />
-                  <button type="button" data-pp-reset-gen="${esc(u.id)}" class="px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold cursor-pointer">Generate</button>
-                  <button type="button" data-pp-reset-save="${esc(u.id)}" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold cursor-pointer">Save Reset</button>
-                  <button type="button" data-pp-reset-cancel="${esc(u.id)}" class="px-2 py-1.5 rounded-lg text-slate-500 hover:underline text-[11px] font-semibold cursor-pointer">Cancel</button>
-                </div>
-              </td>
-            </tr>` : ''}`;
-        }).join('');
-
     return `
       <div class="space-y-4 text-xs">
         <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          <div class="min-w-0 flex-1">
             <h3 class="text-sm font-extrabold text-slate-900">Team Users, Login &amp; Access Permissions</h3>
             <p class="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-              Each user sets their own password to internally unlock your Administrator encryption key (never shown). Control which tabs and financial data each member can see.
+              Each user sets their own password to internally unlock your Administrator encryption key (never shown). Control which tabs, financial data, and Admin rights each member receives.
             </p>
           </div>
-          <div class="flex items-center gap-1.5">
-            <label for="ppAdminNameInput" class="text-[11px] font-semibold text-slate-500">Admin Name:</label>
-            <input id="ppAdminNameInput" type="text" value="${esc(ac.adminName)}" class="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold w-36" />
-          </div>
+          ${canEditMainAdmin ? `
+            <div class="w-full sm:w-auto space-y-1">
+              <div class="text-[11px] font-semibold text-slate-500">Main Admin Display Name</div>
+              <div class="pp-pw-input-row">
+                <input type="text" data-pp-admin-name-input aria-label="Main Administrator display name" value="${esc(ac.adminName)}" class="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-semibold sm:w-36" />
+                ${hasKey ? `<button type="button" data-pp-open-change-admin-pw class="px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold cursor-pointer whitespace-nowrap">Change Admin Pw</button>` : ''}
+              </div>
+            </div>` : ''}
         </div>
 
         ${!hasKey ? `
           <div class="p-3.5 rounded-xl border border-amber-200 bg-amber-50/80 text-amber-900 flex flex-wrap items-center justify-between gap-3">
             <div class="space-y-0.5">
               <div class="font-bold">Step 1: Activate Administrator Encryption Password</div>
-              <div class="text-[11px]">Set your Administrator password first so each team user's password can securely wrap and unlock it.</div>
+              <div class="text-[11px]">Set your Main Administrator password first so each team user's password can securely wrap and unlock it.</div>
             </div>
             <button type="button" data-pp-open-admin-enc class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold cursor-pointer shrink-0">Set Admin Password</button>
           </div>
@@ -820,54 +1471,205 @@
               </div>
               <div class="${availablePeople.length > 0 ? 'sm:col-span-4' : 'sm:col-span-7'}">
                 <label class="block text-[11px] font-semibold text-slate-600 mb-1">Initial Temporary Password (min 8 chars)</label>
-                <div class="flex items-center gap-1">
-                  <input type="text" data-pp-new-pw value="${esc(generateTempPassword())}" class="flex-1 min-w-0 px-2.5 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs font-semibold" />
-                  <button type="button" data-pp-gen-pw title="Generate random temporary password" class="px-2 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-semibold cursor-pointer">New</button>
-                  <button type="button" data-pp-copy-pw title="Copy temporary password" class="px-2 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-semibold cursor-pointer">Copy</button>
+                <div class="pp-pw-input-row">
+                  <input type="text" data-pp-new-pw value="${esc(generateTempPassword())}" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs font-semibold" />
+                  <button type="button" data-pp-gen-pw title="Generate random temporary password" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-semibold cursor-pointer">New</button>
+                  <button type="button" data-pp-copy-pw title="Copy temporary password" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-[11px] font-semibold cursor-pointer">Copy</button>
                 </div>
               </div>
             </div>
 
-            <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-[11px] font-semibold text-slate-500 mr-1">Initial Access:</span>
-                <label class="pp-perm-pill is-on"><input type="checkbox" data-pp-new-tab="matrix" checked class="sr-only" /><span>Roadmap</span></label>
-                <label class="pp-perm-pill is-on"><input type="checkbox" data-pp-new-tab="health" checked class="sr-only" /><span>Health</span></label>
-                <label class="pp-perm-pill"><input type="checkbox" data-pp-new-tab="data" class="sr-only" /><span>Setup</span></label>
-                <label class="pp-perm-pill"><input type="checkbox" data-pp-new-tab="sync" class="sr-only" /><span>Sync</span></label>
-                <label class="pp-perm-pill is-fin"><input type="checkbox" data-pp-new-fin class="sr-only" /><span>Financial Data</span></label>
+            <div class="space-y-2 pt-1">
+              <div class="pp-perm-group-label">Initial Permissions</div>
+              <div class="pp-perm-pills-row">
+                <button type="button" data-pp-new-tab="matrix" aria-pressed="true" class="pp-perm-pill is-on">&#10003; Roadmap</button>
+                <button type="button" data-pp-new-tab="health" aria-pressed="true" class="pp-perm-pill is-on">&#10003; Health</button>
+                <button type="button" data-pp-new-tab="data" aria-pressed="false" class="pp-perm-pill">&times; Setup</button>
+                <button type="button" data-pp-new-tab="sync" aria-pressed="false" class="pp-perm-pill">&times; Sync</button>
+                <button type="button" data-pp-new-fin aria-pressed="false" class="pp-perm-pill is-fin">&times; Financial Data</button>
+                <button type="button" data-pp-new-admin aria-pressed="false" class="pp-perm-pill is-admin-pill">Grant Admin</button>
               </div>
-              <button type="submit" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition cursor-pointer">+ Add User Login</button>
+              <div data-pp-new-admin-hint class="hidden text-[10.5px] font-semibold text-emerald-700">
+                Admin Rights automatically grants full access to all tabs, Financial Data, and Team Access Manager.
+              </div>
             </div>
-            <label class="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
-              <input type="checkbox" data-pp-new-must-change checked class="rounded text-indigo-600" />
-              <span>Prompt user to choose their own personal password on first sign-in</span>
-            </label>
+
+            <div class="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+              <label class="inline-flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
+                <input type="checkbox" data-pp-new-must-change checked class="rounded text-indigo-600" />
+                <span>Prompt user to choose their personal password on first sign-in</span>
+              </label>
+              <button type="submit" class="w-full sm:w-auto px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition cursor-pointer">+ Add User Login</button>
+            </div>
           </form>
         `}
 
-        <div class="overflow-x-auto">
-          <table class="pp-access-table">
-            <thead>
-              <tr>
-                <th>User Account</th>
-                <th>Allowed Tabs</th>
-                <th>Financial Data</th>
-                <th style="text-align:right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        </div>
+        <div data-pp-users-list>${buildTeamUsersListHtml(db)}</div>
       </div>`;
   }
 
-  function wireTeamAccessContainer(container, onRerender) {
+  function wireTeamUsersListEvents(listHost, onUsersChanged) {
+    if (!listHost) return;
+    const db = getDb();
+    const ac = ensureAccessControl(db);
+
+    listHost.querySelectorAll('[data-pp-toggle-tab]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-uid');
+        const tabKey = btn.getAttribute('data-pp-toggle-tab');
+        const user = ac.users.find(u => u.id === uidVal);
+        if (!user || user.isAdmin) return;
+        const perms = normalizeUserPermissions(user.permissions);
+        const nextVal = !perms.tabs[tabKey];
+        const enabledCount = ALL_TABS.filter(t => (t === tabKey ? nextVal : perms.tabs[t])).length;
+        if (enabledCount === 0) {
+          toast('At least one workspace tab must remain enabled.', 'warning');
+          return;
+        }
+        perms.tabs[tabKey] = nextVal;
+        user.permissions = perms;
+        user.updatedAt = new Date().toISOString();
+        persistDbChanges();
+        onUsersChanged();
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-toggle-fin]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-toggle-fin');
+        const user = ac.users.find(u => u.id === uidVal);
+        if (!user || user.isAdmin) return;
+        const perms = normalizeUserPermissions(user.permissions);
+        perms.finance = !perms.finance;
+        user.permissions = perms;
+        user.updatedAt = new Date().toISOString();
+        persistDbChanges();
+        onUsersChanged();
+        toast(`${user.name}: Financial data ${perms.finance ? 'enabled' : 'restricted'}.`, 'info');
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-toggle-admin]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-toggle-admin');
+        const user = ac.users.find(u => u.id === uidVal);
+        if (!user) return;
+        if (ppIsNamedUser() && ppAuthSession.userId === user.id) {
+          toast('You cannot revoke your own Admin rights while signed in.', 'warning');
+          return;
+        }
+        user.isAdmin = !Boolean(user.isAdmin);
+        user.updatedAt = new Date().toISOString();
+        if (typeof recordChange === 'function') {
+          recordChange('Access', `${user.isAdmin ? 'Granted' : 'Revoked'} Administrator rights for "${user.name}"`);
+        }
+        persistDbChanges();
+        onUsersChanged();
+        toast(
+          user.isAdmin
+            ? `Granted Administrator rights to "${user.name}".`
+            : `Revoked Administrator rights from "${user.name}". Custom tab & finance permissions restored.`,
+          'info'
+        );
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-reset-open]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        if (!getMasterKeyActive()) {
+          toast('Enable Administrator encryption first before resetting passwords.', 'warning');
+          return;
+        }
+        pendingResetUserId = btn.getAttribute('data-pp-reset-open') || '';
+        onUsersChanged();
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-reset-cancel]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        pendingResetUserId = '';
+        onUsersChanged();
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-reset-gen]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-reset-gen');
+        const inp = listHost.querySelector(`[data-pp-reset-input="${uidVal}"]`);
+        if (inp) inp.value = generateTempPassword();
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-reset-copy]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-reset-copy');
+        const inp = listHost.querySelector(`[data-pp-reset-input="${uidVal}"]`);
+        const txt = inp?.value || '';
+        if (!txt) return;
+        try {
+          await navigator.clipboard.writeText(txt);
+          toast('Temporary password copied to clipboard.', 'success');
+        } catch (_e) {
+          inp?.select();
+          toast('Temporary password selected — press Ctrl+C to copy.', 'info');
+        }
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-reset-save]').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-reset-save');
+        const inp = listHost.querySelector(`[data-pp-reset-input="${uidVal}"]`);
+        const nextTemp = (inp?.value || '').trim();
+        try {
+          const user = await adminResetUserPassword(uidVal, nextTemp, true);
+          pendingResetUserId = '';
+          toast(`Password reset for "${user.name}". They will choose a personal password on next login.`, 'success');
+          onUsersChanged();
+        } catch (err) {
+          toast(err?.message || 'Password reset failed.', 'error');
+        }
+      });
+    });
+
+    listHost.querySelectorAll('[data-pp-delete-user]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const uidVal = btn.getAttribute('data-pp-delete-user');
+        if (ppIsNamedUser() && ppAuthSession.userId === uidVal) {
+          toast('Cannot remove your currently signed-in account.', 'warning');
+          return;
+        }
+        const target = ac.users.find(u => u.id === uidVal);
+        if (!target) return;
+        ac.users = ac.users.filter(u => u.id !== uidVal);
+        if (pendingResetUserId === uidVal) pendingResetUserId = '';
+        if (typeof recordChange === 'function') {
+          recordChange('Access', `Removed user login "${target.name}"`);
+        }
+        persistDbChanges();
+        onUsersChanged();
+        ppSyncAuthChromeUI();
+        ppRefreshSyncHubUI();
+        toast(`Removed user login for "${target.name}".`, 'info');
+      });
+    });
+  }
+
+  function wireTeamAccessContainer(container, onFullRerender, onUsersOnlyRerender) {
     if (!container) return;
     const db = getDb();
     const ac = ensureAccessControl(db);
 
-    container.querySelector('#ppAdminNameInput')?.addEventListener('change', (ev) => {
+    container.querySelector('[data-pp-admin-name-input]')?.addEventListener('change', (ev) => {
       const next = String(ev.target.value || '').trim() || 'Administrator';
       ac.adminName = next;
       if (ppAuthSession.mode === 'admin') {
@@ -883,12 +1685,79 @@
       if (typeof openSyncEncryptionDialog === 'function') openSyncEncryptionDialog();
     });
 
+    container.querySelector('[data-pp-open-change-admin-pw]')?.addEventListener('click', () => {
+      ppOpenChangeAdminPasswordModal();
+    });
+
     const form = container.querySelector('[data-pp-add-user-form]');
     if (form) {
       const pickSel = form.querySelector('[data-pp-pick-person]');
       const nameInp = form.querySelector('[data-pp-new-name]');
       const pwInp = form.querySelector('[data-pp-new-pw]');
+      const finBtn = form.querySelector('[data-pp-new-fin]');
+      const adminBtn = form.querySelector('[data-pp-new-admin]');
+      const adminHint = form.querySelector('[data-pp-new-admin-hint]');
+      const tabBtns = Array.from(form.querySelectorAll('[data-pp-new-tab]'));
       let pickedRole = '';
+
+      const newTabsState = { matrix: true, health: true, data: false, sync: false };
+      let newFinState = false;
+      let newAdminState = false;
+
+      const syncNewPermButtons = () => {
+        tabBtns.forEach(btn => {
+          const t = btn.getAttribute('data-pp-new-tab');
+          const active = newAdminState || Boolean(newTabsState[t]);
+          btn.classList.toggle('is-on', active);
+          btn.setAttribute('aria-pressed', String(active));
+          btn.disabled = newAdminState;
+          btn.innerHTML = `${active ? '&#10003;' : '&times;'} ${TAB_META[t].short}`;
+        });
+        if (finBtn) {
+          const active = newAdminState || newFinState;
+          finBtn.classList.toggle('is-on', active);
+          finBtn.setAttribute('aria-pressed', String(active));
+          finBtn.disabled = newAdminState;
+          finBtn.innerHTML = `${active ? '&#10003;' : '&times;'} Financial Data`;
+        }
+        if (adminBtn) {
+          adminBtn.classList.toggle('is-on', newAdminState);
+          adminBtn.setAttribute('aria-pressed', String(newAdminState));
+          adminBtn.innerHTML = newAdminState ? '&#9733; Admin Rights' : 'Grant Admin';
+        }
+        if (adminHint) adminHint.classList.toggle('hidden', !newAdminState);
+      };
+
+      tabBtns.forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          if (newAdminState) return;
+          const t = btn.getAttribute('data-pp-new-tab');
+          const nextVal = !newTabsState[t];
+          const enabledCount = ALL_TABS.filter(k => (k === t ? nextVal : newTabsState[k])).length;
+          if (enabledCount === 0) {
+            toast('Select at least one workspace tab.', 'warning');
+            return;
+          }
+          newTabsState[t] = nextVal;
+          syncNewPermButtons();
+        });
+      });
+
+      finBtn?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        if (newAdminState) return;
+        newFinState = !newFinState;
+        syncNewPermButtons();
+      });
+
+      adminBtn?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        newAdminState = !newAdminState;
+        syncNewPermButtons();
+      });
+
+      syncNewPermButtons();
 
       pickSel?.addEventListener('change', () => {
         const opt = pickSel.options[pickSel.selectedIndex];
@@ -916,36 +1785,22 @@
         }
       });
 
-      form.querySelectorAll('label.pp-perm-pill input[type="checkbox"]').forEach(cb => {
-        cb.addEventListener('change', () => {
-          if (typeof cb.closest === 'function') {
-            cb.closest('label.pp-perm-pill')?.classList.toggle('is-on', cb.checked);
-          }
-        });
-      });
-
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const nm = (nameInp?.value || '').trim();
         const pw = (pwInp?.value || '').trim();
-        const tabs = {
-          matrix: Boolean(form.querySelector('[data-pp-new-tab="matrix"]')?.checked),
-          health: Boolean(form.querySelector('[data-pp-new-tab="health"]')?.checked),
-          data: Boolean(form.querySelector('[data-pp-new-tab="data"]')?.checked),
-          sync: Boolean(form.querySelector('[data-pp-new-tab="sync"]')?.checked),
-        };
-        const finance = Boolean(form.querySelector('[data-pp-new-fin]')?.checked);
         const mustChangePassword = Boolean(form.querySelector('[data-pp-new-must-change]')?.checked);
         try {
           await createOrUpdateUserAccount({
             name: nm,
-            roleTitle: pickedRole || 'Team Member',
-            permissions: { tabs, finance },
+            roleTitle: pickedRole || (newAdminState ? 'Administrator' : 'Team Member'),
+            isAdmin: newAdminState,
+            permissions: { tabs: { ...newTabsState }, finance: newFinState },
             tempPassword: pw,
             mustChangePassword,
           });
           toast(`Created login for "${nm}". Share their temporary password securely.`, 'success');
-          onRerender();
+          onFullRerender();
           ppSyncAuthChromeUI();
           ppRefreshSyncHubUI();
         } catch (err) {
@@ -954,100 +1809,17 @@
       });
     }
 
-    container.querySelectorAll('[data-pp-toggle-tab]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const uidVal = btn.getAttribute('data-pp-uid');
-        const tabKey = btn.getAttribute('data-pp-toggle-tab');
-        const user = ac.users.find(u => u.id === uidVal);
-        if (!user) return;
-        const perms = normalizeUserPermissions(user.permissions);
-        const nextVal = !perms.tabs[tabKey];
-        const enabledCount = ALL_TABS.filter(t => (t === tabKey ? nextVal : perms.tabs[t])).length;
-        if (enabledCount === 0) {
-          toast('At least one workspace tab must remain enabled.', 'warning');
-          return;
-        }
-        perms.tabs[tabKey] = nextVal;
-        user.permissions = perms;
-        user.updatedAt = new Date().toISOString();
-        persistDbChanges();
-        onRerender();
-      });
-    });
+    const listHost = container.querySelector('[data-pp-users-list]');
+    wireTeamUsersListEvents(listHost, onUsersOnlyRerender);
+  }
 
-    container.querySelectorAll('[data-pp-toggle-fin]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const uidVal = btn.getAttribute('data-pp-toggle-fin');
-        const user = ac.users.find(u => u.id === uidVal);
-        if (!user) return;
-        const perms = normalizeUserPermissions(user.permissions);
-        perms.finance = !perms.finance;
-        user.permissions = perms;
-        user.updatedAt = new Date().toISOString();
-        persistDbChanges();
-        onRerender();
-        toast(`${user.name}: Financial data ${perms.finance ? 'enabled' : 'restricted'}.`, 'info');
-      });
-    });
-
-    container.querySelectorAll('[data-pp-reset-open]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (!getMasterKeyActive()) {
-          toast('Enable Administrator encryption first before resetting passwords.', 'warning');
-          return;
-        }
-        pendingResetUserId = btn.getAttribute('data-pp-reset-open') || '';
-        onRerender();
-      });
-    });
-
-    container.querySelectorAll('[data-pp-reset-cancel]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        pendingResetUserId = '';
-        onRerender();
-      });
-    });
-
-    container.querySelectorAll('[data-pp-reset-gen]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const uidVal = btn.getAttribute('data-pp-reset-gen');
-        const inp = container.querySelector(`[data-pp-reset-input="${uidVal}"]`);
-        if (inp) inp.value = generateTempPassword();
-      });
-    });
-
-    container.querySelectorAll('[data-pp-reset-save]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const uidVal = btn.getAttribute('data-pp-reset-save');
-        const inp = container.querySelector(`[data-pp-reset-input="${uidVal}"]`);
-        const nextTemp = (inp?.value || '').trim();
-        try {
-          const user = await adminResetUserPassword(uidVal, nextTemp, true);
-          pendingResetUserId = '';
-          toast(`Password reset for "${user.name}". They will choose a personal password on next login.`, 'success');
-          onRerender();
-        } catch (err) {
-          toast(err?.message || 'Password reset failed.', 'error');
-        }
-      });
-    });
-
-    container.querySelectorAll('[data-pp-delete-user]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const uidVal = btn.getAttribute('data-pp-delete-user');
-        const target = ac.users.find(u => u.id === uidVal);
-        if (!target) return;
-        ac.users = ac.users.filter(u => u.id !== uidVal);
-        if (pendingResetUserId === uidVal) pendingResetUserId = '';
-        if (typeof recordChange === 'function') {
-          recordChange('Access', `Removed user login "${target.name}"`);
-        }
-        persistDbChanges();
-        onRerender();
-        ppSyncAuthChromeUI();
-        ppRefreshSyncHubUI();
-        toast(`Removed user login for "${target.name}".`, 'info');
-      });
+  function refreshUsersListInContainer(container, onAfterChange) {
+    if (!container) return;
+    const listHost = container.querySelector('[data-pp-users-list]');
+    if (!listHost) return;
+    preserveScrollPosition(() => {
+      listHost.innerHTML = buildTeamUsersListHtml(getDb());
+      wireTeamUsersListEvents(listHost, onAfterChange);
     });
   }
 
@@ -1066,25 +1838,30 @@
       card.setAttribute('aria-label', 'Team Users and Access Permissions');
       dataTab.appendChild(card);
     }
-    const db = getDb();
-    card.innerHTML = buildTeamAccessInnerHtml(db);
-    wireTeamAccessContainer(card, renderAdminAccessCardInSetup);
+    const rerenderUsersOnly = () => {
+      refreshUsersListInContainer(card, rerenderUsersOnly);
+    };
+    preserveScrollPosition(() => {
+      card.innerHTML = buildTeamAccessInnerHtml(getDb());
+      wireTeamAccessContainer(card, renderAdminAccessCardInSetup, rerenderUsersOnly);
+    });
   }
 
   function ppOpenTeamAccessModal() {
     if (!ppHasAdminAccess()) {
-      toast('Only the Administrator can manage team users and permissions.', 'warning');
+      toast('Only an Administrator can manage team users and permissions.', 'warning');
       return;
     }
     const db = getDb();
+    const roleLabel = ppIsDelegatedAdmin() ? 'Delegated Admin' : 'Main Administrator';
     showModal(`
-      <div class="p-5 space-y-4 text-xs">
-        <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
-          <div class="flex items-center gap-2">
-            <span class="pp-role-badge pp-role-admin">Administrator</span>
-            <h3 id="modalTitle" class="text-base font-extrabold text-slate-900">Team Access Manager</h3>
+      <div class="p-4 sm:p-5 space-y-4 text-xs">
+        <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-100 pp-modal-header-row">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="pp-role-badge pp-role-admin shrink-0">${esc(roleLabel)}</span>
+            <h3 id="modalTitle" class="text-base font-extrabold text-slate-900 truncate">Team Access Manager</h3>
           </div>
-          <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold cursor-pointer">&times;</button>
+          <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0 cursor-pointer">&times;</button>
         </div>
         <div id="ppTeamAccessModalBody">${buildTeamAccessInnerHtml(db)}</div>
         <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
@@ -1093,13 +1870,29 @@
       </div>`, 'max-w-3xl');
 
     const body = document.getElementById('ppTeamAccessModalBody');
-    const rerenderModal = () => {
-      if (!body) return;
-      body.innerHTML = buildTeamAccessInnerHtml(getDb());
-      wireTeamAccessContainer(body, rerenderModal);
-      renderAdminAccessCardInSetup();
+    const syncSetupUsersIfPresent = () => {
+      const setupCard = document.getElementById('ppAdminAccessCard');
+      if (setupCard) {
+        const listHost = setupCard.querySelector('[data-pp-users-list]');
+        if (listHost) {
+          listHost.innerHTML = buildTeamUsersListHtml(getDb());
+          wireTeamUsersListEvents(listHost, renderAdminAccessCardInSetup);
+        }
+      }
     };
-    wireTeamAccessContainer(body, rerenderModal);
+    const rerenderModalUsersOnly = () => {
+      refreshUsersListInContainer(body, rerenderModalUsersOnly);
+      syncSetupUsersIfPresent();
+    };
+    const rerenderModalFull = () => {
+      if (!body) return;
+      preserveScrollPosition(() => {
+        body.innerHTML = buildTeamAccessInnerHtml(getDb());
+        wireTeamAccessContainer(body, rerenderModalFull, rerenderModalUsersOnly);
+      });
+      syncSetupUsersIfPresent();
+    };
+    wireTeamAccessContainer(body, rerenderModalFull, rerenderModalUsersOnly);
   }
 
   /* ==================== MODERNIZED ACCOUNT & USER SWITCHER MODAL ==================== */
@@ -1111,8 +1904,7 @@
     const ac = ensureAccessControl(db);
     const hasEncOrUsers = getMasterKeyActive() || ac.users.length > 0 || ppAuthSession.mode !== 'open';
 
-    // Preserve 100% legacy quick-user switcher UX (and test.mjs compatibility) when auth is not yet configured,
-    // while giving it a crisp modern layout and a 1-click Admin Security setup bridge.
+    // Preserve legacy quick-user switcher UX (and test.mjs compatibility) when auth is not yet configured
     if (!hasEncOrUsers) {
       const current = (typeof ui !== 'undefined' ? ui.userName : 'Project Mgr').trim() || 'Project Mgr';
       const suggestions = typeof getSuggestedTeamUsers === 'function' ? getSuggestedTeamUsers() : [current];
@@ -1137,21 +1929,21 @@
       showModal(`
         <div class="p-5 space-y-4 text-xs">
           <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
+          <div class="flex items-center justify-between pp-modal-header-row">
+            <div class="flex items-center gap-3 min-w-0">
               <span class="pp-auth-avatar">${esc(getInitials(current))}</span>
-              <div>
+              <div class="min-w-0">
                 <h3 id="modalTitle" class="text-base font-extrabold text-slate-900">Account &amp; Sign In</h3>
                 <p class="text-[11px] text-slate-500">Shown in Change Log, Snapshots &amp; Sync metadata</p>
               </div>
             </div>
-            <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
+            <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0 cursor-pointer">&times;</button>
           </div>
 
           <form onsubmit="event.preventDefault(); saveUserSwitcherModal();" class="space-y-3">
             <div>
               <label for="mUserNameInput" class="block font-semibold text-slate-700 mb-1">Display Name / Role</label>
-              <div class="flex items-center gap-2">
+              <div class="pp-pw-input-row">
                 <input id="mUserNameInput" type="text" value="${esc(current)}" placeholder="e.g., Alex (PM)"
                   class="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 font-semibold text-slate-900" />
                 <button type="submit" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition cursor-pointer shrink-0">Apply</button>
@@ -1174,7 +1966,7 @@
               <span class="pp-role-badge pp-role-admin">Admin Setup</span>
             </div>
             <p class="text-[11px] text-emerald-800 leading-relaxed">
-              Set an Administrator password to enable AES-256-GCM encryption, add personal team logins, and control tab &amp; financial permissions.
+              Set an Administrator password to enable AES-256-GCM encryption, add personal team logins, and control tab, financial &amp; Admin permissions.
             </p>
             <div class="flex flex-wrap gap-2 pt-0.5">
               <button type="button" onclick="closeModal(); openSyncEncryptionDialog();" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer">Set Admin Password</button>
@@ -1187,7 +1979,14 @@
 
     // Authenticated / Configured Security Account Hub
     const isAdmin = ppHasAdminAccess();
-    const activeName = ppIsStandardUser() ? ppAuthSession.userName : (ac.adminName || (typeof ui !== 'undefined' ? ui.userName : 'Administrator'));
+    const isMainAdmin = !ppIsNamedUser();
+    const isDelegated = ppIsDelegatedAdmin();
+    const activeName = ppIsNamedUser()
+      ? ppAuthSession.userName
+      : (ac.adminName || (typeof ui !== 'undefined' ? ui.userName : 'Administrator'));
+    const roleChipText = isMainAdmin
+      ? 'Main Admin'
+      : (isDelegated ? 'Admin' : (ppAuthSession.roleTitle || 'Member'));
     const activeUsersCount = ac.users.filter(u => u && u.enabled !== false).length;
     const permChips = [
       ...ALL_TABS.filter(t => ppCanAccessTab(t)).map(t => `<span class="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">${TAB_META[t].short}</span>`),
@@ -1199,18 +1998,18 @@
     showModal(`
       <div class="p-5 space-y-4 text-xs">
         <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <span class="pp-auth-avatar ${isAdmin ? 'pp-auth-avatar-admin' : ''}">${isAdmin ? 'AD' : esc(getInitials(activeName))}</span>
-            <div>
-              <div class="flex items-center gap-2">
-                <h3 id="modalTitle" class="text-base font-extrabold text-slate-900">${esc(activeName)}</h3>
-                <span class="pp-role-badge ${isAdmin ? 'pp-role-admin' : 'pp-role-user'}">${isAdmin ? 'Administrator' : esc(ppAuthSession.roleTitle || 'Member')}</span>
+        <div class="flex items-start justify-between gap-3 pp-modal-header-row">
+          <div class="flex items-center gap-3 min-w-0">
+            <span class="pp-auth-avatar ${isAdmin ? 'pp-auth-avatar-admin' : ''}">${isMainAdmin ? 'AD' : esc(getInitials(activeName))}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h3 id="modalTitle" class="text-base font-extrabold text-slate-900 truncate">${esc(activeName)}</h3>
+                <span class="pp-role-badge ${isAdmin ? 'pp-role-admin' : 'pp-role-user'}">${esc(roleChipText)}</span>
               </div>
               <p class="text-[11px] text-slate-500 mt-0.5">${getMasterKeyActive() ? 'AES-256-GCM session active' : 'Encryption key locked'}</p>
             </div>
           </div>
-          <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold cursor-pointer">&times;</button>
+          <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0 cursor-pointer">&times;</button>
         </div>
 
         <div class="space-y-1.5">
@@ -1223,43 +2022,46 @@
             <button type="button" onclick="closeModal(); ppOpenTeamAccessModal();"
               class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 text-slate-800 font-semibold transition cursor-pointer">
               <span>Manage Team Users &amp; Permissions</span>
-              <span class="text-[11px] font-bold text-indigo-600">${activeUsersCount} user${activeUsersCount === 1 ? '' : 's'} &rarr;</span>
-            </button>
+              <span class="text-[11px] font-bold text-indigo-600 shrink-0">${activeUsersCount} user${activeUsersCount === 1 ? '' : 's'} &rarr;</span>
+            </button>` : ''}
+
+          ${isMainAdmin ? `
+            ${getMasterKeyActive() ? `
+              <button type="button" onclick="closeModal(); ppOpenChangeAdminPasswordModal();"
+                class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 hover:border-emerald-300 text-emerald-900 font-semibold transition cursor-pointer">
+                <span>Change Main Administrator Password</span>
+                <span class="text-[11px] font-bold text-emerald-700 shrink-0">Update &rarr;</span>
+              </button>` : ''}
             <button type="button" onclick="closeModal(); openSyncEncryptionDialog();"
               class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-800 font-semibold transition cursor-pointer">
-              <span>Administrator Encryption Key &amp; Auto-Lock</span>
-              <span class="text-[11px] font-bold text-emerald-700">${getMasterKeyActive() ? 'Active' : 'Configure'}</span>
+              <span>Encryption Settings &amp; Auto-Lock</span>
+              <span class="text-[11px] font-bold text-emerald-700 shrink-0">${getMasterKeyActive() ? 'Active' : 'Configure'}</span>
             </button>
           ` : `
             <button type="button" onclick="closeModal(); ppOpenChangeMyPasswordModal(false);"
               class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 text-slate-800 font-semibold transition cursor-pointer">
               <span>Change My Personal Password</span>
-              <span class="text-[11px] font-bold text-indigo-600">Update &rarr;</span>
+              <span class="text-[11px] font-bold text-indigo-600 shrink-0">Update &rarr;</span>
             </button>
           `}
 
           <button type="button" onclick="closeModal(); ppOpenSwitchLoginModal();"
             class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-semibold transition cursor-pointer">
             <span>Switch Account / Sign In as Another User</span>
-            <span class="text-[11px] font-bold text-slate-500">Sign In &rarr;</span>
+            <span class="text-[11px] font-bold text-slate-500 shrink-0">Sign In &rarr;</span>
           </button>
 
-          ${getMasterKeyActive() ? `
+          ${getMasterKeyActive() || ppAuthSession.mode === 'admin' || ppAuthSession.mode === 'user' ? `
             <button type="button" id="ppModalLockSessionBtn"
               class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50/50 hover:bg-rose-50 text-rose-700 font-semibold transition cursor-pointer">
-              <span>Sign Out &amp; Lock Session</span>
-              <span class="text-[11px] font-bold">Lock</span>
+              <span>Sign Out &amp; Hide All Data</span>
+              <span class="text-[11px] font-bold shrink-0">Sign Out</span>
             </button>` : ''}
         </div>
       </div>`, 'max-w-md');
 
     document.getElementById('ppModalLockSessionBtn')?.addEventListener('click', () => {
-      if (typeof ppSyncPassphrase !== 'undefined') ppSyncPassphrase = '';
-      if (typeof resetPassphraseAutoLock === 'function') resetPassphraseAutoLock();
-      ppOnSessionLocked('manual');
-      if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
-      closeModal();
-      toast('Session locked. Encryption key cleared from memory.', 'info');
+      ppSignOutAndLockSession('manual');
     });
   }
 
@@ -1269,7 +2071,9 @@
     const db = getDb();
     const ac = ensureAccessControl(db);
     const isStd = ppIsStandardUser();
-    const isAdminAuth = ppAuthSession.mode === 'admin';
+    const isAdmin = ppHasAdminAccess();
+    const isMainAdmin = !ppIsNamedUser();
+    const isSignedInProtected = getMasterKeyActive() || ppAuthSession.mode === 'admin' || ppAuthSession.mode === 'user';
     const activeUsersCount = ac.users.filter(u => u && u.enabled !== false).length;
 
     const roleBadge = document.getElementById('headerMenuRoleBadge');
@@ -1277,8 +2081,11 @@
       if (isStd) {
         roleBadge.textContent = 'Member';
         roleBadge.className = 'pp-role-badge pp-role-user';
-      } else if (isAdminAuth || getMasterKeyActive()) {
+      } else if (ppIsDelegatedAdmin()) {
         roleBadge.textContent = 'Admin';
+        roleBadge.className = 'pp-role-badge pp-role-admin';
+      } else if (ppAuthSession.mode === 'admin' || getMasterKeyActive()) {
+        roleBadge.textContent = 'Main Admin';
         roleBadge.className = 'pp-role-badge pp-role-admin';
       } else {
         roleBadge.className = 'hidden pp-role-badge pp-role-admin';
@@ -1288,17 +2095,28 @@
     const manageBtn = document.getElementById('headerMenuManageUsersBtn');
     const manageCnt = document.getElementById('headerMenuUsersCount');
     if (manageBtn) {
-      manageBtn.classList.toggle('hidden', isStd);
+      manageBtn.classList.toggle('hidden', !isAdmin || ppIsSessionLocked());
       if (manageCnt) manageCnt.textContent = String(activeUsersCount);
     }
 
     const changePwBtn = document.getElementById('headerMenuChangePwBtn');
-    if (changePwBtn) changePwBtn.classList.toggle('hidden', !isStd);
+    const changePwLbl = document.getElementById('headerMenuChangePwLabel');
+    if (changePwBtn) {
+      const showChangePw = ppIsNamedUser() || (isMainAdmin && getMasterKeyActive());
+      changePwBtn.classList.toggle('hidden', !showChangePw);
+      if (changePwLbl) {
+        changePwLbl.textContent = ppIsNamedUser() ? 'Change My Password' : 'Change Admin Password';
+      }
+    }
+
+    const signOutBtn = document.getElementById('headerMenuSignOutBtn');
+    if (signOutBtn) {
+      signOutBtn.classList.toggle('hidden', !isSignedInProtected || ppIsSessionLocked());
+    }
 
     const encMenuBtn = document.getElementById('ppSyncEncMenuBtn');
-    if (encMenuBtn) encMenuBtn.classList.toggle('hidden', isStd);
+    if (encMenuBtn) encMenuBtn.classList.toggle('hidden', ppIsNamedUser());
 
-    // Prevent restricted non-admin users from bypassing tab/finance rules via Demo Mode
     const demoToggleBtn = document.getElementById('demoToggleBtn');
     if (demoToggleBtn) demoToggleBtn.classList.toggle('hidden', isStd);
   }
@@ -1307,7 +2125,8 @@
     const db = getDb();
     if (!db) return;
     const ac = ensureAccessControl(db);
-    const isStd = ppIsStandardUser();
+    const isAdmin = ppHasAdminAccess();
+    const isNamed = ppIsNamedUser();
     const encActive = getMasterKeyActive();
     const activeUsers = ac.users.filter(u => u && u.enabled !== false).length;
 
@@ -1332,12 +2151,14 @@
     const teamBtn = document.getElementById('syncHeroTeamBtn');
     if (authTitle && authSub) {
       const dotCls = encActive ? 'pp-status-dot-ok' : 'pp-status-dot-neutral';
-      const who = isStd
-        ? `${ppAuthSession.userName} (Member)`
-        : `${ac.adminName || 'Administrator'}${encActive ? ' (Admin)' : ''}`;
+      const who = isNamed
+        ? `${ppAuthSession.userName} (${ppIsDelegatedAdmin() ? 'Admin' : 'Member'})`
+        : `${ac.adminName || 'Administrator'}${encActive ? ' (Main Admin)' : ''}`;
       authTitle.innerHTML = `<span id="syncHeroAuthDot" class="pp-status-dot ${dotCls}" aria-hidden="true"></span><span class="truncate">${esc(who)}</span>`;
-      if (isStd) {
-        authSub.textContent = 'Signed in with personal password · Master AES-256-GCM key unlocked internally.';
+      if (isNamed) {
+        authSub.textContent = ppIsDelegatedAdmin()
+          ? 'Signed in with personal password · Delegated Administrator with full team & Finance access.'
+          : 'Signed in with personal password · Master AES-256-GCM key unlocked internally.';
       } else if (encActive) {
         authSub.textContent = `AES-256-GCM active · ${activeUsers} team login${activeUsers === 1 ? '' : 's'} configured.`;
       } else {
@@ -1345,11 +2166,11 @@
       }
     }
     if (encBtn) {
-      encBtn.classList.toggle('hidden', isStd);
+      encBtn.classList.toggle('hidden', isNamed);
       encBtn.textContent = encActive ? 'Admin Key' : 'Enable Encryption';
     }
     if (teamBtn) {
-      teamBtn.classList.toggle('hidden', isStd);
+      teamBtn.classList.toggle('hidden', !isAdmin);
       teamBtn.textContent = activeUsers > 0 ? `Team Users (${activeUsers})` : 'Team Users';
     }
 
@@ -1396,11 +2217,13 @@
     renderAll = function (...args) {
       const res = prevRenderAll.apply(this, args);
       ppSyncAuthChromeUI();
-      if (typeof ui !== 'undefined' && ui.activeTab === 'data') {
-        renderAdminAccessCardInSetup();
-      }
-      if (typeof ui !== 'undefined' && ui.activeTab === 'sync') {
-        ppRefreshSyncHubUI();
+      if (!ppIsSessionLocked()) {
+        if (typeof ui !== 'undefined' && ui.activeTab === 'data') {
+          renderAdminAccessCardInSetup();
+        }
+        if (typeof ui !== 'undefined' && ui.activeTab === 'sync') {
+          ppRefreshSyncHubUI();
+        }
       }
       return res;
     };
@@ -1410,13 +2233,19 @@
     const prevRenderDataTab = renderDataTab;
     renderDataTab = function (...args) {
       const res = prevRenderDataTab.apply(this, args);
-      renderAdminAccessCardInSetup();
+      if (!ppIsSessionLocked()) {
+        renderAdminAccessCardInSetup();
+      }
       return res;
     };
   }
 
   const exportsMap = {
     ppGetAuthSession,
+    ppIsSessionLocked,
+    ppIsMainAdmin,
+    ppIsDelegatedAdmin,
+    ppIsNamedUser,
     ppIsStandardUser,
     ppHasAdminAccess,
     ppCanAccessTab,
@@ -1425,9 +2254,14 @@
     ppApplyAuthenticatedSession,
     ppSyncAuthAfterDbLoad,
     ppOnSessionLocked,
+    ppSignOutAndLockSession,
+    ppUnlockFromLockedScreen,
     ppPromptEncryptedFileLogin,
     ppOpenSwitchLoginModal,
     ppCheckForcedPasswordChange,
+    ppOpenPasswordActionModal,
+    ppOpenChangeAdminPasswordModal,
+    ppChangeMainAdminPassword: changeMainAdminPassword,
     ppOpenChangeMyPasswordModal,
     ppOpenTeamAccessModal,
     ppSyncAuthChromeUI,
@@ -1445,10 +2279,12 @@
       createOrUpdateUserAccount,
       adminResetUserPassword,
       changeCurrentUserPassword,
+      changeMainAdminPassword,
       authenticateInMemoryAccount,
       normalizeUserPermissions,
       generateTempPassword,
       nativeOpenUserSwitcherModal,
+      getLockedState: () => ppLockedState,
     };
   }
 })();

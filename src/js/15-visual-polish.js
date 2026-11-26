@@ -162,7 +162,10 @@
           </svg>
           <span id="ppHeaderShieldLabel">Plain</span>`;
         btn.addEventListener('click', () => {
-          if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+          const isNamed = typeof ppIsNamedUser === 'function'
+            ? ppIsNamedUser()
+            : (typeof ppIsStandardUser === 'function' && ppIsStandardUser());
+          if (isNamed) {
             if (typeof openUserSwitcherModal === 'function') openUserSwitcherModal();
             return;
           }

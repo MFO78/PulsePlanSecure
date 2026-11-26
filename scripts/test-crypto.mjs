@@ -142,4 +142,45 @@ await assert.rejects(
   'Authenticated ciphertext must reject disabled user even with forged outer auth'
 );
 
-console.log('All 7 PulsePlanSecure AES-256-GCM & multi-user wrapped-key cryptography tests passed.');
+// 8. Delegated Admin (isAdmin) preserved in outer auth & decrypted DB, plus Main Admin password rotation
+const delegatedAdminSlot = await ppWrapMasterPassphrase(adminPass, 'PriyaAdmin#88', 'u_priya');
+const delegatedDb = JSON.parse(JSON.stringify(multiUserDb));
+delegatedDb.accessControl.users.push({
+  id: 'u_priya',
+  name: 'Priya Nair',
+  roleTitle: 'Engineering Director',
+  enabled: true,
+  isAdmin: true,
+  mustChangePassword: false,
+  permissions: { tabs: { matrix: true, health: true, data: true, sync: true }, finance: true },
+  keySlot: delegatedAdminSlot,
+});
+const delEnv = await encryptPulsePlanData(delegatedDb, adminPass);
+const outerPriya = delEnv.auth.users.find(u => u.id === 'u_priya');
+assert.equal(outerPriya?.isAdmin, true, 'Outer auth metadata exposes isAdmin display hint for delegated admin');
+const priyaRes = await ppDecryptWithUserCredentials(delEnv, 'u_priya', 'PriyaAdmin#88');
+assert.equal(priyaRes.authRole, 'user');
+assert.equal(priyaRes.userRecord.isAdmin, true, 'Authenticated inner DB confirms delegated Admin privilege');
+assert.equal(priyaRes.masterPass, adminPass);
+
+// Rotate Main Admin password -> old Admin password rejected, new Admin password succeeds
+const rotatedAdminPass = 'NewMainAdminPass#2027!';
+const rotatedDb = JSON.parse(JSON.stringify(delegatedDb));
+rotatedDb.accessControl.users.forEach(u => {
+  u.keySlot = null;
+  u.needsAdminKeyReset = true;
+  u.mustChangePassword = true;
+});
+const rotatedEnv = await encryptPulsePlanData(rotatedDb, rotatedAdminPass);
+assert.equal(rotatedEnv.auth, undefined, 'Scrubbed users awaiting key reset are omitted from outer auth until reset');
+await assert.rejects(
+  () => ppDecryptWithUserCredentials(rotatedEnv, '__ADMIN__', adminPass),
+  /Decryption failed/,
+  'Previous Main Administrator password must be rejected after rotation'
+);
+const rotatedRes = await ppDecryptWithUserCredentials(rotatedEnv, '__ADMIN__', rotatedAdminPass);
+assert.equal(rotatedRes.authRole, 'admin');
+assert.equal(rotatedRes.masterPass, rotatedAdminPass);
+assert.equal(JSON.parse(rotatedRes.plainJson).projects[0].code, 'NVA');
+
+console.log('All 8 PulsePlanSecure AES-256-GCM, multi-user wrapped-key & Admin rotation tests passed.');

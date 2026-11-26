@@ -150,6 +150,7 @@
           id: String(u.id),
           name: String(u.name),
           roleTitle: String(u.roleTitle || ''),
+          isAdmin: Boolean(u.isAdmin),
           mustChangePassword: Boolean(u.mustChangePassword),
           keySlot: {
             kdf: String(u.keySlot.kdf || 'PBKDF2-SHA256'),
@@ -277,6 +278,10 @@
       }
       if (ppSyncPassphrase && ppAutoLockMinutes > 0) {
         ppAutoLockTimer = setTimeout(() => {
+          if (typeof ppSignOutAndLockSession === 'function') {
+            ppSignOutAndLockSession('inactivity');
+            return;
+          }
           ppSyncPassphrase = '';
           if (typeof ppOnSessionLocked === 'function') ppOnSessionLocked('inactivity');
           updateSyncEncryptionBadges();
@@ -315,38 +320,61 @@
     }
 
     function openSyncEncryptionDialog(promptReason = '') {
-      if (!ppPassphraseResolver && typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+      const isNamedUser = typeof ppIsNamedUser === 'function'
+        ? ppIsNamedUser()
+        : (typeof ppIsStandardUser === 'function' && ppIsStandardUser());
+      if (!ppPassphraseResolver && isNamedUser) {
         if (typeof openUserSwitcherModal === 'function') openUserSwitcherModal();
-        else if (typeof showToast === 'function') showToast('Administrator access required to configure master encryption.', 'warning');
+        else if (typeof showToast === 'function') showToast('Only the Main Administrator can configure or rotate the master encryption key.', 'warning');
         return;
       }
       const dlg = document.getElementById('ppEncryptDialog');
       if (!dlg) return;
       const isDecryptPrompt = Boolean(ppPassphraseResolver);
+      const hasExistingKey = Boolean(ppSyncPassphrase);
+      const isChangingExisting = !isDecryptPrompt && hasExistingKey;
       const titleEl = document.getElementById('ppEncryptDialogTitle');
       if (titleEl) {
         titleEl.textContent = isDecryptPrompt
           ? 'Unlock Encrypted Database'
-          : 'Administrator Encryption Key (AES-256-GCM)';
+          : (isChangingExisting ? 'Main Administrator Key & Auto-Lock' : 'Administrator Encryption Key (AES-256-GCM)');
       }
       const reasonEl = document.getElementById('ppEncryptReason');
       if (reasonEl) {
-        reasonEl.textContent = promptReason || 'Set the Administrator master password. It encrypts synced .json files, backups, and the separate Finance Vault automatically. Team users unlock it internally with their own passwords.';
+        reasonEl.textContent = promptReason || (isChangingExisting
+          ? 'Change the Main Administrator password (verify your current password first) or update the inactivity auto-lock timeout.'
+          : 'Set the Administrator master password. It encrypts synced .json files, backups, and the separate Finance Vault automatically. Team users unlock it internally with their own passwords.');
       }
       const statusEl = document.getElementById('ppEncryptStatus');
       if (statusEl) {
         statusEl.textContent = '';
         statusEl.className = 'hidden text-xs rounded-xl px-3 py-2';
       }
+      const curWrap = document.getElementById('ppEncryptCurrentWrap');
+      const curEl = document.getElementById('ppEncryptCurrentPassphrase');
       const passEl = document.getElementById('ppEncryptPassphrase');
+      const passLbl = document.getElementById('ppEncryptPassLabel');
       const confEl = document.getElementById('ppEncryptPassphraseConfirm');
       const confWrap = document.getElementById('ppEncryptConfirmWrap');
       const disableBtn = document.getElementById('ppEncryptDisableBtn');
       const saveBtn = document.getElementById('ppEncryptSaveBtn');
       const userWarnEl = document.getElementById('ppEncryptUserWarn');
+      if (curWrap) curWrap.classList.toggle('hidden', !isChangingExisting);
+      if (curEl) {
+        curEl.value = '';
+        curEl.type = 'password';
+      }
       if (passEl) {
         passEl.value = '';
         passEl.type = 'password';
+        passEl.placeholder = isChangingExisting
+          ? 'Leave blank to keep password, or enter new (min 8 chars)...'
+          : 'Enter Administrator password...';
+      }
+      if (passLbl) {
+        passLbl.textContent = isChangingExisting
+          ? 'New Administrator Password (optional, min 8 chars)'
+          : 'Administrator Password (min 8 chars)';
       }
       if (confEl) {
         confEl.value = '';
@@ -355,16 +383,16 @@
       const eyeBtn = document.getElementById('ppEncryptEyeBtn');
       if (eyeBtn) eyeBtn.textContent = 'Show';
       if (confWrap) confWrap.classList.toggle('hidden', isDecryptPrompt);
-      if (disableBtn) disableBtn.classList.toggle('hidden', isDecryptPrompt || !ppSyncPassphrase);
-      if (saveBtn) saveBtn.textContent = isDecryptPrompt ? 'Decrypt & Open' : (ppSyncPassphrase ? 'Update Admin Password' : 'Enable Encryption');
+      if (disableBtn) disableBtn.classList.toggle('hidden', isDecryptPrompt || !hasExistingKey);
+      if (saveBtn) saveBtn.textContent = isDecryptPrompt ? 'Decrypt & Open' : (isChangingExisting ? 'Save Changes' : 'Enable Encryption');
 
       const curDb = ppGetCurrentDbRef();
       const existingUserCount = Array.isArray(curDb?.accessControl?.users) ? curDb.accessControl.users.filter(u => u && u.enabled !== false).length : 0;
       if (userWarnEl) {
-        const showWarn = !isDecryptPrompt && Boolean(ppSyncPassphrase) && existingUserCount > 0;
+        const showWarn = isChangingExisting && existingUserCount > 0;
         userWarnEl.classList.toggle('hidden', !showWarn);
         if (showWarn) {
-          userWarnEl.textContent = `Heads up: ${existingUserCount} team user account${existingUserCount === 1 ? '' : 's'} currently wrap your existing Admin key. Changing the Admin password requires resetting their temporary passwords in Team Access.`;
+          userWarnEl.textContent = `Heads up: ${existingUserCount} team user account${existingUserCount === 1 ? '' : 's'} currently wrap your existing Admin key. Changing the Main Admin password requires resetting their temporary passwords in Team Access.`;
         }
       }
 
@@ -373,7 +401,8 @@
       if (timeoutSel) timeoutSel.value = String(ppAutoLockMinutes);
       if (typeof dlg.showModal === 'function') dlg.showModal();
       else dlg.setAttribute('open', 'open');
-      if (passEl) passEl.focus();
+      if (isChangingExisting && curEl) curEl.focus();
+      else if (passEl) passEl.focus();
     }
 
     function promptForDecryptionPassphrase() {
@@ -726,12 +755,16 @@
               <button type="button" id="ppEncryptCloseBtn" aria-label="Close encryption dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold shrink-0">&times;</button>
             </header>
             <div id="ppEncryptUserWarn" class="hidden text-[11px] leading-relaxed rounded-xl px-3 py-2 bg-amber-50 text-amber-900 border border-amber-200"></div>
+            <div id="ppEncryptCurrentWrap" class="hidden space-y-1.5">
+              <label for="ppEncryptCurrentPassphrase" class="block font-semibold text-slate-700">Current Administrator Password (required to change password)</label>
+              <input id="ppEncryptCurrentPassphrase" type="password" autocomplete="current-password" placeholder="Verify current Administrator password..." class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
+            </div>
             <div class="space-y-1.5">
               <div class="flex items-center justify-between">
-                <label for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Administrator Password (min 8 chars)</label>
+                <label id="ppEncryptPassLabel" for="ppEncryptPassphrase" class="block font-semibold text-slate-700">Administrator Password (min 8 chars)</label>
                 <span id="ppStrengthLabel" class="text-[10px] font-bold text-slate-400"></span>
               </div>
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1.5 pp-pw-input-row">
                 <input id="ppEncryptPassphrase" type="password" autocomplete="new-password" placeholder="Enter Administrator password..." class="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900" />
                 <button type="button" id="ppEncryptEyeBtn" class="px-2.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-semibold transition cursor-pointer shrink-0">Show</button>
               </div>
@@ -778,11 +811,13 @@
         });
 
         document.getElementById('ppEncryptEyeBtn')?.addEventListener('click', () => {
+          const p0 = document.getElementById('ppEncryptCurrentPassphrase');
           const p1 = document.getElementById('ppEncryptPassphrase');
           const p2 = document.getElementById('ppEncryptPassphraseConfirm');
           const btn = document.getElementById('ppEncryptEyeBtn');
           if (!p1 || !btn) return;
           const show = p1.type === 'password';
+          if (p0) p0.type = show ? 'text' : 'password';
           p1.type = show ? 'text' : 'password';
           if (p2) p2.type = show ? 'text' : 'password';
           btn.textContent = show ? 'Hide' : 'Show';
@@ -792,12 +827,24 @@
         document.getElementById('ppEncryptCancelBtn')?.addEventListener('click', () => closeAndResolve(''));
         encDialog.addEventListener('cancel', () => closeAndResolve(''));
 
-        const handleSave = () => {
+        const handleSave = async () => {
+          const curVal = (document.getElementById('ppEncryptCurrentPassphrase')?.value || '').trim();
           const val = (document.getElementById('ppEncryptPassphrase')?.value || '').trim();
           const confVal = (document.getElementById('ppEncryptPassphraseConfirm')?.value || '').trim();
           const isDecryptPrompt = Boolean(ppPassphraseResolver);
           const timeoutVal = parseInt(document.getElementById('ppEncryptAutoLock')?.value || '30', 10);
           ppAutoLockMinutes = isNaN(timeoutVal) ? 30 : timeoutVal;
+
+          // If encryption is already active and new password is left empty, save auto-lock preference only
+          if (!isDecryptPrompt && ppSyncPassphrase && !val && !confVal) {
+            resetPassphraseAutoLock();
+            updateSyncEncryptionBadges();
+            setEncryptStatus('Auto-lock settings saved.', false);
+            if (typeof showToast === 'function') showToast('Auto-lock preference saved.', 'success');
+            setTimeout(() => closeAndResolve(''), 400);
+            return;
+          }
+
           if (val.length < 8) {
             setEncryptStatus('Administrator password must be at least 8 characters long.', true);
             return;
@@ -806,7 +853,39 @@
             setEncryptStatus('Passwords do not match. Please repeat the Administrator password.', true);
             return;
           }
+
           const prevPass = ppSyncPassphrase;
+          if (!isDecryptPrompt && prevPass) {
+            if (!curVal) {
+              setEncryptStatus('Enter your current Administrator password to change it.', true);
+              return;
+            }
+            if (curVal !== prevPass) {
+              setEncryptStatus('Current Administrator password is incorrect.', true);
+              return;
+            }
+            if (val === prevPass) {
+              setEncryptStatus('New Administrator password must be different from your current password.', true);
+              return;
+            }
+            try {
+              if (typeof ppChangeMainAdminPassword === 'function') {
+                const res = await ppChangeMainAdminPassword({ currentPassword: curVal, newPassword: val });
+                setEncryptStatus(
+                  res.resetUserCount > 0
+                    ? `Main Administrator password updated. ${res.resetUserCount} team user(s) flagged for password reset.`
+                    : 'Main Administrator password updated and workspace re-encrypted.',
+                  false
+                );
+                setTimeout(() => closeAndResolve(''), 550);
+                return;
+              }
+            } catch (err) {
+              setEncryptStatus(err?.message || 'Could not update Administrator password.', true);
+              return;
+            }
+          }
+
           ppSyncPassphrase = val;
           resetPassphraseAutoLock();
           if (!isDecryptPrompt) {
@@ -814,12 +893,13 @@
             if (prevPass && prevPass !== val && Array.isArray(curDb?.accessControl?.users) && curDb.accessControl.users.length > 0) {
               curDb.accessControl.users.forEach(u => {
                 if (u) {
+                  u.keySlot = null;
                   u.needsAdminKeyReset = true;
                   u.mustChangePassword = true;
                 }
               });
-              if (typeof touchDBAndSave === 'function') touchDBAndSave();
             }
+            if (typeof touchDBAndSave === 'function') touchDBAndSave();
             if (typeof ppApplyAuthenticatedSession === 'function') {
               ppApplyAuthenticatedSession('admin', null, curDb?.accessControl?.adminName);
             }

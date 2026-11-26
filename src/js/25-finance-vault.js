@@ -357,7 +357,9 @@
     closeFinanceVaultModal();
     injectStyles();
     const masterKey = getSessionMasterKey();
-    const isAdmin = typeof ppIsStandardUser !== 'function' || !ppIsStandardUser();
+    const isAdmin = typeof ppHasAdminAccess === 'function'
+      ? ppHasAdminAccess()
+      : (typeof ppIsStandardUser !== 'function' || !ppIsStandardUser());
     const db = getDb();
     const finSummary = extractFinancialsFromDb(db);
     const rateCount = Object.keys(finSummary.deptRates).length;
@@ -552,6 +554,24 @@
     });
   }
 
+  async function reencryptFinanceVaultNow(explicitKey) {
+    const key = (typeof explicitKey === 'string' && explicitKey.length >= 8) ? explicitKey : getSessionMasterKey();
+    if (!state.unlocked || !key) {
+      return { unlocked: state.unlocked, reencryptedOnDisk: false, needsManualDownload: false, fileName: state.fileName };
+    }
+    const db = getDb();
+    const payload = extractFinancialsFromDb(db);
+    state.lastPayload = payload;
+    if (state.fileHandle && typeof state.fileHandle.createWritable === 'function') {
+      const encText = await encryptFinancePayload(payload, key);
+      const writable = await state.fileHandle.createWritable();
+      await writable.write(encText);
+      await writable.close();
+      return { unlocked: true, reencryptedOnDisk: true, needsManualDownload: false, fileName: state.fileName };
+    }
+    return { unlocked: true, reencryptedOnDisk: false, needsManualDownload: true, fileName: state.fileName };
+  }
+
   function getFinanceVaultStatus() {
     return {
       unlocked: state.unlocked,
@@ -576,6 +596,7 @@
     window.ppOpenFinanceVaultModal = openFinanceVaultModal;
     window.ppLockFinanceVaultSilently = lockFinanceVaultSilently;
     window.ppGetFinanceVaultStatus = getFinanceVaultStatus;
+    window.ppReencryptFinanceVaultNow = reencryptFinanceVaultNow;
   }
 
   if (typeof globalThis !== 'undefined') {
@@ -587,6 +608,7 @@
       stripFinancialsFromDb,
       getFinanceVaultStatus,
       lockFinanceVaultSilently,
+      reencryptFinanceVaultNow,
     };
   }
 })();

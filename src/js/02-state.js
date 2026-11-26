@@ -735,6 +735,7 @@
               name: String(u.name).trim(),
               roleTitle: String(u.roleTitle || '').trim(),
               enabled: u.enabled !== false,
+              isAdmin: Boolean(u.isAdmin),
               mustChangePassword: Boolean(u.mustChangePassword),
               needsAdminKeyReset: Boolean(u.needsAdminKeyReset),
               permissions: {

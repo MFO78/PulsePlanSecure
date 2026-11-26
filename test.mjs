@@ -2513,6 +2513,163 @@ test('Multi-user RBAC, wrapped-key login, self-service password change, admin re
   assert.equal(out.elenaResetWorks, true, 'User can sign in with Admin-reset temporary password');
 });
 
+test('Delegated Admin rights, full-hide sign-out lock gate, dropdown sign-in & Main Administrator password change', async () => {
+  assert.ok(html.includes('id="ppLockedScreen"'), 'Full-screen locked session gate section exists in HTML');
+  assert.ok(html.includes('id="headerMenuSignOutBtn"'), 'Header menu Sign Out & Lock button exists in HTML');
+  assert.ok(html.includes('pp-login-select') && html.includes('pp-user-card'), 'Dropdown login select & responsive mobile user card CSS exist');
+  assert.ok(!html.includes('data-pp-new-tab="matrix" checked class="sr-only"'), 'No sr-only checkbox pills that cause mobile blank-screen scroll jump');
+
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    if (!auth) throw new Error('Missing auth test API');
+
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.activeTab = 'matrix';
+    safeSetStorage(STORAGE_KEYS.LIVE_DB, JSON.stringify(liveDB));
+
+    const adminPw = 'MainAdmin#2026!';
+    ppSyncPassphrase = adminPw;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Chief Admin');
+
+    // 1. Grant delegated Admin rights to Priya (and standard restricted rights to Bob)
+    const priya = await auth.createOrUpdateUserAccount({
+      name: 'Priya Director',
+      roleTitle: 'Director',
+      isAdmin: true,
+      permissions: { tabs: { matrix: true, health: false, data: false, sync: false }, finance: false },
+      tempPassword: 'PriyaTemp#123',
+      mustChangePassword: false,
+    });
+    const bob = await auth.createOrUpdateUserAccount({
+      name: 'Bob Viewer',
+      roleTitle: 'Engineer',
+      isAdmin: false,
+      permissions: { tabs: { matrix: true, health: false, data: false, sync: false }, finance: false },
+      tempPassword: 'BobTemp#123',
+      mustChangePassword: false,
+    });
+
+    const migrated = normalizeAndMigrateDB(JSON.parse(JSON.stringify(liveDB)));
+    const priyaMigratedIsAdmin = migrated.accessControl.users.find(u => u.id === priya.id)?.isAdmin;
+    const bobMigratedIsAdmin = migrated.accessControl.users.find(u => u.id === bob.id)?.isAdmin;
+
+    // 2. Priya logs in with personal password -> gets full delegated Admin privileges
+    ppSyncPassphrase = '';
+    await auth.authenticateInMemoryAccount(priya.id, 'PriyaTemp#123');
+    const priyaHasAdmin = auth.ppHasAdminAccess();
+    const priyaIsDelegated = auth.ppIsDelegatedAdmin();
+    const priyaIsMainAdmin = auth.ppIsMainAdmin();
+    const priyaCanAllTabs = ['matrix', 'health', 'data', 'sync'].every(t => auth.ppCanAccessTab(t));
+    const priyaCanFin = auth.ppCanAccessFinance();
+
+    // Priya (Delegated Admin) can create another user AND change her own personal password
+    const carol = await auth.createOrUpdateUserAccount({
+      name: 'Carol Lead',
+      roleTitle: 'Lead',
+      isAdmin: false,
+      permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+      tempPassword: 'CarolTemp#123',
+      mustChangePassword: true,
+    });
+    await auth.changeCurrentUserPassword({
+      currentPassword: 'PriyaTemp#123',
+      newPassword: 'PriyaPersonal#999',
+      skipCurrentVerify: false,
+    });
+
+    // Priya (Delegated Admin) MUST NOT be allowed to change the Main Administrator password
+    let delegatedBlockedFromMainPw = false;
+    try {
+      await auth.changeMainAdminPassword({ currentPassword: adminPw, newPassword: 'HijackAdmin#2026!' });
+    } catch (_e) {
+      delegatedBlockedFromMainPw = true;
+    }
+
+    // 3. Full-hide Sign Out & Lock wipes liveDB, localStorage cache & hides workspace while saving ciphertext envelope
+    await auth.ppSignOutAndLockSession('manual');
+    const lockedFlag = auth.ppIsSessionLocked();
+    const keyClearedOnLogout = (ppSyncPassphrase === '');
+    const deptsAfterLogout = liveDB.departments.length;
+    const projsAfterLogout = liveDB.projects.length;
+    const storageClearedOnLogout = (safeGetStorage(STORAGE_KEYS.LIVE_DB) === null);
+    const lockedCanMatrix = auth.ppCanAccessTab('matrix');
+    const lockedCanFin = auth.ppCanAccessFinance();
+    const lockedState = auth.getLockedState();
+    const lockedEnvelopeCipherOnly = Boolean(
+      lockedState?.envelope?.format === 'pulseplan-encrypted-v1' &&
+      !JSON.stringify(lockedState.envelope).includes('Project Nova')
+    );
+
+    // Decrypting locked ciphertext envelope with Priya's NEW personal password restores all data!
+    const restoredRes = await ppDecryptWithUserCredentials(lockedState.envelope, priya.id, 'PriyaPersonal#999');
+    const restoredDb = normalizeAndMigrateDB(JSON.parse(restoredRes.plainJson));
+    const restoredProjsCount = restoredDb.projects.length;
+    const restoredUsersCount = restoredDb.accessControl.users.length;
+
+    // 4. Main Administrator logs back in and changes Main Administrator password
+    liveDB = restoredDb;
+    ppSyncPassphrase = adminPw;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Chief Admin');
+
+    let wrongCurAdminRejected = false;
+    try {
+      await auth.changeMainAdminPassword({ currentPassword: 'WrongPassword#1', newPassword: 'RotatedAdmin#2027!' });
+    } catch (_e) {
+      wrongCurAdminRejected = true;
+    }
+
+    const rotRes = await auth.changeMainAdminPassword({
+      currentPassword: adminPw,
+      newPassword: 'RotatedAdmin#2027!',
+    });
+    const newPassActive = (ppSyncPassphrase === 'RotatedAdmin#2027!');
+    const allUsersFlaggedReset = liveDB.accessControl.users.every(u => u.needsAdminKeyReset === true && u.keySlot === null);
+
+    // Cleanup back to open
+    ppSyncPassphrase = '';
+    auth.ppApplyAuthenticatedSession('open');
+
+    return {
+      priyaMigratedIsAdmin, bobMigratedIsAdmin,
+      priyaHasAdmin, priyaIsDelegated, priyaIsMainAdmin, priyaCanAllTabs, priyaCanFin,
+      carolCreated: Boolean(carol && carol.id),
+      delegatedBlockedFromMainPw,
+      lockedFlag, keyClearedOnLogout, deptsAfterLogout, projsAfterLogout,
+      storageClearedOnLogout, lockedCanMatrix, lockedCanFin, lockedEnvelopeCipherOnly,
+      restoredProjsCount, restoredUsersCount,
+      wrongCurAdminRejected,
+      rotResetCount: rotRes.resetUserCount,
+      newPassActive, allUsersFlaggedReset,
+    };
+  })()`, ctx);
+
+  assert.equal(out.priyaMigratedIsAdmin, true, 'normalizeAndMigrateDB preserves isAdmin=true');
+  assert.equal(out.bobMigratedIsAdmin, false, 'normalizeAndMigrateDB preserves isAdmin=false');
+  assert.equal(out.priyaHasAdmin, true, 'Delegated Admin user gets full Admin access');
+  assert.equal(out.priyaIsDelegated, true, 'Delegated Admin is identified as delegated admin');
+  assert.equal(out.priyaIsMainAdmin, false, 'Delegated Admin is distinct from Main Administrator');
+  assert.equal(out.priyaCanAllTabs, true, 'Delegated Admin can access all 4 workspace tabs');
+  assert.equal(out.priyaCanFin, true, 'Delegated Admin has Financial Data access');
+  assert.equal(out.carolCreated, true, 'Delegated Admin can provision new team users');
+  assert.equal(out.delegatedBlockedFromMainPw, true, 'Delegated Admin cannot change the Main Administrator master password');
+  assert.equal(out.lockedFlag, true, 'Sign-out enters locked mode');
+  assert.equal(out.keyClearedOnLogout, true, 'Sign-out clears master key from memory');
+  assert.equal(out.deptsAfterLogout, 0, 'Sign-out clears departments from liveDB');
+  assert.equal(out.projsAfterLogout, 0, 'Sign-out clears projects from liveDB');
+  assert.equal(out.storageClearedOnLogout, true, 'Sign-out wipes plaintext liveDB cache from localStorage');
+  assert.equal(out.lockedCanMatrix, false, 'Locked state denies tab access');
+  assert.equal(out.lockedCanFin, false, 'Locked state denies Finance access');
+  assert.equal(out.lockedEnvelopeCipherOnly, true, 'Locked session stores only AES-256-GCM ciphertext with zero plaintext leak');
+  assert.equal(out.restoredProjsCount, 5, 'Re-authenticating locked envelope restores all original projects');
+  assert.equal(out.restoredUsersCount, 3, 'Re-authenticating locked envelope restores all user accounts');
+  assert.equal(out.wrongCurAdminRejected, true, 'Main Admin password change rejects incorrect current password');
+  assert.equal(out.rotResetCount, 3, 'Main Admin password rotation reports all team users needing reset');
+  assert.equal(out.newPassActive, true, 'Main Admin password rotation activates new master passphrase');
+  assert.equal(out.allUsersFlaggedReset, true, 'Main Admin password rotation scrubs stale wrapped key slots and flags users for reset');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

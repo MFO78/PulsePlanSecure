@@ -100,10 +100,15 @@
                 <span>Team Users &amp; Permissions</span>
                 <span id="headerMenuUsersCount" class="text-[10px] font-bold text-slate-400">0</span>
               </button>
-              <button id="headerMenuChangePwBtn" type="button" onclick="closeHeaderWorkspaceMenu(); if (typeof ppOpenChangeMyPasswordModal === 'function') ppOpenChangeMyPasswordModal(false);"
+              <button id="headerMenuChangePwBtn" type="button" onclick="closeHeaderWorkspaceMenu(); if (typeof ppOpenPasswordActionModal === 'function') ppOpenPasswordActionModal(); else if (typeof ppOpenChangeMyPasswordModal === 'function') ppOpenChangeMyPasswordModal(false);"
                 class="hidden w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-slate-700 hover:text-indigo-700 font-semibold transition cursor-pointer">
-                <span>Change My Password</span>
+                <span id="headerMenuChangePwLabel">Change Password</span>
                 <span class="text-[10px] text-slate-400">Key</span>
+              </button>
+              <button id="headerMenuSignOutBtn" type="button" onclick="closeHeaderWorkspaceMenu(); if (typeof ppSignOutAndLockSession === 'function') ppSignOutAndLockSession('manual');"
+                class="hidden w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50/70 hover:bg-rose-100 text-rose-700 font-semibold transition cursor-pointer">
+                <span>Sign Out &amp; Lock</span>
+                <span class="text-[10px] font-bold">Lock</span>
               </button>
             </div>
 
@@ -238,6 +243,9 @@
       </div>
     </div>
   </header>
+
+  <!-- ==================== FULL-SCREEN SIGNED-OUT / LOCKED WORKSPACE GATE ==================== -->
+  <section id="ppLockedScreen" class="hidden" aria-label="Workspace signed out"></section>
 
   <!-- ==================== MAIN WORKSPACE CONTAINER ==================== -->
   <main id="mainWorkspace" tabindex="-1" class="layout-container w-full max-w-none mx-auto px-3 sm:px-5 lg:px-6 2xl:px-8 pt-3 md:pt-5 pb-[calc(5.25rem+env(safe-area-inset-bottom))] md:pb-6 space-y-4 md:space-y-5 focus:outline-none">

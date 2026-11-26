@@ -254,11 +254,15 @@
 
   /* ---------- 5. Sync & Snapshots: Password-Gated Clear DB + Clear Plan (Keep Setup & Data) ---------- */
   function verifyClearPassword(actionLabel) {
-    if (typeof ppIsStandardUser === 'function' && ppIsStandardUser()) {
+    const hasAdmin = typeof ppHasAdminAccess === 'function'
+      ? ppHasAdminAccess()
+      : !(typeof ppIsStandardUser === 'function' && ppIsStandardUser());
+    if (!hasAdmin) {
       toast('Administrator privileges are required for this action.', 'error');
       return false;
     }
-    const expected = typeof ppSyncPassphrase === 'string' && ppSyncPassphrase ? ppSyncPassphrase : '';
+    const isDelegated = typeof ppIsDelegatedAdmin === 'function' && ppIsDelegatedAdmin();
+    const expected = (!isDelegated && typeof ppSyncPassphrase === 'string' && ppSyncPassphrase) ? ppSyncPassphrase : '';
     const promptMsg = expected
       ? `Enter the Administrator Password to confirm: ${actionLabel}`
       : `Type CLEAR to confirm: ${actionLabel}`;
@@ -281,13 +285,15 @@
   function enhanceSyncClearButtons() {
     const syncTab = document.getElementById('tab-sync');
     if (!syncTab) return;
-    const isStdUser = typeof ppIsStandardUser === 'function' && ppIsStandardUser();
+    const isRestricted = typeof ppHasAdminAccess === 'function'
+      ? !ppHasAdminAccess()
+      : (typeof ppIsStandardUser === 'function' && ppIsStandardUser());
     const dangerZone = document.getElementById('syncDangerZone');
-    if (dangerZone) dangerZone.classList.toggle('hidden', isStdUser);
+    if (dangerZone) dangerZone.classList.toggle('hidden', isRestricted);
 
     const clearBtn = Array.from(syncTab.querySelectorAll('button')).find(b => /clear\s+current\s+db/i.test(b.textContent || ''));
     if (!clearBtn) return;
-    clearBtn.classList.toggle('hidden', isStdUser);
+    clearBtn.classList.toggle('hidden', isRestricted);
 
     if (!clearBtn.__ppPwGuarded) {
       clearBtn.__ppPwGuarded = true;
@@ -322,7 +328,7 @@
       });
       clearBtn.parentElement.insertBefore(clearPlanBtn, clearBtn);
     }
-    if (clearPlanBtn) clearPlanBtn.classList.toggle('hidden', isStdUser);
+    if (clearPlanBtn) clearPlanBtn.classList.toggle('hidden', isRestricted);
   }
 
   /* ---------- 6. EUPL-1.2 User Licence Alignment ---------- */
