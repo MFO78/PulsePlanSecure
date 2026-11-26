@@ -318,10 +318,11 @@
   function applyEuplLicenceBranding() {
     const licBtn = document.getElementById('ppLicenceMenuBtn');
     if (licBtn) {
-      const badge = licBtn.querySelector('span:last-child');
-      if (badge && badge.textContent.trim() === 'MIT') {
-        badge.textContent = 'EUPL-1.2';
-      }
+      licBtn.querySelectorAll('span').forEach(sp => {
+        if (sp.children.length === 0 && sp.textContent.trim() === 'MIT') {
+          sp.textContent = 'EUPL-1.2';
+        }
+      });
     }
     const dlg = document.getElementById('ppLicenceDialog');
     if (dlg && !dlg.__ppEuplApplied) {
@@ -366,6 +367,14 @@
     applyEuplLicenceBranding();
   }
 
+  if (typeof openLicenceDialog === 'function') {
+    const nativeOpenLicence = openLicenceDialog;
+    openLicenceDialog = function (...args) {
+      applyEuplLicenceBranding();
+      return nativeOpenLicence.apply(this, args);
+    };
+  }
+
   if (typeof renderAll === 'function') {
     const nativeRenderAll = renderAll;
     renderAll = function (...args) {
@@ -383,6 +392,16 @@
       return res;
     };
   }
+
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('DOMContentLoaded', () => {
+      applyEuplLicenceBranding();
+      setTimeout(applyEuplLicenceBranding, 0);
+      setTimeout(applyEuplLicenceBranding, 300);
+    });
+  }
+  setTimeout(applyEuplLicenceBranding, 0);
+  setTimeout(applyEuplLicenceBranding, 300);
 
   if (typeof globalThis !== 'undefined') {
     globalThis.__ppUxSortTestApi = { compareSortValues };
