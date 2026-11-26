@@ -12,7 +12,7 @@
     #ppPbsDialog { width: min(1120px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; }
     #ppPbsDialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
     .pp-pbs-wrap { display: flex; flex-direction: column; max-height: 92vh; }
-    .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
+    .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-top: 4px solid var(--pbs-proj-color, #4f46e5); border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; }
     .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
     .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; }
@@ -36,6 +36,7 @@
     .pp-pbs-table th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); }
     .pp-pbs-row-ctx { opacity: .62; }
     .pp-pbs-row:focus-visible { outline: 2px solid #4f46e5; outline-offset: -2px; }
+    .pp-pbs-dept-dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; margin-right: .35rem; vertical-align: middle; flex-shrink: 0; }
     .pp-pbs-toggle { width: 1.25rem; height: 1.25rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .35rem; border: 1px solid transparent; background: transparent; color: var(--text-muted, #64748b); cursor: pointer; font-size: 10px; margin-right: .25rem; }
     .pp-pbs-toggle:hover { background: var(--surface-subtle, #e2e8f0); color: var(--text-primary, #0f172a); }
     .pp-pbs-form { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .55rem; }
@@ -51,9 +52,11 @@
     .pp-pbs-proj-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: .3rem; }
     .pp-pbs-proj-btn:hover { background: #e0e7ff; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #1e293b; border-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-form, body.dark .pp-pbs-form { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-form, body.dark .pp-pbs-form { border-color: #334155; }
     html.dark .pp-pbs-toolbar, body.dark .pp-pbs-toolbar, html.dark .pp-pbs-filters, body.dark .pp-pbs-filters { background: #0f172a; border-color: #334155; }
-    html.dark .pp-pbs-btn, body.dark .pp-pbs-btn { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+    html.dark .pp-pbs-btn:not(.pp-pbs-btn-primary):not(.pp-pbs-btn-emerald):not(.pp-pbs-btn-danger), body.dark .pp-pbs-btn:not(.pp-pbs-btn-primary):not(.pp-pbs-btn-emerald):not(.pp-pbs-btn-danger) { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+    html.dark .pp-pbs-btn-danger, body.dark .pp-pbs-btn-danger { background: rgba(190,18,60,.25); color: #fda4af; border-color: #9f1239; }
     html.dark .pp-pbs-input, body.dark .pp-pbs-input, html.dark .pp-pbs-select, body.dark .pp-pbs-select { background: #0f172a; color: #e2e8f0; border-color: #475569; }
     html.dark .pp-pbs-conflict, body.dark .pp-pbs-conflict { background: rgba(180,83,9,.22); color: #fde68a; border-color: #d97706; }
     html.dark .pp-pbs-notice, body.dark .pp-pbs-notice { background: rgba(30,64,175,.25); color: #bfdbfe; border-color: #3b82f6; }
@@ -79,18 +82,18 @@
       .pp-pbs-form .pp-pbs-field { grid-column: auto !important; }
       .pp-pbs-table, .pp-pbs-table tbody { display: block; width: 100%; }
       .pp-pbs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-      .pp-pbs-table tr.pp-pbs-row { display: block; margin: 0 0 .65rem calc(min(var(--pbs-depth, 0), 4) * 10px); padding: .55rem .7rem; border: 1px solid var(--border-subtle, #e2e8f0); border-left-width: 4px; border-radius: .75rem; background: var(--surface-card, #ffffff); }
+      .pp-pbs-table tr.pp-pbs-row { display: block; margin: 0 0 .65rem calc(min(var(--pbs-depth, 0), 4) * 10px); padding: .55rem .7rem; border: 1px solid var(--border-subtle, #e2e8f0); border-left: 5px solid var(--pbs-dept-color, #94a3b8); border-radius: .75rem; background: var(--surface-card, #ffffff); background: color-mix(in srgb, var(--pbs-dept-color, transparent) 7%, var(--surface-card, #ffffff)); }
       .pp-pbs-table tr:not(.pp-pbs-row), .pp-pbs-table td[colspan] { display: block; width: 100%; border: 0; }
       .pp-pbs-table tr.pp-pbs-row td { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .22rem 0 !important; border-bottom: 0; white-space: normal !important; text-align: left !important; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-code { display: inline-flex; font-size: 11px; color: var(--text-muted, #64748b); margin-right: .45rem; }
-      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-mat { display: inline-flex; float: right; }
+      .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-mat { display: inline-flex; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-name { display: block; padding: .2rem 0 .35rem !important; font-size: 13.5px; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-dept::before,
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-owner::before,
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-ms::before { content: attr(data-label); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); flex-shrink: 0; }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions { display: block; margin-top: .4rem; padding-top: .45rem !important; border-top: 1px solid var(--border-subtle, #e2e8f0); }
       .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions [role="group"] { display: flex; flex-wrap: wrap; gap: .3rem; }
-      html.dark .pp-pbs-table tr.pp-pbs-row, body.dark .pp-pbs-table tr.pp-pbs-row { background: #1e293b; border-color: #334155; }
+      html.dark .pp-pbs-table tr.pp-pbs-row, body.dark .pp-pbs-table tr.pp-pbs-row { background: #1e293b; background: color-mix(in srgb, var(--pbs-dept-color, transparent) 14%, #1e293b); border-top-color: #334155; border-right-color: #334155; border-bottom-color: #334155; border-left-color: var(--pbs-dept-color, #64748b); }
       html.dark .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions, body.dark .pp-pbs-table tr.pp-pbs-row td.pp-pbs-cell-actions { border-top-color: #334155; }
     }
   `;
@@ -121,6 +124,7 @@
       const overdue = ctx.summary.overdueIds.has(item.id);
       const nm = esc(item.name);
       const id = esc(item.id);
+      const deptColor = dept && dept.color ? esc(dept.color) : '';
       const toggle = hasChildren
         ? `<button type="button" class="pp-pbs-toggle" data-pbs-toggle="${id}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${nm}">${collapsed ? '\u25b6' : '\u25bc'}</button>`
         : '<span style="display:inline-block;width:1.5rem" aria-hidden="true"></span>';
@@ -128,11 +132,14 @@
         ? `${esc(ms.title)}${ms.date ? ` <span style="font-size:10px;color:${overdue ? '#be123c' : '#64748b'};font-weight:${overdue ? 800 : 400}">(${esc(ms.date)}${overdue ? ' \u00b7 Overdue' : ''})</span>` : ''}`
         : '\u2014';
       const btn = (act, label, text) => `<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-move="${act}" data-pbs-id="${id}" aria-label="${label} ${nm}">${text}</button>`;
-      return `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="--pbs-depth:${depth};border-left:4px solid ${esc(dept && dept.color ? dept.color : 'transparent')}">
+      const deptCell = dept
+        ? `<span>${deptColor ? `<span class="pp-pbs-dept-dot" style="background:${deptColor}" aria-hidden="true"></span>` : ''}${esc(`[${dept.code}] ${dept.name}`)}</span>`
+        : '\u2014';
+      return `<tr class="pp-pbs-row${isContextOnly ? ' pp-pbs-row-ctx' : ''}" tabindex="0" data-pbs-row="${id}" style="--pbs-depth:${depth};${deptColor ? `--pbs-dept-color:${deptColor};` : ''}border-left:4px solid ${deptColor || 'transparent'}">
         <td class="pp-pbs-cell-code" data-label="Code" style="font-family:ui-monospace,monospace;font-weight:700;white-space:nowrap">${esc(item.code)}</td>
         <td class="pp-pbs-cell-name" data-label="Deliverable" style="padding-left:${6 + depth * 18}px">${toggle}<span style="font-weight:${depth === 0 ? 800 : 600}">${nm}</span>${bottleneck ? ` <span class="pp-pbs-pill pp-pbs-status-warn" title="A child deliverable is still at ${esc(bottleneck)}">\u26a0 Child at ${esc(bottleneck)}</span>` : ''}${item.notes ? `<div style="font-size:10.5px;color:var(--text-muted,#64748b);margin-left:1.5rem">${esc(item.notes)}</div>` : ''}</td>
         <td class="pp-pbs-cell-mat" data-label="Maturity">${matPill(item.maturity)}</td>
-        <td class="pp-pbs-cell-dept" data-label="Department" style="color:${esc(dept && dept.color ? dept.color : 'inherit')};font-weight:600;white-space:nowrap">${dept ? esc(`[${dept.code}] ${dept.name}`) : '\u2014'}</td>
+        <td class="pp-pbs-cell-dept" data-label="Department" style="color:${deptColor || 'inherit'};font-weight:600;white-space:nowrap">${deptCell}</td>
         <td class="pp-pbs-cell-owner" data-label="Owner" style="white-space:nowrap">${esc(item.owner || '\u2014')}</td>
         <td class="pp-pbs-cell-ms" data-label="Milestone" style="white-space:nowrap">${msCell}</td>
         <td class="pp-pbs-cell-actions" data-label="Actions" style="text-align:right;white-space:nowrap"><span role="group" aria-label="Actions for ${nm}">${btn('up', 'Move up', '\u2191')} ${btn('down', 'Move down', '\u2193')} ${btn('outdent', 'Outdent', '\u2190')} ${btn('indent', 'Indent', '\u2192')}
@@ -246,7 +253,8 @@
   function buildDialogHtml(ctx) {
     const p = ctx.project;
     const n = ctx.summary.total;
-    return `<div class="pp-pbs-wrap">
+    const projStyle = p && p.color ? ` style="--pbs-proj-color:${esc(p.color)}"` : '';
+    return `<div class="pp-pbs-wrap"${projStyle}>
       <header class="pp-pbs-head"><div>
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
         <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: focus a row, then Alt+Arrows to move or indent, Enter to edit</span></div></div>
