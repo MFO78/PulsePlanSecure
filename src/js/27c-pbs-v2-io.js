@@ -2,11 +2,71 @@
  * Inert: only registers functions on window.__ppPbsV2.io; nothing runs at load time. */
 (function ppPbsV2IoPart() {
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
-  const HEADER = ['Code', 'ParentCode', 'Name', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes'];
+  const HEADER = [
+    'Code', 'ParentCode', 'Name', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes',
+    'Acronym', 'Description', 'Existing/Update/New',
+    'Mechanical Drawing', 'Electrical Drawing', 'Reference Document',
+    'Manufacturer', 'Part Number', 'Procurement/Manufacture Status',
+    'Mass (kg)', 'Power Consumption (W)', 'Power Dissipation (W)', 'MTBF (h)',
+    'LRU', 'SPARE Available', 'SPARE to be Delivered',
+    'Lead Time (wks)', 'Component Alternative',
+  ];
+
+  const POSITIONAL_KEYS = [
+    'code', 'parentCode', 'name', 'maturity', 'department', 'owner', 'milestone', 'notes',
+    'acronym', 'description', 'heritage',
+    'mechDrawing', 'elecDrawing', 'refDoc',
+    'manufacturer', 'partNumber', 'procurementStatus',
+    'mass', 'powerConsumption', 'powerDissipation', 'mtbf',
+    'lru', 'spareAvailable', 'spareToDeliver',
+    'leadTime', 'componentAlt',
+  ];
+
+  const HEADER_ALIASES = {
+    code: 'code', pbscode: 'code', itemcode: 'code', wbs: 'code',
+    parentcode: 'parentCode', parent: 'parentCode',
+    name: 'name', deliverable: 'name', deliverablesubsystem: 'name', subsystem: 'name', title: 'name', item: 'name',
+    maturity: 'maturity', maturitygate: 'maturity', gate: 'maturity',
+    department: 'department', dept: 'department', departmentcode: 'department',
+    owner: 'owner', responsible: 'owner',
+    milestone: 'milestone', linkedmilestone: 'milestone',
+    notes: 'notes', acceptancecriteria: 'notes', notesacceptancecriteria: 'notes', remarks: 'notes',
+    acronym: 'acronym', acr: 'acronym', shortname: 'acronym',
+    description: 'description', desc: 'description',
+    existingupdatenew: 'heritage', heritage: 'heritage', existingnew: 'heritage', designstatus: 'heritage', reuse: 'heritage',
+    mechanicaldrawing: 'mechDrawing', mechdrawing: 'mechDrawing', mechdwg: 'mechDrawing', mechanicaldwg: 'mechDrawing',
+    electricaldrawing: 'elecDrawing', elecdrawing: 'elecDrawing', elecdwg: 'elecDrawing', electricaldwg: 'elecDrawing',
+    referencedocument: 'refDoc', referencedoc: 'refDoc', refdoc: 'refDoc', refdocument: 'refDoc',
+    manufacturer: 'manufacturer', vendor: 'manufacturer', supplier: 'manufacturer', mfr: 'manufacturer', oem: 'manufacturer',
+    partnumber: 'partNumber', partno: 'partNumber', pn: 'partNumber', mpn: 'partNumber',
+    procurementmanufacturestatus: 'procurementStatus', procurementstatus: 'procurementStatus', manufacturestatus: 'procurementStatus', procstatus: 'procurementStatus', mfgstatus: 'procurementStatus',
+    masskg: 'mass', mass: 'mass', weightkg: 'mass', weight: 'mass',
+    powerconsumptionw: 'powerConsumption', powerconsumption: 'powerConsumption', powercons: 'powerConsumption', powerconsw: 'powerConsumption', inputpowerw: 'powerConsumption', inputpower: 'powerConsumption',
+    powerdissipationw: 'powerDissipation', powerdissipation: 'powerDissipation', powerdiss: 'powerDissipation', powerdissw: 'powerDissipation', thermaldissipationw: 'powerDissipation', heatdissipationw: 'powerDissipation',
+    mtbfh: 'mtbf', mtbfhrs: 'mtbf', mtbfhours: 'mtbf', mtbf: 'mtbf',
+    lru: 'lru', lruyesno: 'lru',
+    spareavailable: 'spareAvailable', spareavailableyesno: 'spareAvailable',
+    sparetobedelivered: 'spareToDeliver', sparetodeliver: 'spareToDeliver', sparetobedeliveredyesno: 'spareToDeliver', sparetodeliveryesno: 'spareToDeliver',
+    leadtimewks: 'leadTime', leadtimeweeks: 'leadTime', leadtimew: 'leadTime', leadtime: 'leadTime',
+    componentalternative: 'componentAlt', alternative: 'componentAlt', altcomponent: 'componentAlt', secondsource: 'componentAlt',
+  };
 
   const tree = () => P.tree;
+  const data = () => P.data;
   const makeId = (p) => P.data.makeId(p);
   const maturities = () => P.MATURITY_OPTIONS || ['Draft', 'PDR', 'CDR', 'Qualified', 'Delivered'];
+
+  function normHeaderToken(raw) {
+    return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+
+  function parseCsvNumber(raw, unitRe, rowNum, label, warnings) {
+    if (!raw) return null;
+    const stripped = raw.replace(unitRe, '').trim();
+    const num = data().parseOptionalNumber(stripped);
+    if (num === null) warnings.push(`Row ${rowNum}: invalid ${label} "${raw}", ignored.`);
+    return num;
+  }
 
   /* Neutralise spreadsheet formulas (=, +, @, or - followed by a non-number) on export; undone on import. */
   function guardFormula(s) {
@@ -30,7 +90,8 @@
     const deptMap = new Map((database.departments || []).map(x => [x.id, x]));
     const msMap = new Map((database.milestones || []).map(x => [x.id, x]));
     const byId = new Map(((doc && doc.items) || []).map(x => [x.id, x]));
-    const lines = [HEADER.join(',')];
+    const fmt = (v) => (v != null ? data().formatNum(v) : '');
+    const lines = [HEADER.map(csvCell).join(',')];
     tree().flattenTreeRows(doc, null, 0, []).forEach(({ item }) => {
       const parent = item.parentId ? byId.get(item.parentId) : null;
       const dept = item.deptId ? deptMap.get(item.deptId) : null;
@@ -38,6 +99,12 @@
       lines.push([
         item.code, parent ? parent.code : '', item.name, item.maturity,
         dept ? dept.code : '', item.owner || '', ms ? ms.title : '', item.notes || '',
+        item.acronym || '', item.description || '', item.heritage || '',
+        item.mechDrawing || '', item.elecDrawing || '', item.refDoc || '',
+        item.manufacturer || '', item.partNumber || '', item.procurementStatus || '',
+        fmt(item.mass), fmt(item.powerConsumption), fmt(item.powerDissipation), fmt(item.mtbf),
+        item.lru || '', item.spareAvailable || '', item.spareToDeliver || '',
+        fmt(item.leadTime), item.componentAlt || '',
       ].map(csvCell).join(','));
     });
     return '\uFEFF' + lines.join('\r\n');
@@ -80,8 +147,17 @@
     const warnings = [];
     if (!records.length) return { items: [], warnings };
 
-    const head = records[0].map(c => c.trim().toLowerCase());
-    const hasHeader = head.some(c => ['code', 'name', 'deliverable', 'maturity', 'parentcode'].includes(c));
+    const headNorm = records[0].map(normHeaderToken);
+    const hasHeader = headNorm.some(tok => ['code', 'name', 'deliverable', 'maturity', 'parentcode', 'acronym', 'partnumber', 'manufacturer'].includes(tok));
+    const colIndex = {};
+    if (hasHeader) {
+      headNorm.forEach((tok, idx) => {
+        const key = HEADER_ALIASES[tok];
+        if (key && colIndex[key] === undefined) colIndex[key] = idx;
+      });
+    } else {
+      POSITIONAL_KEYS.forEach((key, idx) => { colIndex[key] = idx; });
+    }
     const rows = hasHeader ? records.slice(1) : records;
 
     const database = db || {};
@@ -92,21 +168,59 @@
 
     rows.forEach((cols, idx) => {
       const c = cols.map(x => unguardFormula(String(x ?? '').trim()));
-      const code = c[0] || String(items.length + 1);
-      const mat = maturities().find(m => m.toLowerCase() === (c[3] || 'draft').toLowerCase());
-      if (c[3] && !mat) warnings.push(`Row ${idx + 1}: unknown maturity "${c[3]}", set to Draft.`);
-      const deptTok = (c[4] || '').toLowerCase();
+      const get = (key) => (colIndex[key] !== undefined ? (c[colIndex[key]] || '') : '');
+      const rowNum = idx + 1;
+
+      const code = get('code') || String(items.length + 1);
+      const rawMat = get('maturity');
+      const mat = maturities().find(m => m.toLowerCase() === (rawMat || 'draft').toLowerCase());
+      if (rawMat && !mat) warnings.push(`Row ${rowNum}: unknown maturity "${rawMat}", set to Draft.`);
+
+      const rawDept = get('department');
+      const deptTok = rawDept.toLowerCase();
       const dept = deptTok ? depts.find(d => (d.code || '').toLowerCase() === deptTok || (d.name || '').toLowerCase() === deptTok) : null;
-      if (deptTok && !dept) warnings.push(`Row ${idx + 1}: department "${c[4]}" not found.`);
-      const msTok = (c[6] || '').toLowerCase();
+      if (deptTok && !dept) warnings.push(`Row ${rowNum}: department "${rawDept}" not found.`);
+
+      const rawMs = get('milestone');
+      const msTok = rawMs.toLowerCase();
       const ms = msTok ? milestones.find(m => (m.title || '').toLowerCase() === msTok) : null;
-      if (msTok && !ms) warnings.push(`Row ${idx + 1}: milestone "${c[6]}" not found.`);
-      if (codeToId.has(code)) warnings.push(`Row ${idx + 1}: duplicate code "${code}"; parent links use the first occurrence.`);
+      if (msTok && !ms) warnings.push(`Row ${rowNum}: milestone "${rawMs}" not found.`);
+
+      const rawHeritage = get('heritage');
+      const heritage = data().normalizeHeritage(rawHeritage);
+      if (rawHeritage && !heritage) warnings.push(`Row ${rowNum}: unknown Existing/Update/New "${rawHeritage}", ignored.`);
+
+      const parseYn = (rawVal, label) => {
+        if (!rawVal) return '';
+        const yn = data().normalizeYesNo(rawVal);
+        if (!yn) warnings.push(`Row ${rowNum}: invalid ${label} "${rawVal}" (expected Yes/No), ignored.`);
+        return yn;
+      };
+
+      if (codeToId.has(code)) warnings.push(`Row ${rowNum}: duplicate code "${code}"; parent links use the first occurrence.`);
       const id = makeId('pbs');
       items.push({
-        id, parentId: null, _parentCode: c[1] || '', code, name: c[2] || `Item ${code}`,
-        deptId: dept ? dept.id : '', owner: c[5] || '', maturity: mat || 'Draft',
-        milestoneId: ms ? ms.id : '', notes: c[7] || '',
+        id, parentId: null, _parentCode: get('parentCode'), code: code.slice(0, 40), name: (get('name') || `Item ${code}`).slice(0, 200),
+        deptId: dept ? dept.id : '', owner: get('owner').slice(0, 120), maturity: mat || 'Draft',
+        milestoneId: ms ? ms.id : '', notes: get('notes').slice(0, 1000),
+        acronym: get('acronym').slice(0, 24),
+        description: get('description').slice(0, 1000),
+        heritage,
+        mechDrawing: get('mechDrawing').slice(0, 160),
+        elecDrawing: get('elecDrawing').slice(0, 160),
+        refDoc: get('refDoc').slice(0, 200),
+        manufacturer: get('manufacturer').slice(0, 140),
+        partNumber: get('partNumber').slice(0, 120),
+        procurementStatus: get('procurementStatus').slice(0, 80),
+        mass: parseCsvNumber(get('mass'), /\s*kg$/i, rowNum, 'Mass (kg)', warnings),
+        powerConsumption: parseCsvNumber(get('powerConsumption'), /\s*w$/i, rowNum, 'Power Consumption (W)', warnings),
+        powerDissipation: parseCsvNumber(get('powerDissipation'), /\s*w$/i, rowNum, 'Power Dissipation (W)', warnings),
+        mtbf: parseCsvNumber(get('mtbf'), /\s*(h|hr|hrs|hours)$/i, rowNum, 'MTBF (h)', warnings),
+        lru: parseYn(get('lru'), 'LRU'),
+        spareAvailable: parseYn(get('spareAvailable'), 'SPARE Available'),
+        spareToDeliver: parseYn(get('spareToDeliver'), 'SPARE to be Delivered'),
+        leadTime: parseCsvNumber(get('leadTime'), /\s*(wk|wks|week|weeks)$/i, rowNum, 'Lead Time (wks)', warnings),
+        componentAlt: get('componentAlt').slice(0, 200),
       });
       if (!codeToId.has(code)) codeToId.set(code, id);
     });
@@ -130,12 +244,19 @@
     return { items, warnings };
   }
 
-  /* Deep-copies a PBS doc's items with fresh ids; milestone links are dropped (they belong to the source project). */
+  /* Deep-copies a PBS doc's items with fresh ids; project-execution links/statuses (milestone, procurement status, spare availability) are reset while hardware specs are preserved. */
   function cloneItems(sourceDoc) {
     const src = (sourceDoc && Array.isArray(sourceDoc.items)) ? sourceDoc.items : [];
     const idMap = new Map(src.map(it => [it.id, makeId('pbs')]));
-    return src.map(it => ({ ...it, id: idMap.get(it.id), parentId: it.parentId ? (idMap.get(it.parentId) || null) : null, milestoneId: '' }));
+    return src.map(it => ({
+      ...it,
+      id: idMap.get(it.id),
+      parentId: it.parentId ? (idMap.get(it.parentId) || null) : null,
+      milestoneId: '',
+      procurementStatus: '',
+      spareAvailable: '',
+    }));
   }
 
-  P.io = { csvCell, csvFilename, buildPbsCsv, parseCsvRecords, parsePbsCsv, cloneItems };
+  P.io = { HEADER, csvCell, csvFilename, buildPbsCsv, parseCsvRecords, parsePbsCsv, cloneItems };
 })();

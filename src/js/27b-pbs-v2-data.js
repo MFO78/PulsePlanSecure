@@ -5,6 +5,68 @@
   const PBS_SCHEMA = 'pulseplan-pbs-v1';
   const CACHE_KEY = 'pulseplan_pbs_cache_v1';
   const MATURITY_OPTIONS = ['Draft', 'PDR', 'CDR', 'Qualified', 'Delivered'];
+  const HERITAGE_OPTIONS = ['Existing', 'Update', 'New'];
+  const YESNO_OPTIONS = ['Yes', 'No'];
+  const PROC_STATUS_PRESETS = ['Not Started', 'RFQ', 'Ordered', 'In Manufacture', 'In Transit', 'Received', 'In Stock', 'Delivered'];
+  const OPTIONAL_GROUPS = {
+    identity: ['acronym', 'description', 'heritage'],
+    docs: ['mechDrawing', 'elecDrawing', 'refDoc'],
+    proc: ['manufacturer', 'partNumber', 'procurementStatus', 'leadTime', 'componentAlt'],
+    eng: ['mass', 'powerConsumption', 'powerDissipation', 'mtbf', 'lru', 'spareAvailable', 'spareToDeliver'],
+  };
+  const OPTIONAL_FIELD_KEYS = [
+    ...OPTIONAL_GROUPS.identity,
+    ...OPTIONAL_GROUPS.docs,
+    ...OPTIONAL_GROUPS.proc,
+    ...OPTIONAL_GROUPS.eng,
+  ];
+
+  function normalizeHeritage(v) {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (!s) return '';
+    return HERITAGE_OPTIONS.find(h => h.toLowerCase() === s) || '';
+  }
+
+  function normalizeYesNo(v) {
+    if (v === true) return 'Yes';
+    if (v === false) return 'No';
+    const s = String(v ?? '').trim().toLowerCase();
+    if (!s) return '';
+    if (s === 'yes' || s === 'y' || s === 'true' || s === '1') return 'Yes';
+    if (s === 'no' || s === 'n' || s === 'false' || s === '0') return 'No';
+    return '';
+  }
+
+  function parseOptionalNumber(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') return (Number.isFinite(v) && v >= 0) ? Math.round(v * 10000) / 10000 : null;
+    let s = String(v).trim().replace(/\s+/g, '');
+    if (!s) return null;
+    if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '');
+    else if (/^\d+,\d+$/.test(s)) s = s.replace(',', '.');
+    const n = Number(s);
+    return (Number.isFinite(n) && n >= 0) ? Math.round(n * 10000) / 10000 : null;
+  }
+
+  function formatNum(v) {
+    if (v === null || v === undefined || !Number.isFinite(Number(v))) return '';
+    return String(Math.round(Number(v) * 10000) / 10000);
+  }
+
+  function isFieldFilled(item, key) {
+    if (!item) return false;
+    const v = item[key];
+    return typeof v === 'number' ? Number.isFinite(v) : Boolean(v);
+  }
+
+  function countOptionalFields(item) {
+    const count = (keys) => keys.reduce((acc, k) => acc + (isFieldFilled(item, k) ? 1 : 0), 0);
+    const identity = count(OPTIONAL_GROUPS.identity);
+    const docs = count(OPTIONAL_GROUPS.docs);
+    const proc = count(OPTIONAL_GROUPS.proc);
+    const eng = count(OPTIONAL_GROUPS.eng);
+    return { identity, docs, proc, eng, total: identity + docs + proc + eng };
+  }
 
   function makeId(prefix) {
     return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -45,6 +107,24 @@
       maturity: MATURITY_OPTIONS.includes(it.maturity) ? it.maturity : 'Draft',
       milestoneId: String(it.milestoneId || ''),
       notes: String(it.notes || '').trim(),
+      acronym: String(it.acronym || '').trim().slice(0, 24),
+      description: String(it.description || '').trim().slice(0, 1000),
+      heritage: normalizeHeritage(it.heritage),
+      mechDrawing: String(it.mechDrawing || '').trim().slice(0, 160),
+      elecDrawing: String(it.elecDrawing || '').trim().slice(0, 160),
+      refDoc: String(it.refDoc || '').trim().slice(0, 200),
+      manufacturer: String(it.manufacturer || '').trim().slice(0, 140),
+      partNumber: String(it.partNumber || '').trim().slice(0, 120),
+      procurementStatus: String(it.procurementStatus || '').trim().slice(0, 80),
+      mass: parseOptionalNumber(it.mass),
+      powerConsumption: parseOptionalNumber(it.powerConsumption),
+      powerDissipation: parseOptionalNumber(it.powerDissipation),
+      mtbf: parseOptionalNumber(it.mtbf),
+      lru: normalizeYesNo(it.lru),
+      spareAvailable: normalizeYesNo(it.spareAvailable),
+      spareToDeliver: normalizeYesNo(it.spareToDeliver),
+      leadTime: parseOptionalNumber(it.leadTime),
+      componentAlt: String(it.componentAlt || '').trim().slice(0, 200),
     })) : [];
     const validIds = new Set(items.map(i => i.id));
     items.forEach(i => { if (i.parentId && (!validIds.has(i.parentId) || i.parentId === i.id)) i.parentId = null; });
@@ -145,7 +225,15 @@
 
   /* ---------- Item-level conflict diff & non-conflicting merge ---------- */
   function itemSignature(it) {
-    return JSON.stringify([it.parentId || null, it.code, it.name, it.deptId, it.owner, it.maturity, it.milestoneId, it.notes]);
+    return JSON.stringify([
+      it.parentId || null, it.code || '', it.name || '', it.deptId || '', it.owner || '', it.maturity || 'Draft', it.milestoneId || '', it.notes || '',
+      it.acronym || '', it.description || '', it.heritage || '',
+      it.mechDrawing || '', it.elecDrawing || '', it.refDoc || '',
+      it.manufacturer || '', it.partNumber || '', it.procurementStatus || '',
+      it.mass ?? null, it.powerConsumption ?? null, it.powerDissipation ?? null, it.mtbf ?? null,
+      it.lru || '', it.spareAvailable || '', it.spareToDeliver || '',
+      it.leadTime ?? null, it.componentAlt || '',
+    ]);
   }
 
   function computeConflictDiff(localDoc, remoteDoc) {
@@ -181,8 +269,13 @@
     };
   }
 
+  P.HERITAGE_OPTIONS = HERITAGE_OPTIONS;
+  P.YESNO_OPTIONS = YESNO_OPTIONS;
+  P.PROC_STATUS_PRESETS = PROC_STATUS_PRESETS;
   P.data = {
-    PBS_SCHEMA, CACHE_KEY, makeId, sanitizeFilenamePart, getPbsFilename, createEmptyPbs, normalizePbsDoc,
+    PBS_SCHEMA, CACHE_KEY, HERITAGE_OPTIONS, YESNO_OPTIONS, PROC_STATUS_PRESETS, OPTIONAL_GROUPS, OPTIONAL_FIELD_KEYS,
+    normalizeHeritage, normalizeYesNo, parseOptionalNumber, formatNum, isFieldFilled, countOptionalFields,
+    makeId, sanitizeFilenamePart, getPbsFilename, createEmptyPbs, normalizePbsDoc,
     loadCache, saveCache, encodePbsForDisk, decodePbsFromText, itemSignature, computeConflictDiff, mergeConflictDocs,
   };
 })();

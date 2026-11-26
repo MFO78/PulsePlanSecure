@@ -1872,6 +1872,260 @@ test('Resilient holiday grouping, Project Technical Lead, Dedicated Milestones l
   }
 });
 
+test('PBS v2 optional engineering/procurement/documentation fields: schema, SWaP roll-ups, search, CSV, clone, SVG, PDF annexes & uncluttered views', () => {
+  const out = vm.runInContext(`(() => {
+    const P = globalThis.__ppPbsV2;
+    const db = {
+      departments: [
+        { id: 'd_elec', code: 'ELC', name: 'Electronics', color: '#4f46e5' },
+        { id: 'd_mech', code: 'MCH', name: 'Mechanical', color: '#059669' },
+      ],
+      milestones: [
+        { id: 'm_cdr', projectId: 'p_sat', title: 'CDR Freeze', date: '2026-09-01', status: 'Pending' },
+      ],
+    };
+    const project = { id: 'p_sat', code: 'SAT', name: 'Orbital Bus', color: '#4f46e5' };
+
+    // 1. Legacy PBS doc normalizes cleanly with empty optional fields
+    const legacyDoc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      items: [
+        { id: 'i_leg', parentId: null, code: '1', name: 'Legacy Payload', deptId: 'd_elec', owner: 'Ada', maturity: 'PDR', milestoneId: 'm_cdr', notes: 'Baseline note' },
+      ],
+    }, project, 'Tester');
+    const legacyCounts = P.data.countOptionalFields(legacyDoc.items[0]);
+    const legacyRollups = P.tree.computeSwpRollups(legacyDoc);
+    const legacyModel = P.report.buildReportModel(legacyDoc, project, db, 'Tester', '2026-11-26');
+    const legacyPrintHtml = P.report.buildPrintHtml(legacyModel);
+    const legacySvg = P.report.buildSvg(legacyDoc, project, db, '2026-11-26');
+
+    // 2. Full PBS doc with all 18 optional fields + parent/child hierarchy for roll-ups
+    const fullDoc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      meta: { revision: 3 },
+      items: [
+        {
+          id: 'i_root', parentId: null, code: '1', name: 'Avionics Bay', deptId: 'd_elec', owner: 'Ada',
+          maturity: 'CDR', milestoneId: 'm_cdr', notes: 'Qualification pending',
+          acronym: 'AVB', heritage: 'update', description: 'Main flight avionics assembly',
+        },
+        {
+          id: 'i_psu', parentId: 'i_root', code: '1.1', name: 'Power Supply Unit', deptId: 'd_elec', owner: 'Bob',
+          maturity: 'Qualified', milestoneId: 'm_cdr', notes: 'Tested at -40C..+85C',
+          acronym: 'PSU', description: '28V regulated isolated DC-DC converter', heritage: 'New',
+          mechDrawing: 'DWG-M-101 Rev C', elecDrawing: 'DWG-E-204 Rev B', refDoc: 'ICD-PWR-009',
+          manufacturer: 'Vicor', partNumber: 'DCM3623T50M53C2T00', procurementStatus: 'Ordered',
+          mass: '1.25', powerConsumption: 45, powerDissipation: 8.5, mtbf: '50,000',
+          lru: true, spareAvailable: false, spareToDeliver: 'yes',
+          leadTime: '14', componentAlt: 'XP Power QHL400',
+        },
+        {
+          id: 'i_enc', parentId: 'i_root', code: '1.2', name: 'Alu Enclosure', deptId: 'd_mech', owner: 'Cara',
+          maturity: 'Delivered', milestoneId: '', notes: '',
+          acronym: 'ENC', heritage: 'Existing', mechDrawing: 'DWG-M-102 Rev A',
+          manufacturer: 'ProtoFab', partNumber: 'PF-8820', procurementStatus: 'In Stock',
+          mass: 2.1, powerConsumption: 0, powerDissipation: 0, mtbf: -50,
+          lru: 'No', spareAvailable: 'Yes', spareToDeliver: 'No', leadTime: 6,
+        },
+      ],
+    }, project, 'Tester');
+
+    const psu = fullDoc.items[1];
+    const enc = fullDoc.items[2];
+    const psuCounts = P.data.countOptionalFields(psu);
+    const rollups = P.tree.computeSwpRollups(fullDoc);
+    const rootSub = rollups.byId.get('i_root');
+
+    // 3. Conflict diff catches optional field mutations
+    const remoteDoc = JSON.parse(JSON.stringify(fullDoc));
+    remoteDoc.items[1].partNumber = 'DCM3623-REV2';
+    const diff = P.data.computeConflictDiff(fullDoc, remoteDoc);
+
+    // 4. Search matches optional fields (acronym, P/N, manufacturer, drawing, alternative)
+    const searchByPn = P.tree.getFilteredTreeRows(fullDoc, { search: 'DCM3623' }, new Set());
+    const searchByDwg = P.tree.getFilteredTreeRows(fullDoc, { search: 'DWG-M-102' }, new Set());
+    const searchByAlt = P.tree.getFilteredTreeRows(fullDoc, { search: 'QHL400' }, new Set());
+
+    // 5. CSV export & header-mapped round-trip + legacy 8-col import + aliased Excel headers with units
+    const csvOut = P.io.buildPbsCsv(fullDoc, db);
+    const csvRoundTrip = P.io.parsePbsCsv(csvOut, db);
+    const legacyCsv = 'Code,ParentCode,Name,Maturity,Department,Owner,Milestone,Notes\\r\\n1,,Root Legacy,PDR,ELC,Ada,CDR Freeze,Keep clean\\r\\n';
+    const legacyParsed = P.io.parsePbsCsv(legacyCsv, db);
+    const excelCsv = 'Code,Name,Acronym,Existing/Update/New,Mass,Power Consumption,SPARE to be delivered (yes/no),Lead time,LRU\\r\\n1,Sensor Box,SNS,New,2.5 kg,18 W,Yes,10 wks,badval\\r\\n';
+    const excelParsed = P.io.parsePbsCsv(excelCsv, db);
+
+    // 6. Clone preserves hardware specs & resets milestoneId, procurementStatus, spareAvailable
+    const cloned = P.io.cloneItems(fullDoc);
+    const clonedPsu = cloned.find(x => x.code === '1.1');
+
+    // 7. SVG diagram + PDF report model + mock jsPDF renderPdf + Print HTML
+    const fullSvg = P.report.buildSvg(fullDoc, project, db, '2026-11-26');
+    const fullModel = P.report.buildReportModel(fullDoc, project, db, 'Tester', '2026-11-26');
+    const fullPrintHtml = P.report.buildPrintHtml(fullModel);
+
+    function runMockPdf(model) {
+      const tables = [];
+      let pages = 1;
+      function MockJsPdf() {
+        this.internal = { pageSize: { getWidth: () => 842, getHeight: () => 595 } };
+        this.lastAutoTable = { finalY: 160 };
+        this.setFillColor = () => {};
+        this.rect = () => {};
+        this.setTextColor = () => {};
+        this.setFont = () => {};
+        this.setFontSize = () => {};
+        this.text = () => {};
+        this.addPage = () => { pages++; };
+        this.autoTable = (opts) => {
+          tables.push({ head: opts.head[0], rows: opts.body.length });
+          this.lastAutoTable = { finalY: (opts.startY || 80) + opts.body.length * 18 + 30 };
+        };
+      }
+      P.report.renderPdf(MockJsPdf, model);
+      return { tables, pages };
+    }
+    const legacyPdf = runMockPdf(legacyModel);
+    const fullPdf = runMockPdf(fullModel);
+
+    // 8. Uncluttered view rendering across all 4 lenses, detail drawer & collapsible form
+    const baseCtx = (d, opts = {}) => ({
+      doc: d, db, project,
+      summary: P.tree.computeMaturitySummary(d, db.milestones, '2026-06-01'),
+      rollups: P.tree.computeSwpRollups(d),
+      rows: P.tree.getFilteredTreeRows(d, {}, new Set()),
+      collapsedIds: new Set(),
+      expandedDetailIds: opts.expanded || new Set(),
+      viewMode: opts.viewMode || 'overview',
+      filter: { search: '', deptId: '', maturity: '', milestoneId: '' },
+      edit: opts.edit || null,
+      conflict: null, notices: [],
+      owners: ['Ada', 'Bob'], manufacturers: ['Vicor', 'ProtoFab'], procStatuses: P.PROC_STATUS_PRESETS,
+      projectMilestones: db.milestones, cloneSources: [], canDirSync: false, dirName: '', hasRemembered: false,
+      status: { text: 'Saved locally', tone: 'idle' },
+    });
+
+    const htmlLegacyOverview = P.view.buildDialogHtml(baseCtx(legacyDoc, { viewMode: 'overview' }));
+    const htmlOverview = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'overview', expanded: new Set(['i_psu']) }));
+    const htmlEng = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'engineering' }));
+    const htmlProc = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'procurement' }));
+    const htmlDocs = P.view.buildDialogHtml(baseCtx(fullDoc, { viewMode: 'docs' }));
+    const htmlEditNew = P.view.buildDialogHtml(baseCtx(fullDoc, {
+      edit: { open: true, item: null, parentId: null, suggestedCode: '2', parentCandidates: fullDoc.items, openSections: { docs: false, proc: false, eng: false } },
+    }));
+    const htmlEditPsu = P.view.buildDialogHtml(baseCtx(fullDoc, {
+      edit: { open: true, item: psu, parentId: 'i_root', suggestedCode: '1.1', parentCandidates: [fullDoc.items[0]], openSections: { docs: true, proc: true, eng: true } },
+    }));
+
+    return {
+      legacyCounts, legacyRollups, legacyAnnexCount: legacyModel.annexes.length, legacyPdf, legacyPrintHtml, legacySvg,
+      psu, enc, psuCounts, rollups, rootSub, diff,
+      searchByPnLen: searchByPn.length, searchByDwgLen: searchByDwg.length, searchByAltLen: searchByAlt.length,
+      csvOut, csvRoundTrip, legacyParsed, excelParsed,
+      clonedPsu,
+      fullSvg, fullModel, fullPdf, fullPrintHtml,
+      htmlLegacyOverview, htmlOverview, htmlEng, htmlProc, htmlDocs, htmlEditNew, htmlEditPsu,
+    };
+  })()`, ctx);
+
+  // Legacy backward-compatibility & zero-clutter checks
+  assert.equal(out.legacyCounts.total, 0, 'Legacy item has 0 optional fields populated');
+  assert.equal(out.legacyRollups.totalMass, null, 'Legacy doc has null totalMass');
+  assert.equal(out.legacyAnnexCount, 0, 'Legacy doc generates 0 PDF technical annexes');
+  assert.equal(out.legacyPdf.tables.length, 1, 'Legacy PDF renders exactly the single main table');
+  assert.equal(out.legacyPrintHtml.includes('Technical Annex'), false, 'Legacy Print HTML stays clean without annexes');
+  assert.equal(out.htmlLegacyOverview.includes('pp-pbs-spec-btn'), false, 'Legacy overview shows no Specs toggle buttons');
+  assert.equal(out.htmlLegacyOverview.includes('pp-pbs-pill-swp'), false, 'Legacy summary bar shows no SWaP pills');
+  assert.equal(out.htmlLegacyOverview.includes('ppPbsToggleAllSpecsBtn'), false, 'Legacy view bar hides Show All Specs button');
+
+  // Full 18-field normalization checks
+  assert.equal(out.psuCounts.total, 18, 'PSU item has all 18 optional fields populated');
+  assert.equal(out.psu.mass, 1.25, 'String numeric mass normalizes to 1.25');
+  assert.equal(out.psu.mtbf, 50000, 'Comma-grouped MTBF normalizes to 50000');
+  assert.equal(out.psu.lru, 'Yes', 'Boolean true normalizes to Yes');
+  assert.equal(out.psu.spareAvailable, 'No', 'Boolean false normalizes to No');
+  assert.equal(out.psu.spareToDeliver, 'Yes', 'Lowercase yes normalizes to Yes');
+  assert.equal(out.psu.leadTime, 14, 'Lead time normalizes to 14');
+  assert.equal(out.enc.powerConsumption, 0, 'Zero numeric value is preserved as 0 (not null)');
+  assert.equal(out.enc.mtbf, null, 'Negative numeric MTBF is rejected to null');
+
+  // SWaP roll-ups & descendant totals
+  assert.equal(out.rollups.totalMass, 3.35, 'Total mass sums 1.25 + 2.1 = 3.35 kg');
+  assert.equal(out.rollups.totalPowerConsumption, 45, 'Total power consumption sums 45 + 0 = 45 W');
+  assert.equal(out.rollups.totalPowerDissipation, 8.5, 'Total power dissipation sums 8.5 + 0 = 8.5 W');
+  assert.equal(out.rollups.lruCount, 1, 'Counts 1 LRU=Yes item');
+  assert.equal(out.rollups.spareAvailCount, 1, 'Counts 1 SPARE Available=Yes item');
+  assert.equal(out.rollups.spareDelivCount, 1, 'Counts 1 SPARE to be Delivered=Yes item');
+  assert.equal(out.rootSub.descMass, 3.35, 'Empty parent rolls up descendant mass 3.35 kg');
+  assert.equal(out.rootSub.descPowerCons, 45, 'Empty parent rolls up descendant power consumption 45 W');
+
+  // Conflict diff & extended search
+  assert.equal(out.diff.modifiedBoth.length, 1, 'Conflict diff detects optional partNumber edit');
+  assert.equal(out.searchByPnLen, 2, 'Search by Part Number matches item plus parent context row');
+  assert.equal(out.searchByDwgLen, 2, 'Search by Mechanical Drawing matches item plus parent context row');
+  assert.equal(out.searchByAltLen, 2, 'Search by Component Alternative matches item plus parent context row');
+
+  // CSV round-trip, legacy CSV, and aliased Excel headers
+  assert.equal(out.csvRoundTrip.warnings.length, 0, '26-column CSV round-trip produces zero warnings');
+  const rtPsu = out.csvRoundTrip.items.find(i => i.code === '1.1');
+  const rtEnc = out.csvRoundTrip.items.find(i => i.code === '1.2');
+  assert.equal(rtPsu.acronym, 'PSU');
+  assert.equal(rtPsu.heritage, 'New');
+  assert.equal(rtPsu.mechDrawing, 'DWG-M-101 Rev C');
+  assert.equal(rtPsu.elecDrawing, 'DWG-E-204 Rev B');
+  assert.equal(rtPsu.refDoc, 'ICD-PWR-009');
+  assert.equal(rtPsu.manufacturer, 'Vicor');
+  assert.equal(rtPsu.partNumber, 'DCM3623T50M53C2T00');
+  assert.equal(rtPsu.procurementStatus, 'Ordered');
+  assert.equal(rtPsu.mass, 1.25);
+  assert.equal(rtPsu.powerConsumption, 45);
+  assert.equal(rtPsu.powerDissipation, 8.5);
+  assert.equal(rtPsu.mtbf, 50000);
+  assert.equal(rtPsu.lru, 'Yes');
+  assert.equal(rtPsu.spareAvailable, 'No');
+  assert.equal(rtPsu.spareToDeliver, 'Yes');
+  assert.equal(rtPsu.leadTime, 14);
+  assert.equal(rtPsu.componentAlt, 'XP Power QHL400');
+  assert.equal(rtEnc.powerConsumption, 0, 'CSV round-trip preserves explicit 0 W');
+  assert.equal(out.legacyParsed.items.length, 1, 'Legacy 8-column CSV imports cleanly');
+  assert.equal(out.legacyParsed.warnings.length, 0, 'Legacy 8-column CSV has 0 warnings');
+  assert.equal(out.excelParsed.items[0].mass, 2.5, 'Excel CSV strips trailing kg unit');
+  assert.equal(out.excelParsed.items[0].powerConsumption, 18, 'Excel CSV strips trailing W unit');
+  assert.equal(out.excelParsed.items[0].leadTime, 10, 'Excel CSV strips trailing wks unit');
+  assert.equal(out.excelParsed.items[0].spareToDeliver, 'Yes', 'Excel CSV maps aliased SPARE to be delivered header');
+  assert.equal(out.excelParsed.items[0].lru, '', 'Invalid LRU value ignored cleanly');
+  assert.ok(out.excelParsed.warnings.some(w => w.includes('invalid LRU')), 'Invalid LRU emits import warning');
+
+  // Clone behavior
+  assert.equal(out.clonedPsu.partNumber, 'DCM3623T50M53C2T00', 'Clone preserves hardware Part Number');
+  assert.equal(out.clonedPsu.mass, 1.25, 'Clone preserves hardware Mass');
+  assert.equal(out.clonedPsu.mechDrawing, 'DWG-M-101 Rev C', 'Clone preserves Mechanical Drawing');
+  assert.equal(out.clonedPsu.spareToDeliver, 'Yes', 'Clone preserves contractual SPARE to be Delivered');
+  assert.equal(out.clonedPsu.milestoneId, '', 'Clone resets milestoneId');
+  assert.equal(out.clonedPsu.procurementStatus, '', 'Clone resets project-specific procurementStatus');
+  assert.equal(out.clonedPsu.spareAvailable, '', 'Clone resets project-specific spareAvailable');
+
+  // SVG & PDF / Print exports
+  assert.ok(out.fullSvg.includes('1.1 \u00b7 PSU'), 'SVG card header includes compact Acronym');
+  assert.ok(out.fullSvg.includes('>NEW</text>') && out.fullSvg.includes('>UPD</text>'), 'SVG cards show compact heritage pills');
+  assert.ok(out.fullSvg.includes('Mass 3.35 kg') && out.fullSvg.includes('Power 45 W'), 'SVG subtitle surfaces SWaP totals');
+  assert.ok(out.fullSvg.includes('DCM3623T50M53C2T00') && out.fullSvg.includes('XP Power QHL400'), 'SVG card <title> embeds full hover specs');
+  assert.equal(out.fullModel.annexes.length, 3, 'Full PBS PDF model produces all 3 populated technical annexes');
+  assert.equal(out.fullPdf.tables.length, 4, 'Vector PDF renders main hierarchy table + 3 annexes');
+  const engAnnex = out.fullModel.annexes.find(a => a.key === 'eng');
+  assert.ok(engAnnex.rows[0].cells[3] === 'Sum 3.35', 'Engineering annex shows rolled-up Sum for empty parent');
+  assert.ok(engAnnex.rows[engAnnex.rows.length - 1].isTotal && engAnnex.rows[engAnnex.rows.length - 1].cells[3] === '3.35', 'Engineering annex ends with accurate TOTAL row');
+  assert.ok(out.fullPrintHtml.includes('Engineering Budgets, Reliability &amp; Spares') && out.fullPrintHtml.includes('Procurement &amp; Supply Chain') && out.fullPrintHtml.includes('Documentation &amp; Drawings'), 'Offline print HTML includes all 3 annexes');
+
+  // Uncluttered view rendering across all 4 lenses, detail drawer & collapsible form
+  assert.ok(out.htmlOverview.includes('Mass: 3.35 kg') && out.htmlOverview.includes('Power: 45 W') && out.htmlOverview.includes('Diss.: 8.5 W'), 'Summary bar shows SWaP totals');
+  assert.ok(out.htmlOverview.includes('Specs (18)') && out.htmlOverview.includes('pp-pbs-detail-row') && out.htmlOverview.includes('DCM3623T50M53C2T00'), 'Overview renders compact Specs toggle and expandable detail drawer');
+  assert.ok(out.htmlEng.includes('Mass (kg)') && out.htmlEng.includes('&Sigma; 3.35') && out.htmlEng.includes('50000'), 'Engineering view shows rolled-up parent mass and MTBF');
+  assert.ok(out.htmlProc.includes('Vicor') && out.htmlProc.includes('Ordered') && out.htmlProc.includes('14 wks') && out.htmlProc.includes('XP Power QHL400'), 'Procurement view shows supply chain & spares columns');
+  assert.ok(out.htmlDocs.includes('DWG-M-101 Rev C') && out.htmlDocs.includes('DWG-E-204 Rev B') && out.htmlDocs.includes('ICD-PWR-009'), 'Docs view shows description and drawing/reference columns');
+  assert.ok(out.htmlEditNew.includes('data-pbs-section="docs">') && out.htmlEditNew.includes('data-pbs-section="proc">') && out.htmlEditNew.includes('data-pbs-section="eng">'), 'New item form starts with all 3 optional sections collapsed');
+  assert.ok(out.htmlEditPsu.includes('data-pbs-section="docs" open>') && out.htmlEditPsu.includes('id="ppPbsProcStatusList"') && out.htmlEditPsu.includes('In Manufacture'), 'Edit form auto-opens populated sections and provides Procurement Status preset suggestions');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

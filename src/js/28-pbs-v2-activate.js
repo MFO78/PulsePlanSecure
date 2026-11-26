@@ -138,10 +138,10 @@
   if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
     const wn = MANUAL_SECTIONS.find(s => s && s.id === 'whatsnew');
     if (wn && typeof wn.bodyHtml === 'string' && !wn.bodyHtml.includes('Product Breakdown Structure (PBS)')) {
-      wn.keywords = `${wn.keywords || ''} pbs product breakdown structure pdf svg csv folder sync maturity`;
+      wn.keywords = `${wn.keywords || ''} pbs product breakdown structure pdf svg csv folder sync maturity acronym mass power mtbf lru spare manufacturer part number drawings procurement`;
       wn.bodyHtml = wn.bodyHtml.replace(
         '</ul>',
-        `<li>&bull; <strong>Per-Project Product Breakdown Structure (PBS):</strong> Open <strong>PBS</strong> on any project row in <strong>Setup &amp; Data &rarr; Projects</strong> to build a hierarchical deliverable tree with maturity gates, filters, keyboard editing, owner suggestions from the People Directory and ChangeLog entries. Files stay separate (<code class="px-1 rounded bg-white font-mono">pbs_&lt;CODE&gt;.json</code>) and reuse your single AES-256-GCM session passphrase, with Chrome/Edge folder auto-sync and conflict merge. Export <strong>CSV</strong>, an <strong>SVG diagram</strong> or a department-coloured <strong>PDF</strong>, or clone a PBS from another project.</li></ul>`
+        `<li>&bull; <strong>Per-Project Product Breakdown Structure (PBS):</strong> Open <strong>PBS</strong> on any project row in <strong>Setup &amp; Data &rarr; Projects</strong> to build a hierarchical deliverable tree with maturity gates, optional engineering/procurement/documentation fields (acronym, heritage, drawings, manufacturer, P/N, procurement status, mass, power, MTBF, LRU, spares, lead time, alternatives), switchable column views (<em>Overview / Engineering / Procurement / Docs</em>), expandable per-row spec drawers, automatic SWaP totals, keyboard editing, and ChangeLog entries. Files stay separate (<code class="px-1 rounded bg-white font-mono">pbs_&lt;CODE&gt;.json</code>) and reuse your single AES-256-GCM session passphrase, with Chrome/Edge folder auto-sync and conflict merge. Export <strong>CSV</strong>, an <strong>SVG diagram</strong> (with hover specs) or a department-coloured <strong>PDF</strong> (with automatic technical annexes when optional fields are used), or clone a PBS from another project.</li></ul>`
       );
     }
   }

@@ -70,6 +70,35 @@
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }
 
+  function getManufacturerSuggestions() {
+    const names = new Set();
+    const add = (v) => { const t = String(v || '').trim(); if (t) names.add(t); };
+    const cache = getCache();
+    Object.keys(cache).forEach(pid => {
+      const d = cache[pid];
+      if (d && Array.isArray(d.items)) d.items.forEach(it => it && add(it.manufacturer));
+    });
+    if (S.activeDoc && Array.isArray(S.activeDoc.items)) S.activeDoc.items.forEach(it => it && add(it.manufacturer));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+
+  function getProcStatusSuggestions() {
+    const presets = (P.PROC_STATUS_PRESETS || ['Not Started', 'RFQ', 'Ordered', 'In Manufacture', 'In Transit', 'Received', 'In Stock', 'Delivered']);
+    const seen = new Set(presets.map(s => s.toLowerCase()));
+    const extras = [];
+    const add = (v) => {
+      const t = String(v || '').trim();
+      if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); extras.push(t); }
+    };
+    const cache = getCache();
+    Object.keys(cache).forEach(pid => {
+      const d = cache[pid];
+      if (d && Array.isArray(d.items)) d.items.forEach(it => it && add(it.procurementStatus));
+    });
+    if (S.activeDoc && Array.isArray(S.activeDoc.items)) S.activeDoc.items.forEach(it => it && add(it.procurementStatus));
+    return [...presets, ...extras.sort((a, b) => a.localeCompare(b))];
+  }
+
   /* ---------- Remembered folder handle (IndexedDB, Chrome/Edge) ---------- */
   function openHandleDb() {
     return new Promise((resolve, reject) => {
@@ -320,7 +349,8 @@
 
   P.core = {
     state: S, getDb, getProject, getUserName, toast, getCache, supportsDirSync, getSessionPassphrase,
-    setSyncStatus, logChange, getOwnerSuggestions, openSession, initFolder, replaceDoc,
+    setSyncStatus, logChange, getOwnerSuggestions, getManufacturerSuggestions, getProcStatusSuggestions,
+    openSession, initFolder, replaceDoc,
     linkFolder, reconnectFolder, syncFromFolder, writeToFolder, scheduleSave, pollOnce, startPolling, stopPolling,
     getItemCount, listCloneSources, downloadText, fileNameFor,
   };

@@ -4,7 +4,8 @@
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
   const ui = {
     dialog: null, wired: false, filter: { search: '', deptId: '', maturity: '', milestoneId: '' },
-    collapsedIds: new Set(), edit: null, editSeq: 0, draft: null, notices: [], badgeRefresh: null,
+    viewMode: 'overview', collapsedIds: new Set(), expandedDetailIds: new Set(),
+    edit: null, editSeq: 0, draft: null, notices: [], badgeRefresh: null,
   };
   const C = () => P.core;
   const V = () => P.view;
@@ -14,7 +15,13 @@
   const R = () => P.report;
   const MAX_FILE_BYTES = 2000000;
   const MAX_IMPORT_ITEMS = 2000;
-  const FORM_FIELDS = ['ppPbsFCode', 'ppPbsFName', 'ppPbsFParent', 'ppPbsFMaturity', 'ppPbsFDept', 'ppPbsFOwner', 'ppPbsFMilestone', 'ppPbsFNotes'];
+  const FORM_FIELDS = [
+    'ppPbsFCode', 'ppPbsFAcronym', 'ppPbsFName', 'ppPbsFHeritage', 'ppPbsFParent',
+    'ppPbsFMaturity', 'ppPbsFDept', 'ppPbsFOwner', 'ppPbsFMilestone', 'ppPbsFDescription', 'ppPbsFNotes',
+    'ppPbsFMechDrawing', 'ppPbsFElecDrawing', 'ppPbsFRefDoc',
+    'ppPbsFManufacturer', 'ppPbsFPartNumber', 'ppPbsFProcStatus', 'ppPbsFLeadTime', 'ppPbsFComponentAlt',
+    'ppPbsFMass', 'ppPbsFPowerCons', 'ppPbsFPowerDiss', 'ppPbsFMtbf', 'ppPbsFLru', 'ppPbsFSpareAvail', 'ppPbsFSpareDeliv',
+  ];
 
   const isOpen = () => Boolean(ui.dialog && ui.dialog.open);
   const q = (sel) => (ui.dialog ? ui.dialog.querySelector(sel) : null);
@@ -45,7 +52,9 @@
     const parentId = item ? (item.parentId || null) : (ui.edit.parentId || null);
     const parentCandidates = T().flattenTreeRows(d, null, 0, []).map(r => r.item)
       .filter(i => !item || (i.id !== item.id && !T().isDescendant(d, i.id, item.id)));
-    return { open: true, item, parentId, suggestedCode: T().suggestNextCode(d, parentId), parentCandidates };
+    const counts = item ? D().countOptionalFields(item) : { docs: 0, proc: 0, eng: 0 };
+    const openSections = ui.edit.openSections || { docs: counts.docs > 0, proc: counts.proc > 0, eng: counts.eng > 0 };
+    return { open: true, item, parentId, suggestedCode: T().suggestNextCode(d, parentId), parentCandidates, openSections };
   }
 
   function buildCtx() {
@@ -58,10 +67,16 @@
     return {
       doc: d, db, project: core.getProject(S.activeProjectId),
       summary: T().computeMaturitySummary(d, db.milestones || [], todayIso()),
+      rollups: T().computeSwpRollups(d),
       rows: T().getFilteredTreeRows(d, ui.filter, ui.collapsedIds),
-      collapsedIds: ui.collapsedIds, filter: ui.filter, edit,
+      collapsedIds: ui.collapsedIds, expandedDetailIds: ui.expandedDetailIds, viewMode: ui.viewMode,
+      filter: ui.filter, edit,
       conflict: S.conflictRemoteText ? { diff: S.conflictRemoteDoc ? D().computeConflictDiff(d, S.conflictRemoteDoc) : null } : null,
-      notices: ui.notices, owners: core.getOwnerSuggestions(), projectMilestones: projectMilestones(db, S.activeProjectId),
+      notices: ui.notices,
+      owners: core.getOwnerSuggestions(),
+      manufacturers: core.getManufacturerSuggestions(),
+      procStatuses: core.getProcStatusSuggestions(),
+      projectMilestones: projectMilestones(db, S.activeProjectId),
       cloneSources: core.listCloneSources().map(p => ({ id: p.id, code: p.code || p.id, name: p.name || '', count: core.getItemCount(p.id) })),
       canDirSync: core.supportsDirSync(), dirName: S.dirHandle ? S.dirHandle.name : '', hasRemembered: Boolean(S.rememberedDirHandle) && !S.dirHandle,
       status: { text: S.syncStatusText, tone: S.syncStatusTone },
@@ -75,7 +90,7 @@
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-details', 'data-pbs-view', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -98,7 +113,12 @@
     if (!q('#ppPbsItemForm') || !ui.edit) return null;
     const values = {};
     FORM_FIELDS.forEach(id => { const el = q(`#${id}`); if (el) values[id] = el.value; });
-    return { seq: ui.edit.seq, values };
+    const sections = {};
+    ['docs', 'proc', 'eng'].forEach(k => {
+      const det = q(`details[data-pbs-section="${k}"]`);
+      if (det) sections[k] = Boolean(det.open);
+    });
+    return { seq: ui.edit.seq, values, sections };
   }
 
   /* focusSel overrides focus restoration (used when opening forms or after deletes). */
@@ -106,6 +126,7 @@
     if (!isOpen()) return;
     const focus = captureFocus();
     const draft = readDraft();
+    if (draft && ui.edit && draft.seq === ui.edit.seq) ui.edit.openSections = draft.sections;
     const body = q('.pp-pbs-body');
     const scrollTop = body ? body.scrollTop : 0;
     ui.dialog.innerHTML = V().buildDialogHtml(buildCtx());
@@ -134,7 +155,7 @@
 
   /* ---------- Tree actions ---------- */
   function openForm(itemId, parentId) {
-    ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq };
+    ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq, openSections: null };
     if (parentId) ui.collapsedIds.delete(parentId);
     render('#ppPbsFName');
   }
@@ -162,11 +183,54 @@
       q('#ppPbsFCode').focus();
       return;
     }
+
+    const readNum = (fieldId, label, secKey) => {
+      const raw = val(fieldId).trim();
+      if (!raw) return { ok: true, value: null };
+      const parsed = D().parseOptionalNumber(raw);
+      if (parsed === null) {
+        const det = secKey ? q(`details[data-pbs-section="${secKey}"]`) : null;
+        if (det) det.open = true;
+        C().toast(`${label} must be a non-negative number.`, 'warning');
+        const el = q(`#${fieldId}`);
+        if (el) el.focus();
+        return { ok: false, value: null };
+      }
+      return { ok: true, value: parsed };
+    };
+
+    const mass = readNum('ppPbsFMass', 'Mass (kg)', 'eng'); if (!mass.ok) return;
+    const powerConsumption = readNum('ppPbsFPowerCons', 'Power Consumption (W)', 'eng'); if (!powerConsumption.ok) return;
+    const powerDissipation = readNum('ppPbsFPowerDiss', 'Power Dissipation (W)', 'eng'); if (!powerDissipation.ok) return;
+    const mtbf = readNum('ppPbsFMtbf', 'MTBF (h)', 'eng'); if (!mtbf.ok) return;
+    const leadTime = readNum('ppPbsFLeadTime', 'Lead Time (wks)', 'proc'); if (!leadTime.ok) return;
+
     const db = C().getDb();
     const maturity = P.MATURITY_OPTIONS.includes(val('ppPbsFMaturity')) ? val('ppPbsFMaturity') : 'Draft';
     const deptId = (db.departments || []).some(x => x.id === val('ppPbsFDept')) ? val('ppPbsFDept') : '';
     const milestoneId = (db.milestones || []).some(x => x.id === val('ppPbsFMilestone')) ? val('ppPbsFMilestone') : '';
-    const fields = { code, name, deptId, owner: val('ppPbsFOwner').trim().slice(0, 120), maturity, milestoneId, notes: val('ppPbsFNotes').trim().slice(0, 1000) };
+    const fields = {
+      code, name, deptId, owner: val('ppPbsFOwner').trim().slice(0, 120), maturity, milestoneId,
+      notes: val('ppPbsFNotes').trim().slice(0, 1000),
+      acronym: val('ppPbsFAcronym').trim().slice(0, 24),
+      description: val('ppPbsFDescription').trim().slice(0, 1000),
+      heritage: D().normalizeHeritage(val('ppPbsFHeritage')),
+      mechDrawing: val('ppPbsFMechDrawing').trim().slice(0, 160),
+      elecDrawing: val('ppPbsFElecDrawing').trim().slice(0, 160),
+      refDoc: val('ppPbsFRefDoc').trim().slice(0, 200),
+      manufacturer: val('ppPbsFManufacturer').trim().slice(0, 140),
+      partNumber: val('ppPbsFPartNumber').trim().slice(0, 120),
+      procurementStatus: val('ppPbsFProcStatus').trim().slice(0, 80),
+      mass: mass.value,
+      powerConsumption: powerConsumption.value,
+      powerDissipation: powerDissipation.value,
+      mtbf: mtbf.value,
+      lru: D().normalizeYesNo(val('ppPbsFLru')),
+      spareAvailable: D().normalizeYesNo(val('ppPbsFSpareAvail')),
+      spareToDeliver: D().normalizeYesNo(val('ppPbsFSpareDeliv')),
+      leadTime: leadTime.value,
+      componentAlt: val('ppPbsFComponentAlt').trim().slice(0, 200),
+    };
     let id; let summary;
     if (item) {
       const prev = item.maturity;
@@ -192,7 +256,7 @@
     const n = ids.size - 1;
     if (!askOk(`Delete "${item.name}"${n ? ` and its ${n} sub-item${n === 1 ? '' : 's'}` : ''}?`)) return;
     d.items = d.items.filter(i => !ids.has(i.id));
-    ids.forEach(x => ui.collapsedIds.delete(x));
+    ids.forEach(x => { ui.collapsedIds.delete(x); ui.expandedDetailIds.delete(x); });
     if (ui.edit && ids.has(ui.edit.itemId)) ui.edit = null;
     commit(`Deleted PBS item ${item.code} ${item.name}${n ? ` (+${n} sub-items)` : ''}`, '#ppPbsAddRootBtn');
   }
@@ -217,6 +281,24 @@
     if (collapse) doc().items.forEach(i => { if (T().getChildren(doc(), i.id).length) ui.collapsedIds.add(i.id); });
     render();
   }
+  function toggleDetails(id) {
+    if (ui.expandedDetailIds.has(id)) ui.expandedDetailIds.delete(id); else ui.expandedDetailIds.add(id);
+    render();
+  }
+  function toggleAllSpecs() {
+    if (ui.expandedDetailIds.size > 0) {
+      ui.expandedDetailIds.clear();
+    } else {
+      (doc().items || []).forEach(it => { if (D().countOptionalFields(it).total > 0) ui.expandedDetailIds.add(it.id); });
+    }
+    render();
+  }
+  function setViewMode(mode) {
+    if (V().VIEW_COLUMNS && V().VIEW_COLUMNS[mode]) {
+      ui.viewMode = mode;
+      render();
+    }
+  }
 
   /* ---------- Files, exports, clone ---------- */
   async function readFileText(file) {
@@ -240,7 +322,7 @@
     if (d.items.length && !askOk(`Replace the ${d.items.length} existing items with ${loaded.items.length} items from "${file.name}"?`)) return;
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.edit = null;
+    ui.collapsedIds.clear(); ui.expandedDetailIds.clear(); ui.edit = null;
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
 
@@ -296,7 +378,7 @@
     if (!src || !Array.isArray(src.items) || !src.items.length) { C().toast('That project has no PBS items to clone.', 'warning'); render(); return; }
     const items = IO().cloneItems(src).map(it => ({ ...it, maturity: 'Draft' }));
     const label = sp ? `[${sp.code || sp.id}] ${sp.name}` : srcId;
-    if (d.items.length && !askOk(`Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links are not copied.`)) { render(); return; }
+    if (d.items.length && !askOk(`Add ${items.length} items cloned from ${label} to the ${d.items.length} existing items? Maturity resets to Draft; milestone links, procurement status and spare availability are not copied.`)) { render(); return; }
     d.items.push(...items);
     commit(`Cloned ${items.length} items from ${label}`);
   }
@@ -331,6 +413,7 @@
     ppPbsAddRootBtn: () => openForm(null, null),
     ppPbsExpandAllBtn: () => setAllCollapsed(false),
     ppPbsCollapseAllBtn: () => setAllCollapsed(true),
+    ppPbsToggleAllSpecsBtn: () => toggleAllSpecs(),
     ppPbsLinkFolderBtn: safe(async () => { await C().linkFolder(); render(); }),
     ppPbsRelinkBtn: safe(async () => { await C().linkFolder(); render(); }),
     ppPbsReconnectBtn: safe(async () => { await C().reconnectFolder(); render(); }),
@@ -351,6 +434,8 @@
     const t = e.target.closest ? e.target.closest('button') : null;
     if (!t || !ui.dialog.contains(t)) return;
     const d = t.dataset;
+    if (d.pbsView) return setViewMode(d.pbsView);
+    if (d.pbsDetails) return toggleDetails(d.pbsDetails);
     if (d.pbsToggle) return toggleItem(d.pbsToggle);
     if (d.pbsMove) return moveItem(d.pbsId, d.pbsMove);
     if (d.pbsAddChild) return openForm(null, d.pbsAddChild);
@@ -391,7 +476,10 @@
     if (e.key === 'Enter') { e.preventDefault(); openForm(id, null); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      const next = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+      let next = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+      while (next && !next.hasAttribute('data-pbs-row')) {
+        next = e.key === 'ArrowDown' ? next.nextElementSibling : next.previousElementSibling;
+      }
       if (next && next.hasAttribute('data-pbs-row')) next.focus();
     } else if (e.key === 'ArrowRight' && toggle && toggle.getAttribute('aria-expanded') === 'false') { e.preventDefault(); toggleItem(id); }
     else if (e.key === 'ArrowLeft' && toggle && toggle.getAttribute('aria-expanded') === 'true') { e.preventDefault(); toggleItem(id); }
@@ -433,7 +521,7 @@
     ensureDialog();
     V().injectStyles();
     ui.filter = { search: '', deptId: '', maturity: '', milestoneId: '' };
-    ui.collapsedIds = new Set(); ui.edit = null; ui.notices = [];
+    ui.viewMode = 'overview'; ui.collapsedIds = new Set(); ui.expandedDetailIds = new Set(); ui.edit = null; ui.notices = [];
     const hooks = core.state.hooks;
     hooks.rerender = () => render();
     hooks.onStatus = updateStatusPill;

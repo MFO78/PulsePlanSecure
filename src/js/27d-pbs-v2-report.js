@@ -4,9 +4,16 @@
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
   const MAT_COLORS = { Draft: '#64748b', PDR: '#d97706', CDR: '#4f46e5', Qualified: '#059669', Delivered: '#047857' };
   const MAT_PDF_RGB = { Qualified: [4, 120, 87], Delivered: [4, 120, 87], CDR: [67, 56, 202], PDR: [180, 83, 9] };
+  const HERITAGE_SVG = {
+    Existing: { bg: '#e2e8f0', fg: '#334155', short: 'EXT' },
+    Update: { bg: '#fef3c7', fg: '#92400e', short: 'UPD' },
+    New: { bg: '#e0e7ff', fg: '#3730a3', short: 'NEW' },
+  };
 
   const children = (doc, id) => P.tree.getChildren(doc, id);
   const safeName = (project, fallbackId) => P.data.sanitizeFilenamePart(project ? (project.code || project.id) : fallbackId);
+  const fmtNum = (v) => (P.data && typeof P.data.formatNum === 'function' ? P.data.formatNum(v) : (v != null ? String(v) : ''));
+  const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
   function svgFilename(project, fallbackId) { return `pbs_${safeName(project, fallbackId)}_diagram.svg`; }
   function pdfFilename(project, fallbackId, dateStr) { return `pbs_${safeName(project, fallbackId)}_${dateStr}.pdf`; }
@@ -31,9 +38,37 @@
       .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
   }
 
+  function buildCardTooltip(n, dept) {
+    const lines = [`${n.code}${n.acronym ? ` [${n.acronym}]` : ''} — ${n.name}`];
+    if (n.isRoot) return lines[0];
+    if (n.maturity) lines.push(`Maturity: ${n.maturity}`);
+    if (n.heritage) lines.push(`Status: ${n.heritage}`);
+    if (dept) lines.push(`Department: [${dept.code}] ${dept.name}`);
+    if (n.owner) lines.push(`Owner: ${n.owner}`);
+    if (n.description) lines.push(`Description: ${n.description}`);
+    if (n.manufacturer) lines.push(`Manufacturer: ${n.manufacturer}`);
+    if (n.partNumber) lines.push(`Part Number: ${n.partNumber}`);
+    if (n.procurementStatus) lines.push(`Procurement: ${n.procurementStatus}`);
+    if (isNum(n.leadTime)) lines.push(`Lead Time: ${fmtNum(n.leadTime)} wks`);
+    if (n.componentAlt) lines.push(`Alternative: ${n.componentAlt}`);
+    if (isNum(n.mass)) lines.push(`Mass: ${fmtNum(n.mass)} kg`);
+    if (isNum(n.powerConsumption)) lines.push(`Power Consumption: ${fmtNum(n.powerConsumption)} W`);
+    if (isNum(n.powerDissipation)) lines.push(`Power Dissipation: ${fmtNum(n.powerDissipation)} W`);
+    if (isNum(n.mtbf)) lines.push(`MTBF: ${fmtNum(n.mtbf)} h`);
+    if (n.lru) lines.push(`LRU: ${n.lru}`);
+    if (n.spareAvailable) lines.push(`SPARE Available: ${n.spareAvailable}`);
+    if (n.spareToDeliver) lines.push(`SPARE to be Delivered: ${n.spareToDeliver}`);
+    if (n.mechDrawing) lines.push(`Mech. Drawing: ${n.mechDrawing}`);
+    if (n.elecDrawing) lines.push(`Elec. Drawing: ${n.elecDrawing}`);
+    if (n.refDoc) lines.push(`Ref. Document: ${n.refDoc}`);
+    if (n.notes) lines.push(`Notes: ${n.notes}`);
+    return lines.join('\n');
+  }
+
   /* ---------- Top-down SVG diagram ---------- */
   function buildSvg(doc, project, db, dateStr) {
     const deptMap = new Map(((db && db.departments) || []).map(x => [x.id, x]));
+    const rollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
     const W = 190, H = 74, H_GAP = 24, V_GAP = 42, PAD = 32, HEADER_H = 64;
     const roots = children(doc, null);
     const root = {
@@ -81,18 +116,30 @@
       const badge = n.maturity
         ? `<rect x="${W - 66}" y="8" width="58" height="16" rx="8" fill="${MAT_COLORS[n.maturity] || '#475569'}"/><text x="${W - 37}" y="19.5" text-anchor="middle" font-size="9" font-weight="700" fill="#ffffff">${xmlEsc(n.maturity)}</text>`
         : '';
+      const hInfo = !n.isRoot && n.heritage && HERITAGE_SVG[n.heritage] ? HERITAGE_SVG[n.heritage] : null;
+      const hBadge = hInfo
+        ? `<rect x="${W - 36}" y="49" width="28" height="14" rx="4" fill="${hInfo.bg}"/><text x="${W - 22}" y="59" text-anchor="middle" font-size="8" font-weight="700" fill="${hInfo.fg}">${hInfo.short}</text>`
+        : '';
+      const codeLabel = !n.isRoot && n.acronym ? clip(`${n.code} \u00b7 ${n.acronym}`, 17) : clip(n.code, 12);
+      const tip = buildCardTooltip(n, dept);
       cards.push(`<g transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+    <title>${xmlEsc(tip)}</title>
     <rect width="${W}" height="${H}" rx="10" fill="${n.isRoot ? '#0f172a' : '#ffffff'}" stroke="${n.isRoot ? '#0f172a' : '#cbd5e1'}" stroke-width="1.2"/>
     <rect width="6" height="${H}" rx="3" fill="${xmlEsc(accent)}"/>
-    <text x="14" y="20" font-size="10.5" font-weight="700" font-family="ui-monospace,monospace" fill="${n.isRoot ? '#a7f3d0' : '#475569'}">${xmlEsc(clip(n.code, 12))}</text>
+    <text x="14" y="20" font-size="10.5" font-weight="700" font-family="ui-monospace,monospace" fill="${n.isRoot ? '#a7f3d0' : '#475569'}">${xmlEsc(codeLabel)}</text>
     ${badge}
     <text x="14" y="42" font-size="12" font-weight="700" fill="${n.isRoot ? '#ffffff' : '#0f172a'}">${xmlEsc(clip(n.name, 26))}</text>
-    <text x="14" y="60" font-size="10" fill="${n.isRoot ? '#cbd5e1' : '#64748b'}">${xmlEsc(clip(sub, 28))}</text>
+    <text x="14" y="60" font-size="10" fill="${n.isRoot ? '#cbd5e1' : '#64748b'}">${xmlEsc(clip(sub, hBadge ? 21 : 28))}</text>
+    ${hBadge}
   </g>`);
     });
 
+    const swpParts = [];
+    if (rollups && rollups.totalMass !== null) swpParts.push(`Mass ${fmtNum(rollups.totalMass)} kg`);
+    if (rollups && rollups.totalPowerConsumption !== null) swpParts.push(`Power ${fmtNum(rollups.totalPowerConsumption)} W`);
+    if (rollups && rollups.totalPowerDissipation !== null) swpParts.push(`Diss. ${fmtNum(rollups.totalPowerDissipation)} W`);
     const title = `PBS Diagram \u2014 ${project ? `[${project.code}] ${project.name}` : 'Project'}`;
-    const subtitle = `Revision ${(doc.meta && doc.meta.revision) || 1} \u00b7 ${doc.items.length} items \u00b7 Generated ${dateStr || ''}`;
+    const subtitle = `Revision ${(doc.meta && doc.meta.revision) || 1} \u00b7 ${doc.items.length} items \u00b7 Generated ${dateStr || ''}${swpParts.length ? ` \u00b7 ${swpParts.join(' \u00b7 ')}` : ''}`;
     return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" role="img" aria-label="${xmlEsc(title)}" style="font-family:Inter,system-ui,-apple-system,sans-serif;background:#f8fafc">
   <title>${xmlEsc(title)}</title>
@@ -107,31 +154,170 @@
   /* ---------- PDF / print report ---------- */
   const REPORT_HEAD = ['Code', 'Deliverable / Subsystem', 'Maturity', 'Department', 'Owner', 'Milestone', 'Notes'];
 
+  function formatSparesCell(it) {
+    const parts = [];
+    if (it.spareAvailable) parts.push(`Avail: ${it.spareAvailable}`);
+    if (it.spareToDeliver) parts.push(`Deliv: ${it.spareToDeliver}`);
+    return parts.length ? parts.join(' / ') : '-';
+  }
+
   function buildReportModel(doc, project, db, userName, dateStr) {
     const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
     const msMap = new Map(((db && db.milestones) || []).map(m => [m.id, m]));
-    const rows = P.tree.flattenTreeRows(doc, null, 0, []).map(({ item, depth }) => {
+    const rollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
+    const flat = P.tree.flattenTreeRows(doc, null, 0, []);
+
+    const rows = flat.map(({ item, depth }) => {
       const dept = item.deptId ? deptMap.get(item.deptId) : null;
       const ms = item.milestoneId ? msMap.get(item.milestoneId) : null;
+      const label = `${item.name}${item.acronym ? ` [${item.acronym}]` : ''}${item.heritage ? ` (${item.heritage})` : ''}`;
+      const descNote = item.description && item.notes
+        ? `${item.description} | Note: ${item.notes}`
+        : (item.description || item.notes || '');
       return {
         depth,
         maturity: item.maturity,
         deptColor: dept && dept.color ? dept.color : null,
         cells: [
-          pdfSafe(item.code), pdfSafe(item.name), pdfSafe(item.maturity),
+          pdfSafe(item.code), pdfSafe(label), pdfSafe(item.maturity),
           dept ? pdfSafe(`[${dept.code}] ${dept.name}`) : '-',
           item.owner ? pdfSafe(item.owner) : '-',
           ms ? pdfSafe(`${ms.title}${ms.date ? ` (${ms.date})` : ''}`) : '-',
-          pdfSafe(item.notes || ''),
+          pdfSafe(descNote),
         ],
       };
     });
+
+    /* Conditional annexes: only populated domains are appended so reports without optional fields stay identical. */
+    const annexes = [];
+
+    const engRows = [];
+    flat.forEach(({ item, depth }) => {
+      const hasEng = Boolean(item.heritage || isNum(item.mass) || isNum(item.powerConsumption) || isNum(item.powerDissipation) || isNum(item.mtbf) || item.lru || item.spareAvailable || item.spareToDeliver);
+      if (!hasEng) return;
+      const dept = item.deptId ? deptMap.get(item.deptId) : null;
+      const sub = rollups && rollups.byId ? rollups.byId.get(item.id) : null;
+      const numOrSub = (own, desc) => (isNum(own) ? fmtNum(own) : (isNum(desc) ? `Sum ${fmtNum(desc)}` : '-'));
+      engRows.push({
+        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
+        cells: [
+          pdfSafe(item.code),
+          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
+          pdfSafe(item.heritage || '-'),
+          pdfSafe(numOrSub(item.mass, sub && sub.descMass)),
+          pdfSafe(numOrSub(item.powerConsumption, sub && sub.descPowerCons)),
+          pdfSafe(numOrSub(item.powerDissipation, sub && sub.descPowerDiss)),
+          isNum(item.mtbf) ? pdfSafe(fmtNum(item.mtbf)) : '-',
+          pdfSafe(item.lru || '-'),
+          pdfSafe(formatSparesCell(item)),
+        ],
+      });
+    });
+    if (engRows.length) {
+      if (rollups && (rollups.totalMass !== null || rollups.totalPowerConsumption !== null || rollups.totalPowerDissipation !== null || rollups.lruCount || rollups.spareAvailCount || rollups.spareDelivCount)) {
+        const spTot = [];
+        if (rollups.spareAvailCount) spTot.push(`Avail: ${rollups.spareAvailCount}`);
+        if (rollups.spareDelivCount) spTot.push(`Deliv: ${rollups.spareDelivCount}`);
+        engRows.push({
+          depth: 0, deptColor: null, isTotal: true,
+          cells: [
+            'TOTAL',
+            pdfSafe(`${engRows.length} item${engRows.length === 1 ? '' : 's'} with engineering specs`),
+            '-',
+            rollups.totalMass !== null ? pdfSafe(fmtNum(rollups.totalMass)) : '-',
+            rollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(rollups.totalPowerConsumption)) : '-',
+            rollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(rollups.totalPowerDissipation)) : '-',
+            '-',
+            rollups.lruCount ? `${rollups.lruCount} Yes` : '-',
+            pdfSafe(spTot.length ? spTot.join(' / ') : '-'),
+          ],
+        });
+      }
+      annexes.push({
+        key: 'eng',
+        title: 'Technical Annex — Engineering Budgets, Reliability & Spares (SWaP-R / ILS)',
+        head: ['Code', 'Deliverable / Subsystem', 'Heritage', 'Mass (kg)', 'Pwr Cons (W)', 'Pwr Diss (W)', 'MTBF (h)', 'LRU', 'Spares (Avail / Deliv)'],
+        colStyles: {
+          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 165 }, 2: { cellWidth: 56 },
+          3: { cellWidth: 62, halign: 'right' }, 4: { cellWidth: 70, halign: 'right' }, 5: { cellWidth: 70, halign: 'right' },
+          6: { cellWidth: 64, halign: 'right' }, 7: { cellWidth: 38, halign: 'center' }, 8: { cellWidth: 'auto' },
+        },
+        rows: engRows,
+      });
+    }
+
+    const procRows = [];
+    flat.forEach(({ item, depth }) => {
+      const hasProc = Boolean(item.manufacturer || item.partNumber || item.procurementStatus || isNum(item.leadTime) || item.componentAlt);
+      if (!hasProc) return;
+      const dept = item.deptId ? deptMap.get(item.deptId) : null;
+      procRows.push({
+        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
+        cells: [
+          pdfSafe(item.code),
+          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
+          pdfSafe(item.manufacturer || '-'),
+          pdfSafe(item.partNumber || '-'),
+          pdfSafe(item.procurementStatus || '-'),
+          isNum(item.leadTime) ? pdfSafe(fmtNum(item.leadTime)) : '-',
+          pdfSafe(item.componentAlt || '-'),
+        ],
+      });
+    });
+    if (procRows.length) {
+      annexes.push({
+        key: 'proc',
+        title: 'Technical Annex — Procurement & Supply Chain',
+        head: ['Code', 'Deliverable / Subsystem', 'Manufacturer', 'Part Number', 'Proc. / Mfg. Status', 'Lead Time (wks)', 'Component Alternative'],
+        colStyles: {
+          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 145 }, 2: { cellWidth: 105 },
+          3: { cellWidth: 100 }, 4: { cellWidth: 98 }, 5: { cellWidth: 72, halign: 'right' }, 6: { cellWidth: 'auto' },
+        },
+        rows: procRows,
+      });
+    }
+
+    const docRows = [];
+    flat.forEach(({ item, depth }) => {
+      const hasDoc = Boolean(item.description || item.mechDrawing || item.elecDrawing || item.refDoc);
+      if (!hasDoc) return;
+      const dept = item.deptId ? deptMap.get(item.deptId) : null;
+      docRows.push({
+        depth, deptColor: dept && dept.color ? dept.color : null, isTotal: false,
+        cells: [
+          pdfSafe(item.code),
+          pdfSafe(`${item.name}${item.acronym ? ` [${item.acronym}]` : ''}`),
+          pdfSafe(item.description || '-'),
+          pdfSafe(item.mechDrawing || '-'),
+          pdfSafe(item.elecDrawing || '-'),
+          pdfSafe(item.refDoc || '-'),
+        ],
+      });
+    });
+    if (docRows.length) {
+      annexes.push({
+        key: 'docs',
+        title: 'Technical Annex — Documentation & Drawings',
+        head: ['Code', 'Deliverable / Subsystem', 'Description', 'Mechanical Drawing', 'Electrical Drawing', 'Reference Document'],
+        colStyles: {
+          0: { cellWidth: 48, fontStyle: 'bold' }, 1: { cellWidth: 140 }, 2: { cellWidth: 185 },
+          3: { cellWidth: 120 }, 4: { cellWidth: 120 }, 5: { cellWidth: 'auto' },
+        },
+        rows: docRows,
+      });
+    }
+
+    const swpSub = [];
+    if (rollups && rollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(rollups.totalMass)} kg`);
+    if (rollups && rollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(rollups.totalPowerConsumption)} W`);
+    if (rollups && rollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(rollups.totalPowerDissipation)} W`);
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
-      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}`),
+      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${rows.length} item${rows.length === 1 ? '' : 's'}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
       projectColor: project && project.color ? project.color : null,
       head: REPORT_HEAD,
       rows,
+      annexes,
     };
   }
 
@@ -141,6 +327,7 @@
     const pdf = new JsPdf({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     if (typeof pdf.autoTable !== 'function') throw new Error('PDF table plugin (autoTable) is not available.');
     const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
     pdf.setFillColor(15, 23, 42); pdf.rect(0, 0, pageW, 64, 'F');
     pdf.setFillColor(projRgb[0], projRgb[1], projRgb[2]); pdf.rect(0, 60, pageW, 4, 'F');
     pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(14); pdf.text(model.title, 36, 28);
@@ -176,6 +363,50 @@
       },
       margin: { left: 36, right: 36, bottom: 36 },
     });
+
+    (model.annexes || []).forEach(annex => {
+      let y = (pdf.lastAutoTable && pdf.lastAutoTable.finalY ? pdf.lastAutoTable.finalY : 90) + 22;
+      if (y > pageH - 110) {
+        pdf.addPage();
+        y = 44;
+      }
+      pdf.setFillColor(projRgb[0], projRgb[1], projRgb[2]);
+      pdf.rect(36, y - 10, 4, 14, 'F');
+      pdf.setTextColor(15, 23, 42);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(10.5);
+      pdf.text(pdfSafe(annex.title), 46, y);
+
+      const aMeta = annex.rows.map(r => ({ isTotal: Boolean(r.isTotal), deptRgb: r.deptColor ? hexToRgb(r.deptColor) : null }));
+      pdf.autoTable({
+        startY: y + 8,
+        head: [annex.head],
+        body: annex.rows.map(r => r.cells),
+        styles: { font: 'helvetica', fontSize: 8, cellPadding: 5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.5 },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        columnStyles: annex.colStyles || {},
+        didParseCell(data) {
+          if (data.section !== 'body') return;
+          const m = aMeta[data.row.index];
+          if (!m) return;
+          if (m.isTotal) {
+            data.cell.styles.fillColor = [226, 232, 240];
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.textColor = [15, 23, 42];
+          } else if (m.deptRgb) {
+            data.cell.styles.fillColor = tint(m.deptRgb, 0.08);
+          }
+        },
+        didDrawCell(data) {
+          if (data.section !== 'body' || data.column.index !== 0) return;
+          const m = aMeta[data.row.index];
+          if (m && !m.isTotal && m.deptRgb) { pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]); pdf.rect(data.cell.x, data.cell.y, 3.5, data.cell.height, 'F'); }
+        },
+        margin: { left: 36, right: 36, bottom: 36 },
+      });
+    });
+
     return pdf;
   }
 
@@ -189,10 +420,18 @@
         + `<td>${htmlEsc(c[2])}</td><td style="color:${htmlEsc(r.deptColor || '#475569')};font-weight:600">${htmlEsc(c[3])}</td>`
         + `<td>${htmlEsc(c[4])}</td><td>${htmlEsc(c[5])}</td><td>${htmlEsc(c[6])}</td></tr>`;
     }).join('');
+    const annexHtml = (model.annexes || []).map(annex => {
+      const aRows = annex.rows.map(r => {
+        const style = r.isTotal ? ' style="background:#e2e8f0;font-weight:700"' : '';
+        const accent = !r.isTotal && r.deptColor ? `border-left:4px solid ${htmlEsc(r.deptColor)};` : '';
+        return `<tr${style}>${r.cells.map((cell, idx) => `<td${idx === 0 ? ` style="font-family:monospace;font-weight:700;${accent}"` : ''}>${htmlEsc(cell)}</td>`).join('')}</tr>`;
+      }).join('');
+      return `<section class="annex"><h2>${htmlEsc(annex.title)}</h2><table><thead><tr>${annex.head.map(h => `<th>${htmlEsc(h)}</th>`).join('')}</tr></thead><tbody>${aRows}</tbody></table></section>`;
+    }).join('');
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${htmlEsc(model.title)}</title>`
-      + '<style>body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:24px;font-size:12px}h1{font-size:18px;margin:0 0 4px}p{color:#475569;margin:0 0 16px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:11px}</style>'
+      + '<style>body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:24px;font-size:12px}h1{font-size:18px;margin:0 0 4px}h2{font-size:13.5px;margin:20px 0 8px;padding-left:8px;border-left:4px solid #4f46e5}p{color:#475569;margin:0 0 16px;font-size:11px}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:11px}.annex th{background:#1e293b}.annex{break-inside:avoid-page}</style>'
       + `</head><body><h1>${htmlEsc(model.title)}</h1><p>${htmlEsc(model.subtitle)}</p><table><thead><tr>${model.head.map(h => `<th>${htmlEsc(h)}</th>`).join('')}</tr></thead>`
-      + `<tbody>${body || '<tr><td colspan="7">No PBS items recorded.</td></tr>'}</tbody></table></body></html>`;
+      + `<tbody>${body || '<tr><td colspan="7">No PBS items recorded.</td></tr>'}</tbody></table>${annexHtml}</body></html>`;
   }
 
   P.report = { svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };

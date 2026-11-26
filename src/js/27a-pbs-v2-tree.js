@@ -156,7 +156,10 @@
       if (f.deptId && it.deptId !== f.deptId) return;
       if (f.maturity && it.maturity !== f.maturity) return;
       if (f.milestoneId && it.milestoneId !== f.milestoneId) return;
-      if (q && !`${it.code} ${it.name} ${it.owner} ${it.notes}`.toLowerCase().includes(q)) return;
+      if (q) {
+        const hay = `${it.code || ''} ${it.acronym || ''} ${it.name || ''} ${it.description || ''} ${it.heritage || ''} ${it.owner || ''} ${it.notes || ''} ${it.manufacturer || ''} ${it.partNumber || ''} ${it.procurementStatus || ''} ${it.mechDrawing || ''} ${it.elecDrawing || ''} ${it.refDoc || ''} ${it.componentAlt || ''}`.toLowerCase();
+        if (!hay.includes(q)) return;
+      }
       matched.add(it.id);
     });
     const keep = new Set(matched);
@@ -174,7 +177,93 @@
       .map(r => ({ item: r.item, depth: r.depth, hasChildren: getChildren(doc, r.item.id).length > 0, isContextOnly: !matched.has(r.item.id) }));
   }
 
+  function round4(n) { return Math.round(n * 10000) / 10000; }
+  function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
+
+  /* Computes SWaP-R project totals, descendant roll-ups per item, and per-domain populated item counts. */
+  function computeSwpRollups(doc) {
+    const empty = {
+      totalMass: null, totalPowerConsumption: null, totalPowerDissipation: null,
+      massCount: 0, powerConsCount: 0, powerDissCount: 0,
+      lruCount: 0, spareAvailCount: 0, spareDelivCount: 0,
+      docsItemsCount: 0, procItemsCount: 0, engItemsCount: 0, anySpecsCount: 0,
+      byId: new Map(),
+    };
+    if (!doc || !Array.isArray(doc.items) || !doc.items.length) return empty;
+
+    let massSum = 0; let massCount = 0;
+    let pConsSum = 0; let powerConsCount = 0;
+    let pDissSum = 0; let powerDissCount = 0;
+    let lruCount = 0; let spareAvailCount = 0; let spareDelivCount = 0;
+    let docsItemsCount = 0; let procItemsCount = 0; let engItemsCount = 0; let anySpecsCount = 0;
+
+    doc.items.forEach(it => {
+      if (isNum(it.mass)) { massSum += it.mass; massCount++; }
+      if (isNum(it.powerConsumption)) { pConsSum += it.powerConsumption; powerConsCount++; }
+      if (isNum(it.powerDissipation)) { pDissSum += it.powerDissipation; powerDissCount++; }
+      if (it.lru === 'Yes') lruCount++;
+      if (it.spareAvailable === 'Yes') spareAvailCount++;
+      if (it.spareToDeliver === 'Yes') spareDelivCount++;
+
+      const hasDocs = Boolean(it.description || it.mechDrawing || it.elecDrawing || it.refDoc);
+      const hasProc = Boolean(it.manufacturer || it.partNumber || it.procurementStatus || isNum(it.leadTime) || it.componentAlt || it.spareAvailable || it.spareToDeliver);
+      const hasEng = Boolean(it.heritage || isNum(it.mass) || isNum(it.powerConsumption) || isNum(it.powerDissipation) || isNum(it.mtbf) || it.lru);
+      if (hasDocs) docsItemsCount++;
+      if (hasProc) procItemsCount++;
+      if (hasEng) engItemsCount++;
+      if (hasDocs || hasProc || hasEng || it.acronym) anySpecsCount++;
+    });
+
+    const childrenByParent = new Map();
+    doc.items.forEach(it => {
+      const pid = it.parentId || null;
+      if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+      childrenByParent.get(pid).push(it);
+    });
+
+    const byId = new Map();
+    const memo = new Map();
+    function walkSubtree(item, seen) {
+      if (memo.has(item.id)) return memo.get(item.id);
+      if (seen.has(item.id)) return { m: 0, mc: 0, pc: 0, pcc: 0, pd: 0, pdc: 0 };
+      seen.add(item.id);
+      let dm = 0; let dmc = 0;
+      let dpc = 0; let dpcc = 0;
+      let dpd = 0; let dpdc = 0;
+      (childrenByParent.get(item.id) || []).forEach(child => {
+        const sub = walkSubtree(child, seen);
+        dm += sub.m; dmc += sub.mc;
+        dpc += sub.pc; dpcc += sub.pcc;
+        dpd += sub.pd; dpdc += sub.pdc;
+      });
+      seen.delete(item.id);
+      byId.set(item.id, {
+        descMass: dmc ? round4(dm) : null,
+        descPowerCons: dpcc ? round4(dpc) : null,
+        descPowerDiss: dpdc ? round4(dpd) : null,
+      });
+      const res = {
+        m: dm + (isNum(item.mass) ? item.mass : 0), mc: dmc + (isNum(item.mass) ? 1 : 0),
+        pc: dpc + (isNum(item.powerConsumption) ? item.powerConsumption : 0), pcc: dpcc + (isNum(item.powerConsumption) ? 1 : 0),
+        pd: dpd + (isNum(item.powerDissipation) ? item.powerDissipation : 0), pdc: dpdc + (isNum(item.powerDissipation) ? 1 : 0),
+      };
+      memo.set(item.id, res);
+      return res;
+    }
+    doc.items.forEach(it => walkSubtree(it, new Set()));
+
+    return {
+      totalMass: massCount ? round4(massSum) : null,
+      totalPowerConsumption: powerConsCount ? round4(pConsSum) : null,
+      totalPowerDissipation: powerDissCount ? round4(pDissSum) : null,
+      massCount, powerConsCount, powerDissCount,
+      lruCount, spareAvailCount, spareDelivCount,
+      docsItemsCount, procItemsCount, engItemsCount, anySpecsCount,
+      byId,
+    };
+  }
+
   P.MATURITY_OPTIONS = MATURITY_OPTIONS;
   P.MATURITY_RANK = MATURITY_RANK;
-  P.tree = { getChildren, isDescendant, suggestNextCode, reorderItem, flattenTreeRows, computeMaturitySummary, getFilteredTreeRows };
+  P.tree = { getChildren, isDescendant, suggestNextCode, reorderItem, flattenTreeRows, computeMaturitySummary, getFilteredTreeRows, computeSwpRollups };
 })();
