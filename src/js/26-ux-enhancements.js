@@ -345,7 +345,7 @@
             <p><strong>Local-First Privacy:</strong> All roadmap, capacity, and finance data stays in your browser or local/synced files; optional AES-256-GCM encryption runs locally via the Web Crypto API.</p>
           </section>
           <footer class="flex items-center justify-between gap-2 pt-1">
-            <a href="./LICENSE" target="_blank" rel="noopener noreferrer" class="text-[11px] font-semibold text-emerald-700 hover:underline">View full EUPL-1.2 LICENSE</a>
+            <a href="./LICENSE.txt" target="_blank" rel="noopener noreferrer" class="text-[11px] font-semibold text-emerald-700 hover:underline">View full EUPL-1.2 LICENSE.txt</a>
             <button type="button" id="ppEuplCloseBtn" class="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer">Close</button>
           </footer>
         </div>`;

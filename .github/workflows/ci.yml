@@ -56,7 +56,8 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p _site
-          cp index.html sw.js manifest.webmanifest LICENSE icon.svg icon-192.png icon-512.png icon-maskable-512.png _site/
+          cp index.html sw.js manifest.webmanifest icon.svg icon-192.png icon-512.png icon-maskable-512.png _site/
+          cp LICENSE _site/LICENSE.txt
 
       - name: Upload GitHub Pages artifact
         if: github.event_name != 'pull_request'
