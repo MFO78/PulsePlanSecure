@@ -4,6 +4,7 @@
  * 3. Log Notes in ChangeLog + Notes category in Evolution & Snapshot Comparison
  * 4. Bidirectional Weeks/Months & Horizon controls in Health & Evolution tab (hidden on mobile)
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
+ * 6. EUPL-1.2 User Licence badge & dialog alignment
  */
 (function ppUxEnhancementsModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
@@ -313,12 +314,56 @@
     }
   }
 
+  /* ---------- 6. EUPL-1.2 User Licence Alignment ---------- */
+  function applyEuplLicenceBranding() {
+    const licBtn = document.getElementById('ppLicenceMenuBtn');
+    if (licBtn) {
+      const badge = licBtn.querySelector('span:last-child');
+      if (badge && badge.textContent.trim() === 'MIT') {
+        badge.textContent = 'EUPL-1.2';
+      }
+    }
+    const dlg = document.getElementById('ppLicenceDialog');
+    if (dlg && !dlg.__ppEuplApplied) {
+      dlg.__ppEuplApplied = true;
+      dlg.innerHTML = `
+        <div class="p-5 space-y-3 text-xs">
+          <header class="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="ppLicenceDialogTitle" class="text-base font-extrabold text-slate-900">PulsePlanSecure — User Licence (EUPL-1.2)</h2>
+              <p class="text-[11px] text-slate-500 mt-0.5">European Union Public Licence v. 1.2 &middot; Official EU Open-Source Licence</p>
+            </div>
+            <button type="button" id="ppEuplCloseTop" aria-label="Close licence dialog" class="w-8 h-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-lg font-bold">&times;</button>
+          </header>
+          <section class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-slate-700 leading-relaxed max-h-72 overflow-y-auto">
+            <p><strong>Licensed under the EUPL-1.2.</strong> Copyright &copy; 2026 PulsePlanSecure Contributors.</p>
+            <p>You are granted a worldwide, royalty-free, non-exclusive licence to use, reproduce, modify, communicate to the public, and distribute this Work under the terms of the <strong>European Union Public Licence v. 1.2 (EUPL-1.2)</strong>.</p>
+            <p><strong>Key Conditions:</strong> Retain all copyright, patent, trademark, and licence notices. If you distribute or communicate modified versions (including hosting over a network / SaaS), you must provide the Source Code under EUPL-1.2 or a listed Compatible Licence (GPL, AGPL, MPL-2.0, LGPL, EPL, CeCILL, OSL).</p>
+            <p><strong>Warranty &amp; Liability (Articles 7 &amp; 8):</strong> The Work is provided on an &ldquo;as is&rdquo; basis without warranties of any kind. Except in cases of wilful misconduct, damages directly caused to natural persons, or mandatory statutory product liability laws, the Licensor is not liable for damages arising from use of the Work.</p>
+            <p><strong>Applicable Law &amp; Jurisdiction (Articles 14 &amp; 15):</strong> Governed by the law of the EU Member State where the Licensor resides or has its registered office.</p>
+            <p><strong>Local-First Privacy:</strong> All roadmap, capacity, and finance data stays in your browser or local/synced files; optional AES-256-GCM encryption runs locally via the Web Crypto API.</p>
+          </section>
+          <footer class="flex items-center justify-between gap-2 pt-1">
+            <a href="./LICENSE" target="_blank" rel="noopener noreferrer" class="text-[11px] font-semibold text-emerald-700 hover:underline">View full EUPL-1.2 LICENSE</a>
+            <button type="button" id="ppEuplCloseBtn" class="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer">Close</button>
+          </footer>
+        </div>`;
+      const closeFn = () => {
+        if (typeof dlg.close === 'function') dlg.close();
+        else dlg.removeAttribute('open');
+      };
+      dlg.querySelector('#ppEuplCloseTop')?.addEventListener('click', closeFn);
+      dlg.querySelector('#ppEuplCloseBtn')?.addEventListener('click', closeFn);
+    }
+  }
+
   function runAllUxHooks() {
     makeSetupTablesSortable();
     filterAdminFromPortfolioSummary();
     enhanceSnapshotNotesTab();
     renderHealthControlBar();
     enhanceSyncClearButtons();
+    applyEuplLicenceBranding();
   }
 
   if (typeof renderAll === 'function') {

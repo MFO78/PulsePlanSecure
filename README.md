@@ -18,3 +18,9 @@ node scripts/verify-sri.mjs
 node build.mjs
 node test.mjs
 ```
+
+## Licence
+
+Copyright © 2026 PulsePlanSecure Contributors.
+
+Licensed under the **European Union Public Licence v. 1.2 (EUPL-1.2)** — see [LICENSE](./LICENSE) for the full licence text and compatible licences list.
