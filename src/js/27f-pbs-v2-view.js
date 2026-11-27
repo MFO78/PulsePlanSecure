@@ -97,9 +97,26 @@
     .pp-pbs-rollup { font-style: italic; color: var(--text-muted, #64748b); font-size: 11px; }
     .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
     .pp-pbs-desc-cell { min-width: 150px; max-width: 240px; line-height: 1.3; }
-    .pp-pbs-form, .pp-pbs-paste, .pp-pbs-pdf-panel { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
+    .pp-pbs-form, .pp-pbs-paste, .pp-pbs-pdf-panel, .pp-pbs-pareto-panel { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
-    .pp-pbs-paste, .pp-pbs-pdf-panel { display: flex; flex-direction: column; gap: .6rem; }
+    .pp-pbs-paste, .pp-pbs-pdf-panel, .pp-pbs-pareto-panel { display: flex; flex-direction: column; gap: .6rem; }
+    .pp-pbs-pareto-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+    .pp-pbs-pareto-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; }
+    .pp-pbs-pareto-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
+    .pp-pbs-pareto-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+    .pp-pbs-pareto-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .45rem; }
+    .pp-pbs-pareto-kpi { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .6rem; background: var(--surface-card, #ffffff); padding: .45rem .6rem; }
+    .pp-pbs-pareto-kpi-lbl { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #64748b); }
+    .pp-pbs-pareto-kpi-val { font-size: 13.5px; font-weight: 800; color: var(--text-primary, #0f172a); margin-top: .1rem; font-variant-numeric: tabular-nums; }
+    .pp-pbs-pareto-kpi-sub { font-size: 10px; color: var(--text-muted, #64748b); margin-top: .08rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pp-pbs-pareto-chart { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); padding: .45rem; overflow-x: auto; }
+    .pp-pbs-pareto-table-wrap { max-height: 220px; overflow: auto; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .6rem; background: var(--surface-card, #ffffff); }
+    .pp-pbs-pareto-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .pp-pbs-pareto-table th, .pp-pbs-pareto-table td { padding: .34rem .5rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; }
+    .pp-pbs-pareto-table th { position: sticky; top: 0; background: var(--surface-subtle, #f8fafc); font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); z-index: 1; }
+    .pp-pbs-pareto-table tr.is-vital td { background: rgba(79, 70, 229, .04); }
+    .pp-pbs-pareto-badge-vital { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 9.5px; font-weight: 700; background: #eef2ff; color: #3730a3; }
+    .pp-pbs-pareto-badge-tail { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 9.5px; font-weight: 600; background: #f1f5f9; color: #64748b; }
     .pp-pbs-pdf-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
     .pp-pbs-pdf-presets { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
     .pp-pbs-pdf-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: .55rem; }
@@ -113,6 +130,12 @@
     .pp-pbs-pdf-field input[type="checkbox"], .pp-pbs-pdf-opt input[type="checkbox"] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; flex-shrink: 0; }
     .pp-pbs-pdf-dot { width: 6px; height: 6px; border-radius: 9999px; background: #10b981; margin-left: auto; flex-shrink: 0; }
     .pp-pbs-pdf-opt { display: inline-flex; align-items: center; gap: .38rem; font-size: 11px; font-weight: 700; color: var(--text-primary, #334155); cursor: pointer; }
+    .pp-pbs-pdf-pareto { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); padding: .55rem .65rem; display: flex; flex-direction: column; gap: .45rem; }
+    .pp-pbs-pdf-pareto-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+    .pp-pbs-pdf-pareto-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+    .pp-pbs-pdf-pareto-item { display: inline-flex; align-items: center; gap: .35rem; font-size: 11px; font-weight: 600; color: var(--text-primary, #1e293b); padding: .2rem .48rem; border-radius: .45rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); cursor: pointer; user-select: none; }
+    .pp-pbs-pdf-pareto-item.is-disabled { opacity: .48; cursor: not-allowed; }
+    .pp-pbs-pdf-pareto-item input[type="checkbox"] { width: 13px; height: 13px; accent-color: #4f46e5; cursor: pointer; }
     .pp-pbs-pdf-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .25rem; border-top: 1px solid var(--border-subtle, #e2e8f0); }
     .pp-pbs-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, monospace; font-size: 11.5px; padding: .5rem .6rem; border-radius: .5rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-sizing: border-box; resize: vertical; }
     .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; font-size: 11px; font-weight: 700; }
@@ -137,8 +160,16 @@
     .pp-pbs-syncbar-dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
     html.dark .pp-pbs-syncbar, body.dark .pp-pbs-syncbar { background: #1e293b; border-bottom-color: #334155; color: #e2e8f0; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { background: #1e293b; border-bottom-color: #334155; }
-    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { border-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel, html.dark .pp-pbs-pareto-panel, body.dark .pp-pbs-pareto-panel { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel, html.dark .pp-pbs-pareto-panel, body.dark .pp-pbs-pareto-panel { border-color: #334155; }
+    html.dark .pp-pbs-pareto-kpi, body.dark .pp-pbs-pareto-kpi, html.dark .pp-pbs-pareto-chart, body.dark .pp-pbs-pareto-chart, html.dark .pp-pbs-pareto-table-wrap, body.dark .pp-pbs-pareto-table-wrap, html.dark .pp-pbs-pdf-pareto, body.dark .pp-pbs-pdf-pareto { background: #0f172a; border-color: #334155; }
+    html.dark .pp-pbs-pareto-kpi-val, body.dark .pp-pbs-pareto-kpi-val { color: #f8fafc; }
+    html.dark .pp-pbs-pareto-table th, body.dark .pp-pbs-pareto-table th { background: #1e293b; color: #94a3b8; border-bottom-color: #334155; }
+    html.dark .pp-pbs-pareto-table td, body.dark .pp-pbs-pareto-table td { border-bottom-color: #1e293b; }
+    html.dark .pp-pbs-pareto-table tr.is-vital td, body.dark .pp-pbs-pareto-table tr.is-vital td { background: rgba(99, 102, 241, .12); }
+    html.dark .pp-pbs-pareto-badge-vital, body.dark .pp-pbs-pareto-badge-vital { background: rgba(99, 102, 241, .28); color: #c7d2fe; }
+    html.dark .pp-pbs-pareto-badge-tail, body.dark .pp-pbs-pareto-badge-tail { background: #334155; color: #cbd5e1; }
+    html.dark .pp-pbs-pdf-pareto-item, body.dark .pp-pbs-pdf-pareto-item { background: #1e293b; border-color: #475569; color: #e2e8f0; }
     html.dark .pp-pbs-pdf-group, body.dark .pp-pbs-pdf-group { background: #0f172a; border-color: #334155; }
     html.dark .pp-pbs-pdf-group-head, body.dark .pp-pbs-pdf-group-head { border-bottom-color: #334155; color: #94a3b8; }
     html.dark .pp-pbs-pdf-group-toggle, body.dark .pp-pbs-pdf-group-toggle { color: #a5b4fc; }
@@ -610,6 +641,104 @@
       </div></div>`;
   }
 
+  function renderParetoPanel(ctx) {
+    const cfg = ctx.pareto;
+    if (!cfg || !cfg.open) return '';
+    const metrics = (P.tree && typeof P.tree.getAvailableParetoMetrics === 'function')
+      ? P.tree.getAvailableParetoMetrics()
+      : [];
+    const data = cfg.data || null;
+    const activeKey = cfg.metric || (data && data.metric && data.metric.key) || (metrics[0] ? metrics[0].key : 'mass');
+    const counts = cfg.metricCounts || {};
+    const groupBy = cfg.groupBy || 'leaves';
+    const maxBars = cfg.maxBars != null ? cfg.maxBars : 12;
+    const fmtVal = (v, m) => (P.report && typeof P.report.formatParetoValue === 'function' ? P.report.formatParetoValue(v, m, false) : fmtNum(v));
+    const metric = (data && data.metric) || metrics.find(m => m.key === activeKey) || { key: activeKey, label: 'Metric', unit: '', color: '#4f46e5' };
+    const unitNote = metric.isCurrency ? '' : (metric.unit ? ` (${metric.unit})` : '');
+
+    const metricChips = metrics.map(m => {
+      const active = m.key === activeKey;
+      const cnt = counts[m.key] || 0;
+      const lbl = m.isCurrency ? m.label : `${m.shortLabel || m.label} (${m.unit})`;
+      return `<button type="button" class="pp-pbs-chip${active ? ' is-active' : ''}" data-pbs-pareto-metric="${esc(m.key)}" aria-pressed="${active ? 'true' : 'false'}" title="Show Pareto diagram for ${esc(m.label)}">${active ? '\u2713 ' : ''}${esc(lbl)}${cnt > 0 ? `<span class="pp-pbs-chip-cnt">${cnt}</span>` : ''}</button>`;
+    }).join('');
+
+    const filterOptHtml = ctx.isFiltered
+      ? `<label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsParetoApplyFilters"${cfg.applyFilters ? ' checked' : ''} /><span>Active filters (${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length})</span></label>`
+      : '';
+
+    const svgHtml = (P.report && typeof P.report.buildParetoSvg === 'function')
+      ? P.report.buildParetoSvg(data, { darkMode: Boolean(ctx.isDark), width: 840, height: 330 })
+      : '';
+
+    const hasBars = Boolean(data && Array.isArray(data.bars) && data.bars.length > 0);
+    const topEntry = hasBars ? data.allEntries[0] : null;
+    const kpisHtml = hasBars
+      ? `<div class="pp-pbs-pareto-kpis">
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">Total ${esc(metric.label)}</div><div class="pp-pbs-pareto-kpi-val">${esc(fmtVal(data.total, metric))}</div><div class="pp-pbs-pareto-kpi-sub">${data.isFiltered ? 'Filtered PBS scope' : 'Non-double-counting rollup'}</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">80/20 Vital Few</div><div class="pp-pbs-pareto-kpi-val" style="color:${esc(metric.color)}">Top ${data.vitalCount} of ${data.contributorCount}</div><div class="pp-pbs-pareto-kpi-sub">${data.vitalShareOfItemsPct}% of entries drive ${data.vitalPct}%</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">#1 Top Driver</div><div class="pp-pbs-pareto-kpi-val">${esc(topEntry ? fmtVal(topEntry.value, metric) : '\u2014')}</div><div class="pp-pbs-pareto-kpi-sub" title="${esc(topEntry ? topEntry.label : '')}">${esc(topEntry ? `${topEntry.label} (${topEntry.pct}%)` : '\u2014')}</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">Contributors</div><div class="pp-pbs-pareto-kpi-val">${data.contributorCount}</div><div class="pp-pbs-pareto-kpi-sub">${esc(P.report && P.report.paretoGroupLabel ? P.report.paretoGroupLabel(groupBy) : groupBy)}</div></div>
+      </div>`
+      : '';
+
+    const showQty = groupBy === 'leaves';
+    const tableRows = hasBars ? data.bars.map(b => `<tr class="${b.vitalFew ? 'is-vital' : ''}">
+      <td class="pp-pbs-center" style="font-weight:700">${b.isOthers ? '\u2014' : b.rank}</td>
+      <td class="pp-pbs-mono" style="font-weight:700">${esc(b.code || '\u2014')}</td>
+      <td>${b.deptColor ? `<span class="pp-pbs-dept-dot" style="background:${esc(b.deptColor)}" aria-hidden="true"></span>` : ''}${esc(b.name || b.label)}</td>
+      <td class="pp-pbs-num">${showQty ? (b.effectiveQty ? `&times;${b.effectiveQty}` : '\u2014') : (b.itemCount || 1)}</td>
+      <td class="pp-pbs-num" style="font-weight:700">${esc(fmtVal(b.value, metric))}</td>
+      <td class="pp-pbs-num">${b.pct}%</td>
+      <td class="pp-pbs-num" style="font-weight:700">${b.cumPct}%</td>
+      <td class="pp-pbs-center">${b.isOthers ? '<span class="pp-pbs-pareto-badge-tail">Others</span>' : (b.vitalFew ? '<span class="pp-pbs-pareto-badge-vital">Vital Few \u226480%</span>' : '<span class="pp-pbs-pareto-badge-tail">Remaining 20%</span>')}</td>
+    </tr>`).join('') : '';
+
+    const tableHtml = hasBars
+      ? `<div class="pp-pbs-pareto-table-wrap"><table class="pp-pbs-pareto-table"><thead><tr>
+        <th class="pp-pbs-center">#</th><th>Code</th><th>${groupBy === 'dept' ? 'Department' : (groupBy === 'roots' ? 'Subsystem' : 'Deliverable / Subsystem')}</th>
+        <th class="pp-pbs-num">${showQty ? 'Eff. Qty' : 'Items'}</th><th class="pp-pbs-num">${esc(metric.label)}${esc(unitNote)}</th>
+        <th class="pp-pbs-num">Share %</th><th class="pp-pbs-num">Cum. %</th><th class="pp-pbs-center">Pareto Class</th>
+      </tr></thead><tbody>${tableRows}</tbody></table></div>`
+      : '';
+
+    return `<div id="ppPbsParetoPanel" class="pp-pbs-pareto-panel" role="region" aria-label="PBS Pareto Analysis">
+      <div class="pp-pbs-pareto-head">
+        <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+          <strong style="font-size:12.5px">PBS Pareto Analysis &mdash; ${esc(metric.label)}${esc(unitNote)}</strong>
+          ${hasBars ? `<span class="pp-pbs-pill pp-pbs-pill-swp">Top ${data.vitalCount}/${data.contributorCount} = ${data.vitalPct}%</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-emerald" id="ppPbsParetoSvgBtn"${hasBars ? '' : ' disabled'} title="Download this Pareto diagram as an SVG file">Download SVG</button>
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" id="ppPbsParetoCloseBtn" aria-label="Close Pareto panel">Close</button>
+        </div>
+      </div>
+      <div class="pp-pbs-pareto-bar">
+        <div class="pp-pbs-pareto-metrics" role="group" aria-label="Pareto metric">
+          <span class="pp-pbs-colbar-label">Metric:</span>
+          ${metricChips}
+        </div>
+        <div class="pp-pbs-pareto-controls">
+          <select id="ppPbsParetoGroup" class="pp-pbs-select" aria-label="Pareto grouping level">
+            <option value="leaves"${groupBy === 'leaves' ? ' selected' : ''}>Contributors (Items)</option>
+            <option value="roots"${groupBy === 'roots' ? ' selected' : ''}>Top-Level Subsystems</option>
+            <option value="dept"${groupBy === 'dept' ? ' selected' : ''}>By Department</option>
+          </select>
+          <select id="ppPbsParetoMaxBars" class="pp-pbs-select" aria-label="Maximum bars in Pareto chart">
+            <option value="8"${maxBars === 8 ? ' selected' : ''}>Top 8</option>
+            <option value="12"${maxBars === 12 ? ' selected' : ''}>Top 12</option>
+            <option value="20"${maxBars === 20 ? ' selected' : ''}>Top 20</option>
+            <option value="0"${maxBars === 0 ? ' selected' : ''}>All</option>
+          </select>
+          ${filterOptHtml}
+        </div>
+      </div>
+      ${kpisHtml}
+      <div class="pp-pbs-pareto-chart">${svgHtml}</div>
+      ${tableHtml}
+    </div>`;
+  }
+
   const PDF_GROUPS = [
     { key: 'core', label: 'Core & Identity' },
     { key: 'docs', label: 'Docs & Drawings' },
@@ -620,7 +749,8 @@
   function renderPdfPanel(ctx) {
     const cfg = ctx.pdfExport;
     if (!cfg || !cfg.open) return '';
-    const allCols = (P.report && Array.isArray(P.report.REPORT_COLS)) ? P.report.REPORT_COLS : [];
+    const allowFin = canSeeFinance();
+    const allCols = ((P.report && Array.isArray(P.report.REPORT_COLS)) ? P.report.REPORT_COLS : []).filter(c => !c.financeOnly || allowFin);
     const selSet = cfg.selectedFields instanceof Set ? cfg.selectedFields : new Set(cfg.selectedFields || []);
     const popSet = cfg.populatedFields instanceof Set ? cfg.populatedFields : new Set(cfg.populatedFields || []);
     const selectedCols = allCols.filter(c => selSet.has(c.key));
@@ -628,6 +758,15 @@
     const hasOpt = selectedCols.some(c => !c.always);
     const neededW = selectedCols.reduce((sum, c) => sum + (hasOpt ? c.w : (c.baseW || c.w)), 0);
     const pageLabel = neededW > 1142 ? 'Wide Landscape' : (neededW > 770 ? 'A3 Landscape' : 'A4 Landscape');
+
+    const paretoMetricsAll = (P.tree && typeof P.tree.getAvailableParetoMetrics === 'function')
+      ? P.tree.getAvailableParetoMetrics()
+      : [];
+    const includePareto = Boolean(cfg.includePareto);
+    const paretoSet = cfg.paretoMetrics instanceof Set ? cfg.paretoMetrics : new Set(cfg.paretoMetrics || []);
+    const paretoCounts = cfg.paretoCounts || {};
+    const paretoGroupBy = cfg.paretoGroupBy || 'leaves';
+    const activeParetoCount = includePareto ? paretoMetricsAll.filter(m => paretoSet.has(m.key)).length : 0;
 
     const presets = [
       { key: 'populated', label: 'All Populated' },
@@ -652,9 +791,34 @@
       return `<div class="pp-pbs-pdf-group"><div class="pp-pbs-pdf-group-head"><span>${esc(g.label)}</span><button type="button" class="pp-pbs-pdf-group-toggle" data-pbs-pdf-group-toggle="${esc(g.key)}">${allSelected ? 'None' : 'All'}</button></div><div class="pp-pbs-pdf-fields">${fieldsHtml}</div></div>`;
     }).join('');
 
+    const paretoSectionHtml = paretoMetricsAll.length
+      ? `<div class="pp-pbs-pdf-pareto" role="group" aria-label="Include Pareto diagrams in PDF">
+        <div class="pp-pbs-pdf-pareto-head">
+          <label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsPdfIncludePareto"${includePareto ? ' checked' : ''} /><span>Include Pareto Diagrams (appended as dedicated landscape pages)</span></label>
+          <select id="ppPbsPdfParetoGroup" class="pp-pbs-select" aria-label="Pareto PDF grouping level"${includePareto ? '' : ' style="opacity:.65"'}>
+            <option value="leaves"${paretoGroupBy === 'leaves' ? ' selected' : ''}>Contributors (Items)</option>
+            <option value="roots"${paretoGroupBy === 'roots' ? ' selected' : ''}>Top-Level Subsystems</option>
+            <option value="dept"${paretoGroupBy === 'dept' ? ' selected' : ''}>By Department</option>
+          </select>
+        </div>
+        <div class="pp-pbs-pdf-pareto-metrics">
+          ${paretoMetricsAll.map(m => {
+            const checked = includePareto && paretoSet.has(m.key);
+            const hasData = (paretoCounts[m.key] || 0) > 0;
+            const lbl = m.isCurrency ? m.label : `${m.label} (${m.unit})`;
+            return `<label class="pp-pbs-pdf-pareto-item${includePareto ? '' : ' is-disabled'}" title="${hasData ? `${paretoCounts[m.key]} contributor(s) with ${m.label} data` : `No ${m.label} values recorded yet`}"><input type="checkbox" data-pbs-pdf-pareto="${esc(m.key)}"${checked ? ' checked' : ''} /><span>${esc(lbl)}</span>${hasData ? '<span class="pp-pbs-pdf-dot" style="margin-left:.15rem" aria-hidden="true"></span>' : ''}</label>`;
+          }).join('')}
+        </div>
+      </div>`
+      : '';
+
     const filterOptHtml = ctx.isFiltered
       ? `<label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsPdfApplyFilters"${cfg.applyFilters ? ' checked' : ''} /><span>Apply active row filters (${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length} items)</span></label>`
       : '';
+
+    const exportBtnLabel = activeParetoCount > 0
+      ? `Export PDF (${selCount} field${selCount === 1 ? '' : 's'} + ${activeParetoCount} Pareto${activeParetoCount === 1 ? '' : 's'})`
+      : `Export PDF (${selCount} field${selCount === 1 ? '' : 's'})`;
 
     return `<div id="ppPbsPdfPanel" class="pp-pbs-pdf-panel" role="region" aria-label="Configure PBS PDF export fields">
       <div class="pp-pbs-pdf-head">
@@ -662,6 +826,7 @@
           <strong style="font-size:12px">Export PBS PDF &mdash; Select Fields</strong>
           <span class="pp-pbs-pill pp-pbs-pill-swp" id="ppPbsPdfCountBadge">${selCount} / ${allCols.length} fields</span>
           ${selCount > 0 ? `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(pageLabel)}</span>` : '<span class="pp-pbs-pill pp-pbs-status-warn">Pick at least 1 field</span>'}
+          ${activeParetoCount > 0 ? `<span class="pp-pbs-pill pp-pbs-status-ok">+${activeParetoCount} Pareto${activeParetoCount === 1 ? '' : 's'}</span>` : ''}
         </div>
         ${filterOptHtml}
       </div>
@@ -670,11 +835,12 @@
         ${presets.map(p => `<button type="button" class="pp-pbs-chip" data-pbs-pdf-preset="${p.key}">${esc(p.label)}</button>`).join('')}
       </div>
       <div class="pp-pbs-pdf-groups">${groupsHtml}</div>
+      ${paretoSectionHtml}
       <div class="pp-pbs-pdf-foot">
         <span style="display:inline-flex;align-items:center;gap:.35rem;font-size:10.5px;color:var(--text-muted,#64748b)"><span class="pp-pbs-pdf-dot" style="margin-left:0"></span> Field has data in this PBS &middot; Selection is remembered</span>
         <div style="display:flex;align-items:center;gap:.45rem">
           <button type="button" class="pp-pbs-btn" id="ppPbsPdfCancelBtn">Cancel</button>
-          <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPdfRunBtn"${selCount === 0 ? ' disabled' : ''}>Export PDF (${selCount} field${selCount === 1 ? '' : 's'})</button>
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPdfRunBtn"${selCount === 0 ? ' disabled' : ''}>${exportBtnLabel}</button>
         </div>
       </div></div>`;
   }
@@ -721,6 +887,7 @@
       ? '<button type="button" class="pp-pbs-btn" id="ppPbsRenumberBtn" title="Re-sequence hierarchical codes (1, 1.1, 1.2...) to match current tree order">Renumber</button>'
       : '';
     const pdfOpen = Boolean(ctx.pdfExport && ctx.pdfExport.open);
+    const paretoOpen = Boolean(ctx.pareto && ctx.pareto.open);
     return `<div class="pp-pbs-toolbar" role="toolbar" aria-label="PBS actions">
       <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsAddRootBtn">+ Add Root Item</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsUndoBtn"${ctx.canUndo ? '' : ' disabled'} title="${esc(ctx.undoLabel || 'Undo (Ctrl+Z)')}">\u21b6 Undo</button>
@@ -734,6 +901,7 @@
       <button type="button" class="pp-pbs-btn" id="ppPbsExportCsvBtn">Export CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsImportCsvBtn">Import CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsPasteBtn">Paste Table</button>
+      <button type="button" class="pp-pbs-btn${paretoOpen ? ' pp-pbs-btn-primary' : ''}" id="ppPbsParetoBtn" aria-expanded="${paretoOpen ? 'true' : 'false'}" aria-controls="ppPbsParetoPanel" title="Analyze 80/20 Pareto drivers across Cost, Mass, Power Consumption, and Power Dissipation">Pareto ${paretoOpen ? '\u25b4' : '\u25be'}</button>
       <button type="button" class="pp-pbs-btn pp-pbs-btn-emerald" id="ppPbsExportSvgBtn">SVG Diagram</button>
       <button type="button" class="pp-pbs-btn${pdfOpen ? ' pp-pbs-btn-primary' : ''}" id="ppPbsExportPdfBtn" aria-expanded="${pdfOpen ? 'true' : 'false'}" aria-controls="ppPbsPdfPanel" title="Select fields and export PBS PDF report">PDF Report ${pdfOpen ? '\u25b4' : '\u25be'}</button>
       ${clone}
@@ -846,7 +1014,7 @@
   }
 
   /* ctx: { doc, db, project, summary, rollups, filteredRollups, isFiltered, matchedCount, rows, collapsedIds, colGroups, filter, edit, pasteOpen,
-   *        isExpanded, pdfExport, canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
+   *        isExpanded, isDark, pdfExport, pareto, canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
    *        cloneSources:[{id,code,name,count}], canDirSync, dirName, hasRemembered, status:{text,tone} } */
   function buildDialogHtml(ctx) {
     const p = ctx.project;
@@ -865,7 +1033,7 @@
         <button type="button" class="pp-pbs-btn pp-pbs-expand-win-btn" id="ppPbsExpandWinBtn" aria-pressed="${isExp ? 'true' : 'false'}" title="${isExp ? 'Restore default PBS window size' : 'Expand PBS window to full screen'}">${isExp ? '\u2921 Restore' : '\u2922 Expand'}</button>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}
-      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderPdfPanel(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
+      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderParetoPanel(ctx)}${renderPdfPanel(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
         <div class="pp-pbs-table-wrap"><table class="pp-pbs-table${stickyCls}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
           <thead><tr>
             <th scope="col" class="pp-pbs-th-code">Code</th>
@@ -884,7 +1052,7 @@
 
   P.view = {
     esc, CSS, OPTIONAL_COL_GROUPS, renderTextOrLink, getPopulatedGroupFlags, resolveVisibleOptionalCols,
-    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderPdfPanel, renderConflictPanel,
+    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderParetoPanel, renderPdfPanel, renderConflictPanel,
     renderToolbar, renderSummary, renderColBar, renderFilters, renderNotice, buildDialogHtml,
   };
 })();

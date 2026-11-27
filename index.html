@@ -27711,31 +27711,392 @@ border-color: #334155;
     };
   }
 
-  /* Computes non-double-counting SWaP/LRU/Spare subtotals over a subset of matched item IDs. */
-  function computeFilteredRollups(doc, matchedIds) {
-    if (!doc || !Array.isArray(doc.items) || !matchedIds || !matchedIds.size) return computeSwpRollups({ items: [] });
+  function buildFilteredSubDoc(doc, matchedIds) {
+    if (!doc || !Array.isArray(doc.items)) return { items: [] };
+    const idSet = matchedIds instanceof Set ? matchedIds : (Array.isArray(matchedIds) ? new Set(matchedIds) : null);
+    if (!idSet || !idSet.size) return { items: [] };
     const byId = new Map(doc.items.map(it => [it.id, it]));
     const nearestMatchedAncestor = (it) => {
       let cur = it.parentId ? byId.get(it.parentId) : null;
       let guard = 0;
       while (cur && guard < 200) {
-        if (matchedIds.has(cur.id)) return cur.id;
+        if (idSet.has(cur.id)) return cur.id;
         cur = cur.parentId ? byId.get(cur.parentId) : null;
         guard++;
       }
       return null;
     };
-    const subItems = doc.items
-      .filter(it => matchedIds.has(it.id))
-      .map(it => ({ ...it, parentId: nearestMatchedAncestor(it) }));
-    return computeSwpRollups({ items: subItems });
+    return {
+      items: doc.items
+        .filter(it => idSet.has(it.id))
+        .map(it => ({ ...it, parentId: nearestMatchedAncestor(it) })),
+    };
+  }
+
+  /* Computes non-double-counting SWaP/LRU/Spare subtotals over a subset of matched item IDs. */
+  function computeFilteredRollups(doc, matchedIds) {
+    if (!doc || !Array.isArray(doc.items) || !matchedIds || !(matchedIds instanceof Set ? matchedIds.size : matchedIds.length)) {
+      return computeSwpRollups({ items: [] });
+    }
+    return computeSwpRollups(buildFilteredSubDoc(doc, matchedIds));
+  }
+
+  /* ---------- Pareto Analysis (non-double-counting SWaP-C contributor ranking & 80/20 vital-few breakdown) ---------- */
+  const PARETO_METRICS = [
+    {
+      key: 'unitCost',
+      label: 'Cost',
+      shortLabel: 'Cost',
+      unit: '',
+      isCurrency: true,
+      financeOnly: true,
+      descKey: 'descUnitCost',
+      lineKey: 'lineUnitCost',
+      color: '#059669',
+      rgb: [5, 150, 105],
+      softColor: '#a7f3d0',
+      softRgb: [167, 243, 208],
+      lineColor: '#f59e0b',
+      lineRgb: [217, 119, 6],
+    },
+    {
+      key: 'mass',
+      label: 'Mass',
+      shortLabel: 'Mass',
+      unit: 'kg',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descMass',
+      lineKey: 'lineMass',
+      color: '#4f46e5',
+      rgb: [79, 70, 229],
+      softColor: '#c7d2fe',
+      softRgb: [199, 210, 254],
+      lineColor: '#f59e0b',
+      lineRgb: [217, 119, 6],
+    },
+    {
+      key: 'powerConsumption',
+      label: 'Power Consumption',
+      shortLabel: 'Power Cons.',
+      unit: 'W',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descPowerCons',
+      lineKey: 'linePowerCons',
+      color: '#d97706',
+      rgb: [217, 119, 6],
+      softColor: '#fde68a',
+      softRgb: [253, 230, 138],
+      lineColor: '#4f46e5',
+      lineRgb: [79, 70, 229],
+    },
+    {
+      key: 'powerDissipation',
+      label: 'Power Dissipation',
+      shortLabel: 'Power Diss.',
+      unit: 'W',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descPowerDiss',
+      lineKey: 'linePowerDiss',
+      color: '#e11d48',
+      rgb: [225, 29, 72],
+      softColor: '#fecdd3',
+      softRgb: [254, 205, 211],
+      lineColor: '#4f46e5',
+      lineRgb: [79, 70, 229],
+    },
+  ];
+
+  function canAccessParetoFinance() {
+    return typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+  }
+
+  function getAvailableParetoMetrics() {
+    const allowFin = canAccessParetoFinance();
+    return PARETO_METRICS.filter(m => !m.financeOnly || allowFin);
+  }
+
+  function resolveParetoMetric(metricKey) {
+    return PARETO_METRICS.find(m => m.key === metricKey) || null;
+  }
+
+  function extractLeafContributors(workDoc, rollups, metric) {
+    const items = (workDoc && Array.isArray(workDoc.items)) ? workDoc.items : [];
+    if (!items.length) return [];
+    const itemById = new Map(items.map(it => [it.id, it]));
+    const childrenByParent = new Map();
+    items.forEach(it => {
+      const pid = (it.parentId && itemById.has(it.parentId) && it.parentId !== it.id) ? it.parentId : null;
+      if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+      childrenByParent.get(pid).push(it);
+    });
+
+    const entries = [];
+    const visited = new Set();
+    function walk(item, ancQty, stack) {
+      if (stack.has(item.id)) return;
+      visited.add(item.id);
+      stack.add(item.id);
+      const q = effQty(item);
+      const cumQty = ancQty * q;
+      const sub = rollups.byId.get(item.id);
+      const hasDesc = Boolean(sub && sub[metric.descKey] !== null);
+      if (hasDesc) {
+        (childrenByParent.get(item.id) || []).forEach(child => walk(child, cumQty, stack));
+      } else if (isNum(item[metric.key]) && item[metric.key] > 0) {
+        const val = round4(item[metric.key] * cumQty);
+        if (val > 0) {
+          const code = String(item.code || '').trim();
+          const name = String(item.name || '').trim();
+          const acronym = String(item.acronym || '').trim();
+          entries.push({
+            id: item.id,
+            code,
+            name,
+            acronym,
+            deptId: item.deptId || '',
+            label: code ? `${code} ${name}` : name,
+            shortLabel: acronym && code ? `${code} · ${acronym}` : (code ? `${code} ${name}` : name),
+            value: val,
+            unitValue: item[metric.key],
+            effectiveQty: cumQty,
+            itemCount: 1,
+            isOthers: false,
+          });
+        }
+      }
+      stack.delete(item.id);
+    }
+
+    (childrenByParent.get(null) || []).forEach(root => walk(root, 1, new Set()));
+    items.forEach(it => { if (!visited.has(it.id)) walk(it, 1, new Set()); });
+    return entries;
+  }
+
+  /* options?: { groupBy?: 'leaves'|'roots'|'dept', matchedIds?: Set|Array|null, maxBars?: number, db?: object } */
+  function computeParetoData(doc, metricKey, options) {
+    const opts = options || {};
+    const metricDef = resolveParetoMetric(metricKey) || PARETO_METRICS[1];
+    const db = opts.db || null;
+    const currency = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
+    const metric = {
+      ...metricDef,
+      currency,
+      unit: metricDef.isCurrency ? currency : metricDef.unit,
+    };
+    const groupBy = ['leaves', 'roots', 'dept'].includes(opts.groupBy) ? opts.groupBy : 'leaves';
+    const maxBars = typeof opts.maxBars === 'number' && opts.maxBars >= 0 ? Math.floor(opts.maxBars) : 12;
+    const isFiltered = Boolean(opts.matchedIds);
+
+    const empty = (restricted) => ({
+      metric,
+      groupBy,
+      isFiltered,
+      restricted: Boolean(restricted),
+      total: 0,
+      contributorCount: 0,
+      vitalCount: 0,
+      vitalPct: 0,
+      vitalShareOfItemsPct: 0,
+      bars: [],
+      allEntries: [],
+    });
+
+    if (metric.financeOnly && !canAccessParetoFinance()) return empty(true);
+    if (!doc || !Array.isArray(doc.items) || !doc.items.length) return empty(false);
+
+    const workDoc = isFiltered ? buildFilteredSubDoc(doc, opts.matchedIds) : doc;
+    if (!workDoc.items.length) return empty(false);
+    const rollups = computeSwpRollups(workDoc);
+    const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
+
+    let rawEntries = [];
+    if (groupBy === 'roots') {
+      const itemById = new Map(workDoc.items.map(it => [it.id, it]));
+      const roots = workDoc.items.filter(it => !(it.parentId && itemById.has(it.parentId) && it.parentId !== it.id));
+      const leafEntries = extractLeafContributors(workDoc, rollups, metric);
+      const rootOf = (id) => {
+        let cur = itemById.get(id);
+        let guard = 0;
+        while (cur && cur.parentId && itemById.has(cur.parentId) && cur.parentId !== cur.id && guard < 200) {
+          cur = itemById.get(cur.parentId);
+          guard++;
+        }
+        return cur ? cur.id : id;
+      };
+      const countByRoot = new Map();
+      leafEntries.forEach(e => {
+        const rid = rootOf(e.id);
+        countByRoot.set(rid, (countByRoot.get(rid) || 0) + 1);
+      });
+      roots.forEach(root => {
+        const sub = rollups.byId.get(root.id);
+        const val = sub
+          ? (sub[metric.descKey] !== null ? sub[metric.descKey] : (sub[metric.lineKey] !== null ? sub[metric.lineKey] : 0))
+          : 0;
+        if (val > 0) {
+          const code = String(root.code || '').trim();
+          const name = String(root.name || '').trim();
+          const acronym = String(root.acronym || '').trim();
+          const dept = root.deptId ? deptMap.get(root.deptId) : null;
+          rawEntries.push({
+            id: root.id,
+            code,
+            name,
+            acronym,
+            deptId: root.deptId || '',
+            deptColor: dept && dept.color ? dept.color : '',
+            label: code ? `${code} ${name}` : name,
+            shortLabel: acronym && code ? `${code} · ${acronym}` : (code ? `${code} ${name}` : name),
+            value: round4(val),
+            unitValue: null,
+            effectiveQty: sub ? sub.effQty : 1,
+            itemCount: countByRoot.get(root.id) || 1,
+            isOthers: false,
+          });
+        }
+      });
+    } else if (groupBy === 'dept') {
+      const leafEntries = extractLeafContributors(workDoc, rollups, metric);
+      const buckets = new Map();
+      leafEntries.forEach(e => {
+        const key = e.deptId && deptMap.has(e.deptId) ? e.deptId : '__unassigned__';
+        if (!buckets.has(key)) {
+          const dept = key !== '__unassigned__' ? deptMap.get(key) : null;
+          buckets.set(key, {
+            id: key,
+            code: dept ? String(dept.code || '').trim() : '',
+            name: dept ? String(dept.name || '').trim() : 'Unassigned',
+            acronym: '',
+            deptId: dept ? dept.id : '',
+            deptColor: dept && dept.color ? dept.color : '',
+            label: dept ? `[${dept.code}] ${dept.name}` : 'Unassigned',
+            shortLabel: dept ? `[${dept.code}] ${dept.name}` : 'Unassigned',
+            value: 0,
+            unitValue: null,
+            effectiveQty: null,
+            itemCount: 0,
+            isOthers: false,
+          });
+        }
+        const b = buckets.get(key);
+        b.value = round4(b.value + e.value);
+        b.itemCount += 1;
+      });
+      rawEntries = Array.from(buckets.values()).filter(b => b.value > 0);
+    } else {
+      rawEntries = extractLeafContributors(workDoc, rollups, metric).map(e => {
+        const dept = e.deptId ? deptMap.get(e.deptId) : null;
+        return { ...e, deptColor: dept && dept.color ? dept.color : '' };
+      });
+    }
+
+    if (!rawEntries.length) return empty(false);
+
+    rawEntries.sort((a, b) => (b.value - a.value) || String(a.code || a.label).localeCompare(String(b.code || b.label), undefined, { numeric: true }));
+
+    const total = round4(rawEntries.reduce((sum, e) => sum + e.value, 0));
+    if (total <= 0) return empty(false);
+
+    let cumVal = 0;
+    let prevCumPct = 0;
+    let vitalCount = 0;
+    let vitalPct = 0;
+
+    const allEntries = rawEntries.map((e, idx) => {
+      cumVal = round4(cumVal + e.value);
+      const pct = (e.value / total) * 100;
+      const cumPct = idx === rawEntries.length - 1 ? 100 : Math.min(100, (cumVal / total) * 100);
+      const vitalFew = prevCumPct < 80;
+      if (vitalFew) {
+        vitalCount = idx + 1;
+        vitalPct = cumPct;
+      }
+      prevCumPct = cumPct;
+      return {
+        ...e,
+        rank: idx + 1,
+        pct: Math.round(pct * 10) / 10,
+        cumValue: cumVal,
+        cumPct: Math.round(cumPct * 10) / 10,
+        vitalFew,
+      };
+    });
+
+    let bars = allEntries;
+    if (maxBars > 1 && allEntries.length > maxBars) {
+      const keepCount = maxBars - 1;
+      const head = allEntries.slice(0, keepCount);
+      const tail = allEntries.slice(keepCount);
+      const tailValue = round4(tail.reduce((s, e) => s + e.value, 0));
+      const tailItemCount = tail.reduce((s, e) => s + (e.itemCount || 1), 0);
+      const lastHeadCum = head.length ? head[head.length - 1].cumValue : 0;
+      const tailPct = Math.round(((tailValue / total) * 100) * 10) / 10;
+      bars = [
+        ...head,
+        {
+          id: '__others__',
+          code: '',
+          name: `Others (${tail.length} ${groupBy === 'dept' ? 'depts' : (groupBy === 'roots' ? 'subsystems' : 'items')})`,
+          acronym: '',
+          deptId: '',
+          deptColor: '',
+          label: `Others (${tail.length})`,
+          shortLabel: `Others (${tail.length})`,
+          value: tailValue,
+          unitValue: null,
+          effectiveQty: null,
+          itemCount: tailItemCount,
+          otherCount: tail.length,
+          rank: keepCount + 1,
+          pct: tailPct,
+          cumValue: round4(lastHeadCum + tailValue),
+          cumPct: 100,
+          vitalFew: false,
+          isOthers: true,
+        },
+      ];
+    }
+
+    return {
+      metric,
+      groupBy,
+      isFiltered,
+      restricted: false,
+      total,
+      contributorCount: allEntries.length,
+      vitalCount,
+      vitalPct: Math.round(vitalPct * 10) / 10,
+      vitalShareOfItemsPct: Math.round((vitalCount / allEntries.length) * 100),
+      bars,
+      allEntries,
+    };
+  }
+
+  function getParetoMetricCounts(doc, options) {
+    const opts = options || {};
+    const counts = {};
+    getAvailableParetoMetrics().forEach(m => {
+      const res = computeParetoData(doc, m.key, {
+        groupBy: opts.groupBy || 'leaves',
+        matchedIds: opts.matchedIds || null,
+        maxBars: 0,
+        db: opts.db || null,
+      });
+      counts[m.key] = res.contributorCount;
+    });
+    return counts;
   }
 
   P.MATURITY_OPTIONS = MATURITY_OPTIONS;
   P.MATURITY_RANK = MATURITY_RANK;
+  P.PARETO_METRICS = PARETO_METRICS;
   P.tree = {
     getChildren, isDescendant, suggestNextCode, reorderItem, renumberTree,
     flattenTreeRows, computeMaturitySummary, getFilteredTreeRows, computeSwpRollups, computeFilteredRollups,
+    getAvailableParetoMetrics, computeParetoData, getParetoMetricCounts,
   };
 })();
 
@@ -28376,6 +28737,7 @@ border-color: #334155;
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
   function svgFilename(project, fallbackId) { return `pbs_${safeName(project, fallbackId)}_diagram.svg`; }
+  function paretoSvgFilename(project, fallbackId, metricKey) { return `pbs_${safeName(project, fallbackId)}_pareto_${P.data.sanitizeFilenamePart(metricKey || 'metric')}.svg`; }
   function pdfFilename(project, fallbackId, dateStr) { return `pbs_${safeName(project, fallbackId)}_${dateStr}.pdf`; }
 
   function xmlEsc(str) {
@@ -28394,8 +28756,242 @@ border-color: #334155;
   /* Helvetica in jsPDF only covers Latin-1: map common punctuation and drop the rest. */
   function pdfSafe(str) {
     return String(str ?? '')
+      .replace(/\u20AC/g, 'EUR ')
       .replace(/[\u2013\u2014]/g, '-').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\u2026/g, '...')
       .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  }
+
+  function paretoGroupLabel(groupBy) {
+    if (groupBy === 'roots') return 'Top-Level Subsystems';
+    if (groupBy === 'dept') return 'By Department';
+    return 'Contributors (Items)';
+  }
+
+  function fmtGroupedNumber(v) {
+    if (!isNum(v)) return '0';
+    const abs = Math.abs(v);
+    const maxFrac = abs >= 1000 ? 0 : (abs >= 10 ? 1 : (abs >= 1 ? 2 : 3));
+    try {
+      return v.toLocaleString('en-US', { maximumFractionDigits: maxFrac });
+    } catch (_e) {
+      return fmtNum(v);
+    }
+  }
+
+  function formatParetoValue(val, metric, forPdf) {
+    if (!isNum(val)) return '-';
+    const numStr = fmtGroupedNumber(val);
+    if (!metric) return forPdf ? pdfSafe(numStr) : numStr;
+    if (metric.isCurrency) {
+      const sym = String(metric.currency || '€');
+      const raw = sym.length > 1 ? `${sym} ${numStr}` : `${sym}${numStr}`;
+      return forPdf ? pdfSafe(raw) : raw;
+    }
+    const raw = metric.unit ? `${numStr} ${metric.unit}` : numStr;
+    return forPdf ? pdfSafe(raw) : raw;
+  }
+
+  function formatParetoAxisTick(val, metric, forPdf) {
+    if (!isNum(val)) return '0';
+    const abs = Math.abs(val);
+    let compact;
+    if (abs >= 1e6) compact = `${fmtNum(Math.round((val / 1e6) * 10) / 10)}M`;
+    else if (abs >= 1e4) compact = `${fmtNum(Math.round((val / 1e3) * 10) / 10)}k`;
+    else compact = fmtGroupedNumber(val);
+    if (metric && metric.isCurrency) {
+      const sym = String(metric.currency || '€');
+      const raw = sym.length > 1 ? `${sym} ${compact}` : `${sym}${compact}`;
+      return forPdf ? pdfSafe(raw) : raw;
+    }
+    return forPdf ? pdfSafe(compact) : compact;
+  }
+
+  function niceParetoMax(maxVal) {
+    if (!isNum(maxVal) || maxVal <= 0) return 10;
+    const exp = Math.floor(Math.log10(maxVal));
+    const mag = Math.pow(10, exp);
+    const norm = maxVal / mag;
+    let nice;
+    if (norm <= 1) nice = 1;
+    else if (norm <= 1.2) nice = 1.2;
+    else if (norm <= 1.5) nice = 1.5;
+    else if (norm <= 2) nice = 2;
+    else if (norm <= 2.5) nice = 2.5;
+    else if (norm <= 3) nice = 3;
+    else if (norm <= 4) nice = 4;
+    else if (norm <= 5) nice = 5;
+    else if (norm <= 6) nice = 6;
+    else if (norm <= 8) nice = 8;
+    else nice = 10;
+    return nice * mag;
+  }
+
+  /* Builds a responsive or standalone dual-axis Pareto SVG diagram (descending bars + cumulative % curve + 80% threshold). */
+  function buildParetoSvg(paretoData, opts) {
+    const o = opts || {};
+    const standalone = Boolean(o.standalone);
+    const dark = Boolean(o.darkMode) && !o.printMode && !standalone;
+    const W = o.width || 820;
+    const headerH = standalone ? 58 : 0;
+    const H = (o.height || 340) + headerH;
+    const metric = (paretoData && paretoData.metric) || { label: 'Metric', unit: '', color: '#4f46e5', softColor: '#c7d2fe', lineColor: '#f59e0b' };
+    const bars = (paretoData && Array.isArray(paretoData.bars)) ? paretoData.bars : [];
+
+    const bg = dark ? '#0f172a' : '#ffffff';
+    const plotBg = dark ? '#111c33' : '#f8fafc';
+    const gridStroke = dark ? '#334155' : '#e2e8f0';
+    const axisText = dark ? '#94a3b8' : '#64748b';
+    const labelText = dark ? '#e2e8f0' : '#0f172a';
+    const mutedBarFill = dark ? '#334155' : (metric.softColor || '#cbd5e1');
+    const othersBarFill = dark ? '#475569' : '#94a3b8';
+    const lineColor = metric.lineColor || '#f59e0b';
+    const dotInner = dark ? '#0f172a' : '#ffffff';
+
+    const titleStr = o.title || `Pareto Analysis \u2014 ${metric.label}${metric.unit && !metric.isCurrency ? ` (${metric.unit})` : ''}`;
+    const vitalStr = paretoData && paretoData.contributorCount > 0
+      ? `80/20 Vital Few: Top ${paretoData.vitalCount} of ${paretoData.contributorCount} (${paretoData.vitalShareOfItemsPct}%) drive ${paretoData.vitalPct}% \u00b7 Total ${formatParetoValue(paretoData.total, metric, false)}`
+      : 'No recorded values in scope';
+    const subtitleStr = o.subtitle || `${paretoGroupLabel(paretoData && paretoData.groupBy)} \u00b7 ${vitalStr}`;
+
+    const sizeAttrs = standalone
+      ? `width="${W}" height="${H}"`
+      : `width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"`;
+    const vbAttr = standalone ? `viewBox="0 0 ${W} ${H}"` : '';
+
+    const headerSvg = standalone
+      ? `<rect width="${W}" height="${headerH}" fill="#0f172a"/>
+  <rect y="${headerH - 4}" width="${W}" height="4" fill="${xmlEsc(metric.color || '#4f46e5')}"/>
+  <text x="20" y="25" font-size="15" font-weight="800" fill="#ffffff">${xmlEsc(titleStr)}</text>
+  <text x="20" y="43" font-size="10.5" fill="#cbd5e1">${xmlEsc(subtitleStr)}</text>`
+      : '';
+
+    if (!bars.length) {
+      const msg = paretoData && paretoData.restricted
+        ? 'Financial cost data is restricted for your account.'
+        : `No PBS items have positive ${metric.label} values in this scope.`;
+      const body = `${headerSvg}
+  <rect x="0" y="${headerH}" width="${W}" height="${H - headerH}" fill="${bg}" rx="${standalone ? 0 : 8}"/>
+  <text x="${W / 2}" y="${headerH + (H - headerH) / 2 - 4}" text-anchor="middle" font-size="13" font-weight="700" fill="${axisText}">${xmlEsc(msg)}</text>
+  <text x="${W / 2}" y="${headerH + (H - headerH) / 2 + 16}" text-anchor="middle" font-size="11" fill="${axisText}">Add ${xmlEsc(metric.label)} values to PBS items to generate the Pareto diagram.</text>`;
+      return `${standalone ? '<?xml version="1.0" encoding="UTF-8"?>\n' : ''}<svg xmlns="http://www.w3.org/2000/svg" ${sizeAttrs} ${vbAttr} role="img" aria-label="${xmlEsc(titleStr)}" style="font-family:Inter,system-ui,-apple-system,sans-serif;display:block;max-width:100%;background:${bg}">${body}</svg>`;
+    }
+
+    const padL = 72;
+    const padR = 58;
+    const padT = headerH + 34;
+    const padB = 82;
+    const plotW = Math.max(240, W - padL - padR);
+    const plotH = Math.max(120, H - padT - padB);
+    const maxBarVal = Math.max(...bars.map(b => b.value), 0);
+    const yMax = niceParetoMax(maxBarVal * 1.12);
+
+    const yVal = (v) => padT + plotH - (Math.min(yMax, Math.max(0, v)) / yMax) * plotH;
+    const yPct = (p) => padT + plotH - (Math.min(100, Math.max(0, p)) / 100) * plotH;
+
+    const parts = [];
+    if (headerSvg) parts.push(headerSvg);
+    parts.push(`<rect x="0" y="${headerH}" width="${W}" height="${H - headerH}" fill="${bg}" rx="${standalone ? 0 : 8}"/>`);
+    parts.push(`<rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="${plotBg}" rx="4"/>`);
+
+    // Legend row at top of plot
+    const legY = headerH + 17;
+    parts.push(`<g font-size="10" font-weight="600" fill="${axisText}">
+    <rect x="${padL}" y="${legY - 8}" width="10" height="10" rx="2" fill="${xmlEsc(metric.color)}"/>
+    <text x="${padL + 14}" y="${legY}">Vital Few (\u226480%)</text>
+    <rect x="${padL + 112}" y="${legY - 8}" width="10" height="10" rx="2" fill="${mutedBarFill}" stroke="${xmlEsc(metric.color)}" stroke-width="1"/>
+    <text x="${padL + 126}" y="${legY}">Remaining 20%</text>
+    <line x1="${padL + 220}" y1="${legY - 3}" x2="${padL + 236}" y2="${legY - 3}" stroke="${xmlEsc(lineColor)}" stroke-width="2.2"/>
+    <circle cx="${padL + 228}" cy="${legY - 3}" r="3" fill="${dotInner}" stroke="${xmlEsc(lineColor)}" stroke-width="1.8"/>
+    <text x="${padL + 241}" y="${legY}">Cumulative %</text>
+    <line x1="${padL + 324}" y1="${legY - 3}" x2="${padL + 340}" y2="${legY - 3}" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="4,3"/>
+    <text x="${padL + 345}" y="${legY}">80% Threshold</text>
+  </g>`);
+
+    // Gridlines + Left/Right Y-axis ticks (5 steps: 0, 20, 40, 60, 80, 100%)
+    for (let i = 0; i <= 5; i++) {
+      const pctTick = i * 20;
+      const valTick = (yMax * i) / 5;
+      const y = yPct(pctTick);
+      parts.push(`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${padL + plotW}" y2="${y.toFixed(1)}" stroke="${gridStroke}" stroke-width="${i === 0 ? 1.2 : 0.8}"/>`);
+      parts.push(`<text x="${padL - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="${axisText}">${xmlEsc(formatParetoAxisTick(valTick, metric, false))}</text>`);
+      parts.push(`<text x="${padL + plotW + 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="${axisText}">${pctTick}%</text>`);
+    }
+
+    // Axis titles
+    const leftAxisTitle = metric.isCurrency ? `${metric.label} (${metric.currency})` : `${metric.label} (${metric.unit})`;
+    parts.push(`<text x="16" y="${(padT + plotH / 2).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${axisText}" transform="rotate(-90 16 ${(padT + plotH / 2).toFixed(1)})">${xmlEsc(leftAxisTitle)}</text>`);
+    parts.push(`<text x="${W - 14}" y="${(padT + plotH / 2).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${axisText}" transform="rotate(90 ${W - 14} ${(padT + plotH / 2).toFixed(1)})">Cumulative %</text>`);
+
+    // Bars
+    const slotW = plotW / bars.length;
+    const barW = Math.max(10, Math.min(54, slotW * 0.64));
+    const showValLabels = bars.length <= 16;
+    const pts = [];
+
+    bars.forEach((b, idx) => {
+      const cx = padL + slotW * (idx + 0.5);
+      const bx = cx - barW / 2;
+      const by = yVal(b.value);
+      const bh = Math.max(2, padT + plotH - by);
+      const fill = b.isOthers ? othersBarFill : (b.vitalFew ? metric.color : mutedBarFill);
+      const stroke = b.isOthers ? '#64748b' : metric.color;
+      const tipLines = [
+        `#${b.rank} ${b.label}`,
+        `${metric.label}: ${formatParetoValue(b.value, metric, false)} (${b.pct}% of total)`,
+        `Cumulative: ${b.cumPct}%`,
+      ];
+      if (b.effectiveQty && b.effectiveQty > 1) tipLines.push(`Effective Qty: \u00d7${b.effectiveQty}`);
+      if (b.isOthers && b.otherCount) tipLines.push(`Includes ${b.otherCount} remaining entries`);
+      else if (b.vitalFew) tipLines.push('Classification: Vital Few (\u226480% driver)');
+
+      parts.push(`<g>
+    <title>${xmlEsc(tipLines.join('\n'))}</title>
+    <rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" rx="3.5" fill="${xmlEsc(fill)}" stroke="${xmlEsc(stroke)}" stroke-width="${b.vitalFew ? 0 : 1}"/>
+  </g>`);
+
+      if (showValLabels) {
+        const valLbl = formatParetoAxisTick(b.value, metric, false);
+        const lblY = Math.max(padT + 11, by - 5);
+        parts.push(`<text x="${cx.toFixed(1)}" y="${lblY.toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="${labelText}">${xmlEsc(valLbl)}</text>`);
+      }
+
+      // X-axis label (angled slightly when more than 6 bars for readability)
+      const maxChars = bars.length > 14 ? 12 : (bars.length > 8 ? 16 : 20);
+      const xLbl = clip(b.shortLabel || b.label, maxChars);
+      const xLblY = padT + plotH + 14;
+      if (bars.length > 5) {
+        parts.push(`<text x="${cx.toFixed(1)}" y="${xLblY.toFixed(1)}" text-anchor="end" font-size="9.5" font-weight="${b.vitalFew ? 700 : 500}" fill="${b.isOthers ? axisText : labelText}" transform="rotate(-32 ${cx.toFixed(1)} ${xLblY.toFixed(1)})"><title>${xmlEsc(b.label)}</title>${xmlEsc(xLbl)}</text>`);
+      } else {
+        parts.push(`<text x="${cx.toFixed(1)}" y="${(xLblY + 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="${b.vitalFew ? 700 : 500}" fill="${b.isOthers ? axisText : labelText}"><title>${xmlEsc(b.label)}</title>${xmlEsc(xLbl)}</text>`);
+      }
+
+      pts.push({ cx, cy: yPct(b.cumPct), bar: b });
+    });
+
+    // 80% Pareto threshold dashed line (drawn above bars, below cumulative curve)
+    const y80 = yPct(80);
+    parts.push(`<line x1="${padL}" y1="${y80.toFixed(1)}" x2="${padL + plotW}" y2="${y80.toFixed(1)}" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="5,4"/>`);
+    parts.push(`<rect x="${(padL + plotW - 34).toFixed(1)}" y="${(y80 - 15).toFixed(1)}" width="31" height="13" rx="3" fill="#ef4444"/><text x="${(padL + plotW - 18.5).toFixed(1)}" y="${(y80 - 5.5).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#ffffff">80%</text>`);
+
+    // Cumulative % polyline + dots
+    if (pts.length > 1) {
+      const polyPts = pts.map(p => `${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(' ');
+      parts.push(`<polyline points="${polyPts}" fill="none" stroke="${xmlEsc(lineColor)}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`);
+    }
+    const labelStep = bars.length > 14 ? 2 : 1;
+    pts.forEach((p, idx) => {
+      const b = p.bar;
+      parts.push(`<circle cx="${p.cx.toFixed(1)}" cy="${p.cy.toFixed(1)}" r="3.8" fill="${dotInner}" stroke="${xmlEsc(lineColor)}" stroke-width="2"><title>${xmlEsc(`${b.label}: ${b.cumPct}% cumulative`)}</title></circle>`);
+      if (idx % labelStep === 0 || idx === pts.length - 1) {
+        const py = p.cy < padT + 18 ? p.cy + 14 : p.cy - 8;
+        parts.push(`<text x="${p.cx.toFixed(1)}" y="${py.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${xmlEsc(lineColor)}">${Math.round(b.cumPct)}%</text>`);
+      }
+    });
+
+    return `${standalone ? '<?xml version="1.0" encoding="UTF-8"?>\n' : ''}<svg xmlns="http://www.w3.org/2000/svg" ${sizeAttrs} ${vbAttr} role="img" aria-label="${xmlEsc(titleStr)}" style="font-family:Inter,system-ui,-apple-system,sans-serif;display:block;max-width:100%;background:${bg}">
+  <title>${xmlEsc(titleStr)}</title>
+  ${parts.join('\n  ')}
+</svg>`;
   }
 
   function buildCardTooltip(n, dept) {
@@ -28761,12 +29357,45 @@ border-color: #334155;
     if (totalRollups && totalRollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(totalRollups.totalMass)} kg`);
     if (totalRollups && totalRollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(totalRollups.totalPowerConsumption)} W`);
     if (totalRollups && totalRollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(totalRollups.totalPowerDissipation)} W`);
+    if (allowFin && totalRollups && totalRollups.totalUnitCost !== null) {
+      const curSym = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
+      swpSub.push(`Cost: ${curSym}${fmtNum(totalRollups.totalUnitCost)}`);
+    }
     const scopeTag = isFiltered ? `Filtered (${matchedIdSet.size} of ${allFlat.length} items)` : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
     const viewTag = selFieldSet ? `Selected fields (${activeCols.length})` : (visOptSet ? 'Current columns' : '');
 
+    // Optional Pareto diagrams requested in PDF export options
+    const paretoCharts = [];
+    const reqPareto = Array.isArray(opts.paretoMetrics) ? opts.paretoMetrics : (opts.paretoMetrics instanceof Set ? Array.from(opts.paretoMetrics) : []);
+    if (reqPareto.length && P.tree && typeof P.tree.computeParetoData === 'function') {
+      const validKeys = new Set((P.PARETO_METRICS || []).filter(m => !m.financeOnly || allowFin).map(m => m.key));
+      const pGroupBy = ['leaves', 'roots', 'dept'].includes(opts.paretoGroupBy) ? opts.paretoGroupBy : 'leaves';
+      const pMaxBars = typeof opts.paretoMaxBars === 'number' && opts.paretoMaxBars > 1 ? Math.floor(opts.paretoMaxBars) : 12;
+      const seenMetric = new Set();
+      reqPareto.forEach(mk => {
+        if (!validKeys.has(mk) || seenMetric.has(mk)) return;
+        seenMetric.add(mk);
+        const data = P.tree.computeParetoData(doc, mk, {
+          groupBy: pGroupBy,
+          matchedIds: matchedIdSet,
+          maxBars: pMaxBars,
+          db,
+        });
+        if (!data.restricted) {
+          paretoCharts.push({
+            ...data,
+            scopeTag,
+            projectLabel: `[${project ? project.code : ''}] ${project ? project.name : 'Project'}`,
+            dateStr: dateStr || '',
+            userName: userName || 'Project Mgr',
+          });
+        }
+      });
+    }
+
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
-      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${scopeTag}${viewTag ? `  |  ${viewTag}` : ''}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
+      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${scopeTag}${viewTag ? `  |  ${viewTag}` : ''}${paretoCharts.length ? `  |  ${paretoCharts.length} Pareto${paretoCharts.length === 1 ? '' : 's'}` : ''}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
       projectColor: project && project.color ? project.color : null,
       cols: activeCols,
       colIdx,
@@ -28775,8 +29404,242 @@ border-color: #334155;
       totalRow,
       hasOpt,
       isFiltered,
+      paretoCharts,
       layout: { pageFormat, pageLabel, neededW, marginX, fontSize, cellPadding },
     };
+  }
+
+  /* Draws a crisp pure-vector Pareto chart + ranked breakdown table onto a new landscape PDF page. */
+  function renderPdfParetoPage(pdf, chart, model, projRgb) {
+    if (typeof pdf.addPage === 'function') pdf.addPage();
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = typeof pdf.internal.pageSize.getHeight === 'function' ? pdf.internal.pageSize.getHeight() : 595;
+    const marginX = Math.max(30, (model.layout && model.layout.marginX) || 36);
+    const printableW = Math.max(400, pageW - marginX * 2);
+    const metric = chart.metric || { label: 'Metric', unit: '', rgb: [79, 70, 229], softRgb: [199, 210, 254], lineRgb: [217, 119, 6] };
+    const barRgb = Array.isArray(metric.rgb) ? metric.rgb : [79, 70, 229];
+    const softRgb = Array.isArray(metric.softRgb) ? metric.softRgb : tint(barRgb, 0.35);
+    const lineRgb = Array.isArray(metric.lineRgb) ? metric.lineRgb : [217, 119, 6];
+
+    const setDraw = (r, g, b) => { if (typeof pdf.setDrawColor === 'function') pdf.setDrawColor(r, g, b); };
+    const setLW = (w) => { if (typeof pdf.setLineWidth === 'function') pdf.setLineWidth(w); };
+    const drawLine = (x1, y1, x2, y2) => { if (typeof pdf.line === 'function') pdf.line(x1, y1, x2, y2); };
+    const setDash = (pat) => { if (typeof pdf.setLineDashPattern === 'function') pdf.setLineDashPattern(pat, 0); };
+
+    // Matching dark banner header
+    pdf.setFillColor(15, 23, 42); pdf.rect(0, 0, pageW, 60, 'F');
+    pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]); pdf.rect(0, 56, pageW, 4, 'F');
+    const unitNote = metric.isCurrency ? '' : (metric.unit ? ` (${metric.unit})` : '');
+    const pTitle = pdfSafe(`Pareto Analysis: ${metric.label}${unitNote}  -  ${chart.projectLabel || model.title}`);
+    const vitalSummary = chart.contributorCount > 0
+      ? `80/20 Vital Few: Top ${chart.vitalCount} of ${chart.contributorCount} (${chart.vitalShareOfItemsPct}%) drive ${chart.vitalPct}%  |  Total: ${formatParetoValue(chart.total, metric, true)}`
+      : 'No recorded values in current scope';
+    const pSub = pdfSafe(`${paretoGroupLabel(chart.groupBy)}  |  ${chart.scopeTag || ''}  |  ${vitalSummary}`);
+    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13.5); pdf.text(pTitle, marginX, 26);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(203, 213, 225); pdf.text(pSub, marginX, 44);
+
+    const bars = Array.isArray(chart.bars) ? chart.bars : [];
+    if (!bars.length) {
+      pdf.setFillColor(248, 250, 252);
+      setDraw(203, 213, 225);
+      setLW(0.8);
+      pdf.rect(marginX, 90, printableW, 110, 'FD');
+      pdf.setTextColor(100, 116, 139);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(11);
+      pdf.text(pdfSafe(`No PBS items have positive ${metric.label} values in this scope.`), marginX + printableW / 2, 142, { align: 'center' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text(pdfSafe(`Populate ${metric.label} values on PBS items to render the Pareto breakdown.`), marginX + printableW / 2, 162, { align: 'center' });
+      return;
+    }
+
+    // Legend row
+    const legY = 76;
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(8);
+    pdf.setTextColor(71, 85, 105);
+    pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]); pdf.rect(marginX, legY - 7, 9, 8, 'F');
+    pdf.text('Vital Few (<=80%)', marginX + 13, legY);
+    pdf.setFillColor(softRgb[0], softRgb[1], softRgb[2]); setDraw(barRgb[0], barRgb[1], barRgb[2]); setLW(0.6); pdf.rect(marginX + 104, legY - 7, 9, 8, 'FD');
+    pdf.text('Remaining 20%', marginX + 117, legY);
+    setDraw(lineRgb[0], lineRgb[1], lineRgb[2]); setLW(1.6); drawLine(marginX + 196, legY - 3, marginX + 210, legY - 3);
+    pdf.text('Cumulative %', marginX + 214, legY);
+    setDraw(239, 68, 68); setLW(1); setDash([3, 2]); drawLine(marginX + 286, legY - 3, marginX + 300, legY - 3); setDash([]);
+    pdf.text('80% Threshold', marginX + 304, legY);
+
+    // Chart plot geometry (upper portion of landscape page, leaving room for compact summary table below)
+    const chartTop = 90;
+    const chartH = Math.max(155, Math.min(235, Math.floor((pageH - 130) * 0.48)));
+    const plotL = marginX + 54;
+    const plotR = marginX + printableW - 42;
+    const plotW = Math.max(200, plotR - plotL);
+    const plotB = chartTop + chartH;
+
+    pdf.setFillColor(248, 250, 252);
+    pdf.rect(plotL, chartTop, plotW, chartH, 'F');
+
+    const maxBarVal = Math.max(...bars.map(b => b.value), 0);
+    const yMax = niceParetoMax(maxBarVal * 1.14);
+    const yForVal = (v) => plotB - (Math.min(yMax, Math.max(0, v)) / yMax) * chartH;
+    const yForPct = (p) => plotB - (Math.min(100, Math.max(0, p)) / 100) * chartH;
+
+    // Gridlines + Y-axis labels
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(100, 116, 139);
+    for (let i = 0; i <= 5; i++) {
+      const pctTick = i * 20;
+      const valTick = (yMax * i) / 5;
+      const y = yForPct(pctTick);
+      setDraw(226, 232, 240);
+      setLW(i === 0 ? 0.9 : 0.45);
+      drawLine(plotL, y, plotR, y);
+      pdf.text(formatParetoAxisTick(valTick, metric, true), plotL - 6, y + 2.5, { align: 'right' });
+      pdf.text(`${pctTick}%`, plotR + 6, y + 2.5);
+    }
+
+    // Bars + X-axis labels
+    const slotW = plotW / bars.length;
+    const barW = Math.max(12, Math.min(48, slotW * 0.62));
+    const pts = [];
+
+    bars.forEach((b, idx) => {
+      const cx = plotL + slotW * (idx + 0.5);
+      const bx = cx - barW / 2;
+      const by = yForVal(b.value);
+      const bh = Math.max(1.5, plotB - by);
+      if (b.isOthers) {
+        pdf.setFillColor(148, 163, 184);
+        pdf.rect(bx, by, barW, bh, 'F');
+      } else if (b.vitalFew) {
+        pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]);
+        pdf.rect(bx, by, barW, bh, 'F');
+      } else {
+        pdf.setFillColor(softRgb[0], softRgb[1], softRgb[2]);
+        setDraw(barRgb[0], barRgb[1], barRgb[2]);
+        setLW(0.6);
+        pdf.rect(bx, by, barW, bh, 'FD');
+      }
+
+      // Bar value label
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7);
+      pdf.setTextColor(15, 23, 42);
+      const valTxt = formatParetoAxisTick(b.value, metric, true);
+      pdf.text(valTxt, cx, Math.max(chartTop + 9, by - 3.5), { align: 'center' });
+
+      // X-axis label (2 compact lines if needed, clean without overlapping)
+      pdf.setFont('helvetica', b.vitalFew ? 'bold' : 'normal');
+      pdf.setFontSize(7);
+      pdf.setTextColor(b.isOthers ? 100 : 30, b.isOthers ? 116 : 41, b.isOthers ? 139 : 59);
+      const maxChars = Math.max(8, Math.floor(slotW / 4.2));
+      const rawLbl = pdfSafe(b.shortLabel || b.label);
+      const xLbl = clip(rawLbl, maxChars);
+      pdf.text(xLbl, cx, plotB + 11, { align: 'center' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(`${b.pct}%`, cx, plotB + 20, { align: 'center' });
+
+      pts.push({ cx, cy: yForPct(b.cumPct), bar: b });
+    });
+
+    // 80% threshold line
+    const y80 = yForPct(80);
+    setDraw(239, 68, 68);
+    setLW(1);
+    setDash([4, 3]);
+    drawLine(plotL, y80, plotR, y80);
+    setDash([]);
+    pdf.setFillColor(239, 68, 68);
+    pdf.rect(plotR - 26, y80 - 11, 24, 10, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(6.8);
+    pdf.text('80%', plotR - 14, y80 - 3.5, { align: 'center' });
+
+    // Cumulative % polyline + point markers
+    setDraw(lineRgb[0], lineRgb[1], lineRgb[2]);
+    setLW(1.7);
+    for (let i = 1; i < pts.length; i++) {
+      drawLine(pts[i - 1].cx, pts[i - 1].cy, pts[i].cx, pts[i].cy);
+    }
+    pts.forEach((p) => {
+      if (typeof pdf.circle === 'function') {
+        pdf.setFillColor(255, 255, 255);
+        setDraw(lineRgb[0], lineRgb[1], lineRgb[2]);
+        setLW(1.3);
+        pdf.circle(p.cx, p.cy, 2.7, 'FD');
+      }
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7);
+      pdf.setTextColor(lineRgb[0], lineRgb[1], lineRgb[2]);
+      const py = p.cy < chartTop + 14 ? p.cy + 10 : p.cy - 5;
+      pdf.text(`${Math.round(p.bar.cumPct)}%`, p.cx, py, { align: 'center' });
+    });
+
+    // Ranked Breakdown Table underneath chart
+    const showQty = chart.groupBy === 'leaves';
+    const valHead = pdfSafe(metric.isCurrency ? `${metric.label}` : `${metric.label} (${metric.unit})`);
+    const tHead = showQty
+      ? ['#', 'Code', 'Deliverable / Subsystem', 'Eff. Qty', valHead, 'Share %', 'Cum. %', 'Pareto Class']
+      : ['#', 'Code', chart.groupBy === 'dept' ? 'Department' : 'Subsystem', 'Items', valHead, 'Share %', 'Cum. %', 'Pareto Class'];
+    const tBody = bars.map(b => [
+      b.isOthers ? '-' : String(b.rank),
+      pdfSafe(b.code || '-'),
+      pdfSafe(b.name || b.label),
+      showQty ? (b.effectiveQty ? `x${b.effectiveQty}` : '-') : String(b.itemCount || 1),
+      formatParetoValue(b.value, metric, true),
+      `${b.pct}%`,
+      `${b.cumPct}%`,
+      b.isOthers ? 'Others' : (b.vitalFew ? 'Vital Few (<=80%)' : 'Remaining 20%'),
+    ]);
+    tBody.push([
+      '',
+      'TOTAL',
+      pdfSafe(`${chart.contributorCount} contributor${chart.contributorCount === 1 ? '' : 's'}`),
+      '',
+      formatParetoValue(chart.total, metric, true),
+      '100%',
+      '100%',
+      pdfSafe(`Top ${chart.vitalCount} = ${chart.vitalPct}%`),
+    ]);
+
+    pdf.autoTable({
+      startY: plotB + 30,
+      head: [tHead],
+      body: tBody,
+      styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3.5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.45 },
+      headStyles: { fillColor: barRgb, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 26, fontStyle: 'bold' },
+        1: { cellWidth: 52, fontStyle: 'bold' },
+        3: { halign: 'right', cellWidth: 46 },
+        4: { halign: 'right', cellWidth: 82, fontStyle: 'bold' },
+        5: { halign: 'right', cellWidth: 50 },
+        6: { halign: 'right', cellWidth: 52, fontStyle: 'bold' },
+        7: { halign: 'center', cellWidth: 86 },
+      },
+      didParseCell(data) {
+        if (data.section !== 'body') return;
+        const isLast = data.row.index === tBody.length - 1;
+        if (isLast) {
+          data.cell.styles.fillColor = [226, 232, 240];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [15, 23, 42];
+          return;
+        }
+        const entry = bars[data.row.index];
+        if (entry && entry.vitalFew && data.column.index === 7) {
+          data.cell.styles.textColor = barRgb;
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+      didDrawCell() {},
+      margin: { left: marginX, right: marginX, bottom: 26 },
+    });
   }
 
   /* JsPdf = window.jspdf.jsPDF. Returns the jsPDF instance (caller calls .save(filename)). Throws if autoTable is missing. */
@@ -28869,6 +29732,12 @@ border-color: #334155;
       margin: { left: marginX, right: marginX, bottom: 32 },
     });
 
+    if (Array.isArray(model.paretoCharts) && model.paretoCharts.length) {
+      model.paretoCharts.forEach(chart => {
+        renderPdfParetoPage(pdf, chart, model, projRgb);
+      });
+    }
+
     return pdf;
   }
 
@@ -28900,13 +29769,41 @@ border-color: #334155;
     }).join('');
 
     const ths = cols.map(c => `<th${c.align ? ` style="text-align:${c.align}"` : ''}>${htmlEsc(c.label)}</th>`).join('');
+
+    const paretoHtml = (Array.isArray(model.paretoCharts) ? model.paretoCharts : []).map(chart => {
+      const m = chart.metric || { label: 'Metric', unit: '', color: '#4f46e5' };
+      const unitNote = m.isCurrency ? '' : (m.unit ? ` (${m.unit})` : '');
+      const svg = buildParetoSvg(chart, { printMode: true, width: 920, height: 310 });
+      const showQty = chart.groupBy === 'leaves';
+      const vitalNote = chart.contributorCount > 0
+        ? `80/20 Vital Few: Top <strong>${chart.vitalCount}</strong> of ${chart.contributorCount} (${chart.vitalShareOfItemsPct}%) drive <strong>${chart.vitalPct}%</strong> &middot; Total: <strong>${htmlEsc(formatParetoValue(chart.total, m, false))}</strong>`
+        : 'No recorded values in scope.';
+      const pRows = (chart.bars || []).map(b => `<tr>
+        <td style="text-align:center;font-weight:700">${b.isOthers ? '\u2014' : b.rank}</td>
+        <td style="font-family:monospace;font-weight:700">${htmlEsc(b.code || '\u2014')}</td>
+        <td>${htmlEsc(b.name || b.label)}</td>
+        <td style="text-align:right">${showQty ? (b.effectiveQty ? `&times;${b.effectiveQty}` : '\u2014') : (b.itemCount || 1)}</td>
+        <td style="text-align:right;font-weight:700">${htmlEsc(formatParetoValue(b.value, m, false))}</td>
+        <td style="text-align:right">${b.pct}%</td>
+        <td style="text-align:right;font-weight:700">${b.cumPct}%</td>
+        <td style="text-align:center;font-weight:${b.vitalFew ? 700 : 500};color:${b.vitalFew ? htmlEsc(m.color) : '#64748b'}">${b.isOthers ? 'Others' : (b.vitalFew ? 'Vital Few (\u226480%)' : 'Remaining 20%')}</td>
+      </tr>`).join('');
+      const tbl = chart.bars && chart.bars.length
+        ? `<table style="margin-top:10px"><thead><tr><th style="background:${htmlEsc(m.color)};text-align:center">#</th><th style="background:${htmlEsc(m.color)}">Code</th><th style="background:${htmlEsc(m.color)}">${chart.groupBy === 'dept' ? 'Department' : (chart.groupBy === 'roots' ? 'Subsystem' : 'Deliverable / Subsystem')}</th><th style="background:${htmlEsc(m.color)};text-align:right">${showQty ? 'Eff. Qty' : 'Items'}</th><th style="background:${htmlEsc(m.color)};text-align:right">${htmlEsc(m.label)}${htmlEsc(unitNote)}</th><th style="background:${htmlEsc(m.color)};text-align:right">Share %</th><th style="background:${htmlEsc(m.color)};text-align:right">Cum. %</th><th style="background:${htmlEsc(m.color)};text-align:center">Class</th></tr></thead><tbody>${pRows}<tr style="background:#e2e8f0;font-weight:700"><td></td><td>TOTAL</td><td>${chart.contributorCount} contributor${chart.contributorCount === 1 ? '' : 's'}</td><td></td><td style="text-align:right">${htmlEsc(formatParetoValue(chart.total, m, false))}</td><td style="text-align:right">100%</td><td style="text-align:right">100%</td><td style="text-align:center">Top ${chart.vitalCount} = ${chart.vitalPct}%</td></tr></tbody></table>`
+        : '';
+      return `<section class="pp-print-pareto"><h2>Pareto Analysis &mdash; ${htmlEsc(m.label)}${htmlEsc(unitNote)}</h2><p>${htmlEsc(paretoGroupLabel(chart.groupBy))} &middot; ${vitalNote}</p><div class="pp-print-pareto-svg">${svg}</div>${tbl}</section>`;
+    }).join('');
+
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${htmlEsc(model.title)}</title>`
-      + `<style>@page{size:landscape;margin:10mm}body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:20px;font-size:${dense ? '10.5px' : '12px'}}h1{font-size:17px;margin:0 0 4px}p{color:#475569;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:${dense ? '4px 5px' : '6px 8px'};text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:${dense ? '9.5px' : '11px'};white-space:nowrap}</style>`
+      + `<style>@page{size:landscape;margin:10mm}body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:20px;font-size:${dense ? '10.5px' : '12px'}}h1{font-size:17px;margin:0 0 4px}h2{font-size:15px;margin:0 0 4px}p{color:#475569;margin:0 0 12px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:${dense ? '4px 5px' : '6px 8px'};text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:${dense ? '9.5px' : '11px'};white-space:nowrap}.pp-print-pareto{page-break-before:always;break-before:page;padding-top:4px}.pp-print-pareto-svg{border:1px solid #cbd5e1;border-radius:6px;padding:6px;background:#fff}</style>`
       + `</head><body><h1>${htmlEsc(model.title)}</h1><p>${htmlEsc(model.subtitle)}</p><table><thead><tr>${ths}</tr></thead>`
-      + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table></body></html>`;
+      + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table>${paretoHtml}</body></html>`;
   }
 
-  P.report = { REPORT_COLS, svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };
+  P.report = {
+    REPORT_COLS, svgFilename, paretoSvgFilename, pdfFilename, pdfSafe,
+    paretoGroupLabel, formatParetoValue, buildSvg, buildParetoSvg, buildReportModel, renderPdf, buildPrintHtml,
+  };
 })();
 
 /* PBS v2 - part 5a/7: app core (session state, shared-folder sync with conflict guard & write queue, cache, ChangeLog, owner suggestions).
@@ -29852,9 +30749,26 @@ border-color: #334155;
     .pp-pbs-rollup { font-style: italic; color: var(--text-muted, #64748b); font-size: 11px; }
     .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
     .pp-pbs-desc-cell { min-width: 150px; max-width: 240px; line-height: 1.3; }
-    .pp-pbs-form, .pp-pbs-paste, .pp-pbs-pdf-panel { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
+    .pp-pbs-form, .pp-pbs-paste, .pp-pbs-pdf-panel, .pp-pbs-pareto-panel { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
-    .pp-pbs-paste, .pp-pbs-pdf-panel { display: flex; flex-direction: column; gap: .6rem; }
+    .pp-pbs-paste, .pp-pbs-pdf-panel, .pp-pbs-pareto-panel { display: flex; flex-direction: column; gap: .6rem; }
+    .pp-pbs-pareto-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+    .pp-pbs-pareto-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; }
+    .pp-pbs-pareto-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
+    .pp-pbs-pareto-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+    .pp-pbs-pareto-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .45rem; }
+    .pp-pbs-pareto-kpi { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .6rem; background: var(--surface-card, #ffffff); padding: .45rem .6rem; }
+    .pp-pbs-pareto-kpi-lbl { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #64748b); }
+    .pp-pbs-pareto-kpi-val { font-size: 13.5px; font-weight: 800; color: var(--text-primary, #0f172a); margin-top: .1rem; font-variant-numeric: tabular-nums; }
+    .pp-pbs-pareto-kpi-sub { font-size: 10px; color: var(--text-muted, #64748b); margin-top: .08rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pp-pbs-pareto-chart { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); padding: .45rem; overflow-x: auto; }
+    .pp-pbs-pareto-table-wrap { max-height: 220px; overflow: auto; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .6rem; background: var(--surface-card, #ffffff); }
+    .pp-pbs-pareto-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .pp-pbs-pareto-table th, .pp-pbs-pareto-table td { padding: .34rem .5rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); text-align: left; }
+    .pp-pbs-pareto-table th { position: sticky; top: 0; background: var(--surface-subtle, #f8fafc); font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #64748b); z-index: 1; }
+    .pp-pbs-pareto-table tr.is-vital td { background: rgba(79, 70, 229, .04); }
+    .pp-pbs-pareto-badge-vital { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 9.5px; font-weight: 700; background: #eef2ff; color: #3730a3; }
+    .pp-pbs-pareto-badge-tail { display: inline-block; padding: .08rem .4rem; border-radius: 9999px; font-size: 9.5px; font-weight: 600; background: #f1f5f9; color: #64748b; }
     .pp-pbs-pdf-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
     .pp-pbs-pdf-presets { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
     .pp-pbs-pdf-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: .55rem; }
@@ -29868,6 +30782,12 @@ border-color: #334155;
     .pp-pbs-pdf-field input[type="checkbox"], .pp-pbs-pdf-opt input[type="checkbox"] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; flex-shrink: 0; }
     .pp-pbs-pdf-dot { width: 6px; height: 6px; border-radius: 9999px; background: #10b981; margin-left: auto; flex-shrink: 0; }
     .pp-pbs-pdf-opt { display: inline-flex; align-items: center; gap: .38rem; font-size: 11px; font-weight: 700; color: var(--text-primary, #334155); cursor: pointer; }
+    .pp-pbs-pdf-pareto { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); padding: .55rem .65rem; display: flex; flex-direction: column; gap: .45rem; }
+    .pp-pbs-pdf-pareto-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+    .pp-pbs-pdf-pareto-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+    .pp-pbs-pdf-pareto-item { display: inline-flex; align-items: center; gap: .35rem; font-size: 11px; font-weight: 600; color: var(--text-primary, #1e293b); padding: .2rem .48rem; border-radius: .45rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); cursor: pointer; user-select: none; }
+    .pp-pbs-pdf-pareto-item.is-disabled { opacity: .48; cursor: not-allowed; }
+    .pp-pbs-pdf-pareto-item input[type="checkbox"] { width: 13px; height: 13px; accent-color: #4f46e5; cursor: pointer; }
     .pp-pbs-pdf-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .25rem; border-top: 1px solid var(--border-subtle, #e2e8f0); }
     .pp-pbs-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, monospace; font-size: 11.5px; padding: .5rem .6rem; border-radius: .5rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-sizing: border-box; resize: vertical; }
     .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; font-size: 11px; font-weight: 700; }
@@ -29892,8 +30812,16 @@ border-color: #334155;
     .pp-pbs-syncbar-dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
     html.dark .pp-pbs-syncbar, body.dark .pp-pbs-syncbar { background: #1e293b; border-bottom-color: #334155; color: #e2e8f0; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { background: #1e293b; border-bottom-color: #334155; }
-    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { border-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel, html.dark .pp-pbs-pareto-panel, body.dark .pp-pbs-pareto-panel { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel, html.dark .pp-pbs-pareto-panel, body.dark .pp-pbs-pareto-panel { border-color: #334155; }
+    html.dark .pp-pbs-pareto-kpi, body.dark .pp-pbs-pareto-kpi, html.dark .pp-pbs-pareto-chart, body.dark .pp-pbs-pareto-chart, html.dark .pp-pbs-pareto-table-wrap, body.dark .pp-pbs-pareto-table-wrap, html.dark .pp-pbs-pdf-pareto, body.dark .pp-pbs-pdf-pareto { background: #0f172a; border-color: #334155; }
+    html.dark .pp-pbs-pareto-kpi-val, body.dark .pp-pbs-pareto-kpi-val { color: #f8fafc; }
+    html.dark .pp-pbs-pareto-table th, body.dark .pp-pbs-pareto-table th { background: #1e293b; color: #94a3b8; border-bottom-color: #334155; }
+    html.dark .pp-pbs-pareto-table td, body.dark .pp-pbs-pareto-table td { border-bottom-color: #1e293b; }
+    html.dark .pp-pbs-pareto-table tr.is-vital td, body.dark .pp-pbs-pareto-table tr.is-vital td { background: rgba(99, 102, 241, .12); }
+    html.dark .pp-pbs-pareto-badge-vital, body.dark .pp-pbs-pareto-badge-vital { background: rgba(99, 102, 241, .28); color: #c7d2fe; }
+    html.dark .pp-pbs-pareto-badge-tail, body.dark .pp-pbs-pareto-badge-tail { background: #334155; color: #cbd5e1; }
+    html.dark .pp-pbs-pdf-pareto-item, body.dark .pp-pbs-pdf-pareto-item { background: #1e293b; border-color: #475569; color: #e2e8f0; }
     html.dark .pp-pbs-pdf-group, body.dark .pp-pbs-pdf-group { background: #0f172a; border-color: #334155; }
     html.dark .pp-pbs-pdf-group-head, body.dark .pp-pbs-pdf-group-head { border-bottom-color: #334155; color: #94a3b8; }
     html.dark .pp-pbs-pdf-group-toggle, body.dark .pp-pbs-pdf-group-toggle { color: #a5b4fc; }
@@ -30365,6 +31293,104 @@ border-color: #334155;
       </div></div>`;
   }
 
+  function renderParetoPanel(ctx) {
+    const cfg = ctx.pareto;
+    if (!cfg || !cfg.open) return '';
+    const metrics = (P.tree && typeof P.tree.getAvailableParetoMetrics === 'function')
+      ? P.tree.getAvailableParetoMetrics()
+      : [];
+    const data = cfg.data || null;
+    const activeKey = cfg.metric || (data && data.metric && data.metric.key) || (metrics[0] ? metrics[0].key : 'mass');
+    const counts = cfg.metricCounts || {};
+    const groupBy = cfg.groupBy || 'leaves';
+    const maxBars = cfg.maxBars != null ? cfg.maxBars : 12;
+    const fmtVal = (v, m) => (P.report && typeof P.report.formatParetoValue === 'function' ? P.report.formatParetoValue(v, m, false) : fmtNum(v));
+    const metric = (data && data.metric) || metrics.find(m => m.key === activeKey) || { key: activeKey, label: 'Metric', unit: '', color: '#4f46e5' };
+    const unitNote = metric.isCurrency ? '' : (metric.unit ? ` (${metric.unit})` : '');
+
+    const metricChips = metrics.map(m => {
+      const active = m.key === activeKey;
+      const cnt = counts[m.key] || 0;
+      const lbl = m.isCurrency ? m.label : `${m.shortLabel || m.label} (${m.unit})`;
+      return `<button type="button" class="pp-pbs-chip${active ? ' is-active' : ''}" data-pbs-pareto-metric="${esc(m.key)}" aria-pressed="${active ? 'true' : 'false'}" title="Show Pareto diagram for ${esc(m.label)}">${active ? '\u2713 ' : ''}${esc(lbl)}${cnt > 0 ? `<span class="pp-pbs-chip-cnt">${cnt}</span>` : ''}</button>`;
+    }).join('');
+
+    const filterOptHtml = ctx.isFiltered
+      ? `<label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsParetoApplyFilters"${cfg.applyFilters ? ' checked' : ''} /><span>Active filters (${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length})</span></label>`
+      : '';
+
+    const svgHtml = (P.report && typeof P.report.buildParetoSvg === 'function')
+      ? P.report.buildParetoSvg(data, { darkMode: Boolean(ctx.isDark), width: 840, height: 330 })
+      : '';
+
+    const hasBars = Boolean(data && Array.isArray(data.bars) && data.bars.length > 0);
+    const topEntry = hasBars ? data.allEntries[0] : null;
+    const kpisHtml = hasBars
+      ? `<div class="pp-pbs-pareto-kpis">
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">Total ${esc(metric.label)}</div><div class="pp-pbs-pareto-kpi-val">${esc(fmtVal(data.total, metric))}</div><div class="pp-pbs-pareto-kpi-sub">${data.isFiltered ? 'Filtered PBS scope' : 'Non-double-counting rollup'}</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">80/20 Vital Few</div><div class="pp-pbs-pareto-kpi-val" style="color:${esc(metric.color)}">Top ${data.vitalCount} of ${data.contributorCount}</div><div class="pp-pbs-pareto-kpi-sub">${data.vitalShareOfItemsPct}% of entries drive ${data.vitalPct}%</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">#1 Top Driver</div><div class="pp-pbs-pareto-kpi-val">${esc(topEntry ? fmtVal(topEntry.value, metric) : '\u2014')}</div><div class="pp-pbs-pareto-kpi-sub" title="${esc(topEntry ? topEntry.label : '')}">${esc(topEntry ? `${topEntry.label} (${topEntry.pct}%)` : '\u2014')}</div></div>
+        <div class="pp-pbs-pareto-kpi"><div class="pp-pbs-pareto-kpi-lbl">Contributors</div><div class="pp-pbs-pareto-kpi-val">${data.contributorCount}</div><div class="pp-pbs-pareto-kpi-sub">${esc(P.report && P.report.paretoGroupLabel ? P.report.paretoGroupLabel(groupBy) : groupBy)}</div></div>
+      </div>`
+      : '';
+
+    const showQty = groupBy === 'leaves';
+    const tableRows = hasBars ? data.bars.map(b => `<tr class="${b.vitalFew ? 'is-vital' : ''}">
+      <td class="pp-pbs-center" style="font-weight:700">${b.isOthers ? '\u2014' : b.rank}</td>
+      <td class="pp-pbs-mono" style="font-weight:700">${esc(b.code || '\u2014')}</td>
+      <td>${b.deptColor ? `<span class="pp-pbs-dept-dot" style="background:${esc(b.deptColor)}" aria-hidden="true"></span>` : ''}${esc(b.name || b.label)}</td>
+      <td class="pp-pbs-num">${showQty ? (b.effectiveQty ? `&times;${b.effectiveQty}` : '\u2014') : (b.itemCount || 1)}</td>
+      <td class="pp-pbs-num" style="font-weight:700">${esc(fmtVal(b.value, metric))}</td>
+      <td class="pp-pbs-num">${b.pct}%</td>
+      <td class="pp-pbs-num" style="font-weight:700">${b.cumPct}%</td>
+      <td class="pp-pbs-center">${b.isOthers ? '<span class="pp-pbs-pareto-badge-tail">Others</span>' : (b.vitalFew ? '<span class="pp-pbs-pareto-badge-vital">Vital Few \u226480%</span>' : '<span class="pp-pbs-pareto-badge-tail">Remaining 20%</span>')}</td>
+    </tr>`).join('') : '';
+
+    const tableHtml = hasBars
+      ? `<div class="pp-pbs-pareto-table-wrap"><table class="pp-pbs-pareto-table"><thead><tr>
+        <th class="pp-pbs-center">#</th><th>Code</th><th>${groupBy === 'dept' ? 'Department' : (groupBy === 'roots' ? 'Subsystem' : 'Deliverable / Subsystem')}</th>
+        <th class="pp-pbs-num">${showQty ? 'Eff. Qty' : 'Items'}</th><th class="pp-pbs-num">${esc(metric.label)}${esc(unitNote)}</th>
+        <th class="pp-pbs-num">Share %</th><th class="pp-pbs-num">Cum. %</th><th class="pp-pbs-center">Pareto Class</th>
+      </tr></thead><tbody>${tableRows}</tbody></table></div>`
+      : '';
+
+    return `<div id="ppPbsParetoPanel" class="pp-pbs-pareto-panel" role="region" aria-label="PBS Pareto Analysis">
+      <div class="pp-pbs-pareto-head">
+        <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+          <strong style="font-size:12.5px">PBS Pareto Analysis &mdash; ${esc(metric.label)}${esc(unitNote)}</strong>
+          ${hasBars ? `<span class="pp-pbs-pill pp-pbs-pill-swp">Top ${data.vitalCount}/${data.contributorCount} = ${data.vitalPct}%</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-emerald" id="ppPbsParetoSvgBtn"${hasBars ? '' : ' disabled'} title="Download this Pareto diagram as an SVG file">Download SVG</button>
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" id="ppPbsParetoCloseBtn" aria-label="Close Pareto panel">Close</button>
+        </div>
+      </div>
+      <div class="pp-pbs-pareto-bar">
+        <div class="pp-pbs-pareto-metrics" role="group" aria-label="Pareto metric">
+          <span class="pp-pbs-colbar-label">Metric:</span>
+          ${metricChips}
+        </div>
+        <div class="pp-pbs-pareto-controls">
+          <select id="ppPbsParetoGroup" class="pp-pbs-select" aria-label="Pareto grouping level">
+            <option value="leaves"${groupBy === 'leaves' ? ' selected' : ''}>Contributors (Items)</option>
+            <option value="roots"${groupBy === 'roots' ? ' selected' : ''}>Top-Level Subsystems</option>
+            <option value="dept"${groupBy === 'dept' ? ' selected' : ''}>By Department</option>
+          </select>
+          <select id="ppPbsParetoMaxBars" class="pp-pbs-select" aria-label="Maximum bars in Pareto chart">
+            <option value="8"${maxBars === 8 ? ' selected' : ''}>Top 8</option>
+            <option value="12"${maxBars === 12 ? ' selected' : ''}>Top 12</option>
+            <option value="20"${maxBars === 20 ? ' selected' : ''}>Top 20</option>
+            <option value="0"${maxBars === 0 ? ' selected' : ''}>All</option>
+          </select>
+          ${filterOptHtml}
+        </div>
+      </div>
+      ${kpisHtml}
+      <div class="pp-pbs-pareto-chart">${svgHtml}</div>
+      ${tableHtml}
+    </div>`;
+  }
+
   const PDF_GROUPS = [
     { key: 'core', label: 'Core & Identity' },
     { key: 'docs', label: 'Docs & Drawings' },
@@ -30375,7 +31401,8 @@ border-color: #334155;
   function renderPdfPanel(ctx) {
     const cfg = ctx.pdfExport;
     if (!cfg || !cfg.open) return '';
-    const allCols = (P.report && Array.isArray(P.report.REPORT_COLS)) ? P.report.REPORT_COLS : [];
+    const allowFin = canSeeFinance();
+    const allCols = ((P.report && Array.isArray(P.report.REPORT_COLS)) ? P.report.REPORT_COLS : []).filter(c => !c.financeOnly || allowFin);
     const selSet = cfg.selectedFields instanceof Set ? cfg.selectedFields : new Set(cfg.selectedFields || []);
     const popSet = cfg.populatedFields instanceof Set ? cfg.populatedFields : new Set(cfg.populatedFields || []);
     const selectedCols = allCols.filter(c => selSet.has(c.key));
@@ -30383,6 +31410,15 @@ border-color: #334155;
     const hasOpt = selectedCols.some(c => !c.always);
     const neededW = selectedCols.reduce((sum, c) => sum + (hasOpt ? c.w : (c.baseW || c.w)), 0);
     const pageLabel = neededW > 1142 ? 'Wide Landscape' : (neededW > 770 ? 'A3 Landscape' : 'A4 Landscape');
+
+    const paretoMetricsAll = (P.tree && typeof P.tree.getAvailableParetoMetrics === 'function')
+      ? P.tree.getAvailableParetoMetrics()
+      : [];
+    const includePareto = Boolean(cfg.includePareto);
+    const paretoSet = cfg.paretoMetrics instanceof Set ? cfg.paretoMetrics : new Set(cfg.paretoMetrics || []);
+    const paretoCounts = cfg.paretoCounts || {};
+    const paretoGroupBy = cfg.paretoGroupBy || 'leaves';
+    const activeParetoCount = includePareto ? paretoMetricsAll.filter(m => paretoSet.has(m.key)).length : 0;
 
     const presets = [
       { key: 'populated', label: 'All Populated' },
@@ -30407,9 +31443,34 @@ border-color: #334155;
       return `<div class="pp-pbs-pdf-group"><div class="pp-pbs-pdf-group-head"><span>${esc(g.label)}</span><button type="button" class="pp-pbs-pdf-group-toggle" data-pbs-pdf-group-toggle="${esc(g.key)}">${allSelected ? 'None' : 'All'}</button></div><div class="pp-pbs-pdf-fields">${fieldsHtml}</div></div>`;
     }).join('');
 
+    const paretoSectionHtml = paretoMetricsAll.length
+      ? `<div class="pp-pbs-pdf-pareto" role="group" aria-label="Include Pareto diagrams in PDF">
+        <div class="pp-pbs-pdf-pareto-head">
+          <label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsPdfIncludePareto"${includePareto ? ' checked' : ''} /><span>Include Pareto Diagrams (appended as dedicated landscape pages)</span></label>
+          <select id="ppPbsPdfParetoGroup" class="pp-pbs-select" aria-label="Pareto PDF grouping level"${includePareto ? '' : ' style="opacity:.65"'}>
+            <option value="leaves"${paretoGroupBy === 'leaves' ? ' selected' : ''}>Contributors (Items)</option>
+            <option value="roots"${paretoGroupBy === 'roots' ? ' selected' : ''}>Top-Level Subsystems</option>
+            <option value="dept"${paretoGroupBy === 'dept' ? ' selected' : ''}>By Department</option>
+          </select>
+        </div>
+        <div class="pp-pbs-pdf-pareto-metrics">
+          ${paretoMetricsAll.map(m => {
+            const checked = includePareto && paretoSet.has(m.key);
+            const hasData = (paretoCounts[m.key] || 0) > 0;
+            const lbl = m.isCurrency ? m.label : `${m.label} (${m.unit})`;
+            return `<label class="pp-pbs-pdf-pareto-item${includePareto ? '' : ' is-disabled'}" title="${hasData ? `${paretoCounts[m.key]} contributor(s) with ${m.label} data` : `No ${m.label} values recorded yet`}"><input type="checkbox" data-pbs-pdf-pareto="${esc(m.key)}"${checked ? ' checked' : ''} /><span>${esc(lbl)}</span>${hasData ? '<span class="pp-pbs-pdf-dot" style="margin-left:.15rem" aria-hidden="true"></span>' : ''}</label>`;
+          }).join('')}
+        </div>
+      </div>`
+      : '';
+
     const filterOptHtml = ctx.isFiltered
       ? `<label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsPdfApplyFilters"${cfg.applyFilters ? ' checked' : ''} /><span>Apply active row filters (${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length} items)</span></label>`
       : '';
+
+    const exportBtnLabel = activeParetoCount > 0
+      ? `Export PDF (${selCount} field${selCount === 1 ? '' : 's'} + ${activeParetoCount} Pareto${activeParetoCount === 1 ? '' : 's'})`
+      : `Export PDF (${selCount} field${selCount === 1 ? '' : 's'})`;
 
     return `<div id="ppPbsPdfPanel" class="pp-pbs-pdf-panel" role="region" aria-label="Configure PBS PDF export fields">
       <div class="pp-pbs-pdf-head">
@@ -30417,6 +31478,7 @@ border-color: #334155;
           <strong style="font-size:12px">Export PBS PDF &mdash; Select Fields</strong>
           <span class="pp-pbs-pill pp-pbs-pill-swp" id="ppPbsPdfCountBadge">${selCount} / ${allCols.length} fields</span>
           ${selCount > 0 ? `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(pageLabel)}</span>` : '<span class="pp-pbs-pill pp-pbs-status-warn">Pick at least 1 field</span>'}
+          ${activeParetoCount > 0 ? `<span class="pp-pbs-pill pp-pbs-status-ok">+${activeParetoCount} Pareto${activeParetoCount === 1 ? '' : 's'}</span>` : ''}
         </div>
         ${filterOptHtml}
       </div>
@@ -30425,11 +31487,12 @@ border-color: #334155;
         ${presets.map(p => `<button type="button" class="pp-pbs-chip" data-pbs-pdf-preset="${p.key}">${esc(p.label)}</button>`).join('')}
       </div>
       <div class="pp-pbs-pdf-groups">${groupsHtml}</div>
+      ${paretoSectionHtml}
       <div class="pp-pbs-pdf-foot">
         <span style="display:inline-flex;align-items:center;gap:.35rem;font-size:10.5px;color:var(--text-muted,#64748b)"><span class="pp-pbs-pdf-dot" style="margin-left:0"></span> Field has data in this PBS &middot; Selection is remembered</span>
         <div style="display:flex;align-items:center;gap:.45rem">
           <button type="button" class="pp-pbs-btn" id="ppPbsPdfCancelBtn">Cancel</button>
-          <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPdfRunBtn"${selCount === 0 ? ' disabled' : ''}>Export PDF (${selCount} field${selCount === 1 ? '' : 's'})</button>
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPdfRunBtn"${selCount === 0 ? ' disabled' : ''}>${exportBtnLabel}</button>
         </div>
       </div></div>`;
   }
@@ -30476,6 +31539,7 @@ border-color: #334155;
       ? '<button type="button" class="pp-pbs-btn" id="ppPbsRenumberBtn" title="Re-sequence hierarchical codes (1, 1.1, 1.2...) to match current tree order">Renumber</button>'
       : '';
     const pdfOpen = Boolean(ctx.pdfExport && ctx.pdfExport.open);
+    const paretoOpen = Boolean(ctx.pareto && ctx.pareto.open);
     return `<div class="pp-pbs-toolbar" role="toolbar" aria-label="PBS actions">
       <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsAddRootBtn">+ Add Root Item</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsUndoBtn"${ctx.canUndo ? '' : ' disabled'} title="${esc(ctx.undoLabel || 'Undo (Ctrl+Z)')}">\u21b6 Undo</button>
@@ -30489,6 +31553,7 @@ border-color: #334155;
       <button type="button" class="pp-pbs-btn" id="ppPbsExportCsvBtn">Export CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsImportCsvBtn">Import CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsPasteBtn">Paste Table</button>
+      <button type="button" class="pp-pbs-btn${paretoOpen ? ' pp-pbs-btn-primary' : ''}" id="ppPbsParetoBtn" aria-expanded="${paretoOpen ? 'true' : 'false'}" aria-controls="ppPbsParetoPanel" title="Analyze 80/20 Pareto drivers across Cost, Mass, Power Consumption, and Power Dissipation">Pareto ${paretoOpen ? '\u25b4' : '\u25be'}</button>
       <button type="button" class="pp-pbs-btn pp-pbs-btn-emerald" id="ppPbsExportSvgBtn">SVG Diagram</button>
       <button type="button" class="pp-pbs-btn${pdfOpen ? ' pp-pbs-btn-primary' : ''}" id="ppPbsExportPdfBtn" aria-expanded="${pdfOpen ? 'true' : 'false'}" aria-controls="ppPbsPdfPanel" title="Select fields and export PBS PDF report">PDF Report ${pdfOpen ? '\u25b4' : '\u25be'}</button>
       ${clone}
@@ -30601,7 +31666,7 @@ border-color: #334155;
   }
 
   /* ctx: { doc, db, project, summary, rollups, filteredRollups, isFiltered, matchedCount, rows, collapsedIds, colGroups, filter, edit, pasteOpen,
-   *        isExpanded, pdfExport, canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
+   *        isExpanded, isDark, pdfExport, pareto, canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
    *        cloneSources:[{id,code,name,count}], canDirSync, dirName, hasRemembered, status:{text,tone} } */
   function buildDialogHtml(ctx) {
     const p = ctx.project;
@@ -30620,7 +31685,7 @@ border-color: #334155;
         <button type="button" class="pp-pbs-btn pp-pbs-expand-win-btn" id="ppPbsExpandWinBtn" aria-pressed="${isExp ? 'true' : 'false'}" title="${isExp ? 'Restore default PBS window size' : 'Expand PBS window to full screen'}">${isExp ? '\u2921 Restore' : '\u2922 Expand'}</button>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}
-      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderPdfPanel(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
+      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderParetoPanel(ctx)}${renderPdfPanel(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
         <div class="pp-pbs-table-wrap"><table class="pp-pbs-table${stickyCls}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
           <thead><tr>
             <th scope="col" class="pp-pbs-th-code">Code</th>
@@ -30639,7 +31704,7 @@ border-color: #334155;
 
   P.view = {
     esc, CSS, OPTIONAL_COL_GROUPS, renderTextOrLink, getPopulatedGroupFlags, resolveVisibleOptionalCols,
-    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderPdfPanel, renderConflictPanel,
+    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderParetoPanel, renderPdfPanel, renderConflictPanel,
     renderToolbar, renderSummary, renderColBar, renderFilters, renderNotice, buildDialogHtml,
   };
 })();
@@ -30651,12 +31716,16 @@ border-color: #334155;
   const COL_PREFS_KEY = 'pulseplan_pbs_colprefs_v1';
   const EXPAND_PREF_KEY = 'pulseplan_pbs_expanded_v1';
   const PDF_FIELDS_PREF_KEY = 'pulseplan_pbs_pdf_fields_v1';
+  const PDF_PARETO_PREF_KEY = 'pulseplan_pbs_pdf_pareto_v1';
   const MAX_UNDO = 40;
   const emptyFilter = () => ({ search: '', deptId: '', maturity: '', milestoneId: '', heritage: '', procStatus: '', flag: '' });
   const ui = {
     dialog: null, wired: false, filter: emptyFilter(),
     colGroups: { docs: false, proc: false, swp: false }, userLockedCols: false,
-    expanded: false, pdfPanelOpen: false, pdfSelectedFields: null, pdfApplyFilters: true,
+    expanded: false,
+    pdfPanelOpen: false, pdfSelectedFields: null, pdfApplyFilters: true,
+    pdfIncludePareto: false, pdfParetoMetrics: null, pdfParetoGroupBy: 'leaves', pdfParetoLoaded: false,
+    paretoOpen: false, paretoMetric: '', paretoGroupBy: 'leaves', paretoMaxBars: 12, paretoApplyFilters: true,
     collapsedIds: new Set(), edit: null, editSeq: 0, draft: null, pasteOpen: false,
     undoStack: [], redoStack: [], notices: [], badgeRefresh: null,
   };
@@ -30809,6 +31878,86 @@ border-color: #334155;
     return ui.pdfSelectedFields;
   }
 
+  function getAllowedParetoMetricKeys() {
+    if (T() && typeof T().getAvailableParetoMetrics === 'function') {
+      return T().getAvailableParetoMetrics().map(m => m.key);
+    }
+    return ['mass', 'powerConsumption', 'powerDissipation'];
+  }
+
+  function loadPdfParetoPrefs() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PDF_PARETO_PREF_KEY) : localStorage.getItem(PDF_PARETO_PREF_KEY);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      if (!p || typeof p !== 'object') return null;
+      const valid = new Set(getAllowedParetoMetricKeys());
+      const metrics = Array.isArray(p.metrics) ? p.metrics.filter(k => valid.has(k)) : [];
+      const groupBy = ['leaves', 'roots', 'dept'].includes(p.groupBy) ? p.groupBy : 'leaves';
+      return { enabled: Boolean(p.enabled), metrics: new Set(metrics), groupBy };
+    } catch (_e) { return null; }
+  }
+
+  function savePdfParetoPrefs() {
+    try {
+      const raw = JSON.stringify({
+        enabled: Boolean(ui.pdfIncludePareto),
+        metrics: Array.from(ui.pdfParetoMetrics || []),
+        groupBy: ui.pdfParetoGroupBy || 'leaves',
+      });
+      if (typeof safeSetStorage === 'function') safeSetStorage(PDF_PARETO_PREF_KEY, raw);
+      else localStorage.setItem(PDF_PARETO_PREF_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function getPopulatedParetoKeys(d, db, matchedIds) {
+    const allowed = getAllowedParetoMetricKeys();
+    const counts = (T() && typeof T().getParetoMetricCounts === 'function')
+      ? T().getParetoMetricCounts(d, { groupBy: 'leaves', matchedIds: matchedIds || null, db })
+      : {};
+    const populated = allowed.filter(k => (counts[k] || 0) > 0);
+    return { counts, populated };
+  }
+
+  function ensurePdfParetoConfig(d, db) {
+    const valid = new Set(getAllowedParetoMetricKeys());
+    if (!ui.pdfParetoLoaded) {
+      ui.pdfParetoLoaded = true;
+      const saved = loadPdfParetoPrefs();
+      if (saved) {
+        ui.pdfIncludePareto = saved.enabled;
+        ui.pdfParetoMetrics = saved.metrics;
+        ui.pdfParetoGroupBy = saved.groupBy;
+      } else {
+        const { populated } = getPopulatedParetoKeys(d, db, null);
+        ui.pdfIncludePareto = false;
+        ui.pdfParetoMetrics = new Set(populated.length ? populated : Array.from(valid));
+        ui.pdfParetoGroupBy = ui.paretoGroupBy || 'leaves';
+      }
+    }
+    if (!(ui.pdfParetoMetrics instanceof Set)) {
+      ui.pdfParetoMetrics = new Set();
+    }
+    // Always prune finance-restricted metric keys if user lost finance access
+    Array.from(ui.pdfParetoMetrics).forEach(k => { if (!valid.has(k)) ui.pdfParetoMetrics.delete(k); });
+    return ui.pdfParetoMetrics;
+  }
+
+  function pickDefaultParetoMetric(d, db, matchedIds) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (ui.paretoMetric && allowed.includes(ui.paretoMetric)) return ui.paretoMetric;
+    const { populated } = getPopulatedParetoKeys(d, db, matchedIds);
+    return populated[0] || (allowed.includes('mass') ? 'mass' : (allowed[0] || 'mass'));
+  }
+
+  function isDarkThemeActive() {
+    if (typeof document === 'undefined') return false;
+    return Boolean(
+      (document.documentElement && document.documentElement.classList && document.documentElement.classList.contains('dark'))
+      || (document.body && document.body.classList && document.body.classList.contains('dark'))
+    );
+  }
+
   function pushUndo(label) {
     const d = doc();
     if (!d || !Array.isArray(d.items)) return;
@@ -30874,15 +32023,57 @@ border-color: #334155;
     const filteredRollups = isFiltered ? T().computeFilteredRollups(d, matchedIds) : null;
     const lastUndo = ui.undoStack.length ? ui.undoStack[ui.undoStack.length - 1] : null;
     const lastRedo = ui.redoStack.length ? ui.redoStack[ui.redoStack.length - 1] : null;
-    const pdfExport = ui.pdfPanelOpen
-      ? { open: true, selectedFields: ensurePdfSelectedFields(), populatedFields: getPopulatedFieldKeys(d), applyFilters: Boolean(ui.pdfApplyFilters) }
-      : { open: false };
+
+    let pdfExport = { open: false };
+    if (ui.pdfPanelOpen) {
+      const pMetrics = ensurePdfParetoConfig(d, db);
+      const pdfScopeIds = (isFiltered && ui.pdfApplyFilters) ? matchedIds : null;
+      const pCounts = (T() && typeof T().getParetoMetricCounts === 'function')
+        ? T().getParetoMetricCounts(d, { groupBy: ui.pdfParetoGroupBy, matchedIds: pdfScopeIds, db })
+        : {};
+      pdfExport = {
+        open: true,
+        selectedFields: ensurePdfSelectedFields(),
+        populatedFields: getPopulatedFieldKeys(d),
+        applyFilters: Boolean(ui.pdfApplyFilters),
+        includePareto: Boolean(ui.pdfIncludePareto),
+        paretoMetrics: pMetrics,
+        paretoCounts: pCounts,
+        paretoGroupBy: ui.pdfParetoGroupBy || 'leaves',
+      };
+    }
+
+    let pareto = { open: false };
+    if (ui.paretoOpen && T() && typeof T().computeParetoData === 'function') {
+      const pScopeIds = (isFiltered && ui.paretoApplyFilters) ? matchedIds : null;
+      const activeMetric = pickDefaultParetoMetric(d, db, pScopeIds);
+      ui.paretoMetric = activeMetric;
+      const pData = T().computeParetoData(d, activeMetric, {
+        groupBy: ui.paretoGroupBy || 'leaves',
+        matchedIds: pScopeIds,
+        maxBars: ui.paretoMaxBars,
+        db,
+      });
+      const metricCounts = typeof T().getParetoMetricCounts === 'function'
+        ? T().getParetoMetricCounts(d, { groupBy: ui.paretoGroupBy || 'leaves', matchedIds: pScopeIds, db })
+        : {};
+      pareto = {
+        open: true,
+        metric: activeMetric,
+        groupBy: ui.paretoGroupBy || 'leaves',
+        maxBars: ui.paretoMaxBars,
+        applyFilters: Boolean(ui.paretoApplyFilters),
+        data: pData,
+        metricCounts,
+      };
+    }
+
     return {
       doc: d, db, project: core.getProject(S.activeProjectId),
       summary, rollups, filteredRollups, isFiltered, matchedCount: matchedIds ? matchedIds.size : d.items.length,
       rows, collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
       filter: ui.filter, edit, pasteOpen: ui.pasteOpen,
-      isExpanded: ui.expanded, pdfExport,
+      isExpanded: ui.expanded, isDark: isDarkThemeActive(), pdfExport, pareto,
       canUndo: Boolean(lastUndo), canRedo: Boolean(lastRedo),
       undoLabel: lastUndo ? `Undo: ${lastUndo.label} (Ctrl+Z)` : 'Nothing to undo',
       redoLabel: lastRedo ? `Redo: ${lastRedo.label} (Ctrl+Y)` : 'Nothing to redo',
@@ -30905,7 +32096,7 @@ border-color: #334155;
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-pdf-field', 'data-pbs-pdf-preset', 'data-pbs-pdf-group-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-pareto-metric', 'data-pbs-pdf-pareto', 'data-pbs-pdf-field', 'data-pbs-pdf-preset', 'data-pbs-pdf-group-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -30994,6 +32185,7 @@ border-color: #334155;
   function openForm(itemId, parentId) {
     ui.pasteOpen = false;
     ui.pdfPanelOpen = false;
+    ui.paretoOpen = false;
     ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq, openSections: null };
     if (parentId) ui.collapsedIds.delete(parentId);
     render('#ppPbsFName');
@@ -31170,6 +32362,7 @@ border-color: #334155;
   function openPastePanel() {
     ui.edit = null;
     ui.pdfPanelOpen = false;
+    ui.paretoOpen = false;
     ui.pasteOpen = true;
     render('#ppPbsPasteInput');
   }
@@ -31194,11 +32387,34 @@ border-color: #334155;
     C().toast(`Imported ${items.length} pasted item${items.length === 1 ? '' : 's'}.`, 'success');
   }
 
+  function openParetoPanel() {
+    ui.edit = null;
+    ui.pasteOpen = false;
+    ui.pdfPanelOpen = false;
+    ui.paretoOpen = true;
+    ui.paretoApplyFilters = hasActiveFilter();
+    const b = q('.pp-pbs-body');
+    if (b) b.scrollTop = 0;
+    render('#ppPbsParetoGroup');
+  }
+  function closeParetoPanel() {
+    ui.paretoOpen = false;
+    render('#ppPbsParetoBtn');
+  }
+  function setParetoMetric(metricKey) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (!allowed.includes(metricKey)) return;
+    ui.paretoMetric = metricKey;
+    render();
+  }
+
   function openPdfPanel() {
     ui.edit = null;
     ui.pasteOpen = false;
+    ui.paretoOpen = false;
     ui.pdfPanelOpen = true;
     ensurePdfSelectedFields();
+    ensurePdfParetoConfig(doc(), C().getDb());
     ui.pdfApplyFilters = hasActiveFilter();
     const b = q('.pp-pbs-body');
     if (b) b.scrollTop = 0;
@@ -31230,6 +32446,31 @@ border-color: #334155;
     if (checked) sel.add(fieldKey);
     else sel.delete(fieldKey);
     savePdfFieldPrefs(sel);
+    render();
+  }
+  function togglePdfIncludePareto(checked) {
+    const pMetrics = ensurePdfParetoConfig(doc(), C().getDb());
+    ui.pdfIncludePareto = Boolean(checked);
+    if (ui.pdfIncludePareto && !pMetrics.size) {
+      const { populated } = getPopulatedParetoKeys(doc(), C().getDb(), null);
+      const fallback = populated.length ? populated : getAllowedParetoMetricKeys();
+      fallback.forEach(k => pMetrics.add(k));
+    }
+    savePdfParetoPrefs();
+    render();
+  }
+  function togglePdfParetoMetric(metricKey, checked) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (!allowed.includes(metricKey)) return;
+    const pMetrics = ensurePdfParetoConfig(doc(), C().getDb());
+    if (checked) {
+      pMetrics.add(metricKey);
+      ui.pdfIncludePareto = true;
+    } else {
+      pMetrics.delete(metricKey);
+      if (!pMetrics.size) ui.pdfIncludePareto = false;
+    }
+    savePdfParetoPrefs();
     render();
   }
 
@@ -31310,7 +32551,7 @@ border-color: #334155;
     pushUndo(`Load ${file.name}`);
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false;
+    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false;
     syncPopulatedColGroups(true);
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
@@ -31347,6 +32588,40 @@ border-color: #334155;
     C().toast('SVG diagram exported.', 'success');
   }
 
+  function exportParetoSvg() {
+    const p = project();
+    const d = doc();
+    const db = C().getDb();
+    let matchedIds = null;
+    if (ui.paretoApplyFilters && hasActiveFilter()) {
+      const summary = T().computeMaturitySummary(d, db.milestones || [], todayIso());
+      const rollups = T().computeSwpRollups(d);
+      const rows = T().getFilteredTreeRows(d, ui.filter, new Set(), { summary, rollups });
+      matchedIds = new Set(rows.filter(r => !r.isContextOnly).map(r => r.item.id));
+    }
+    const metricKey = pickDefaultParetoMetric(d, db, matchedIds);
+    const data = T().computeParetoData(d, metricKey, {
+      groupBy: ui.paretoGroupBy || 'leaves',
+      matchedIds,
+      maxBars: ui.paretoMaxBars,
+      db,
+    });
+    if (!data || !data.bars.length) {
+      C().toast('No Pareto data available for the selected metric.', 'warning');
+      return;
+    }
+    const projLabel = p ? `[${p.code}] ${p.name}` : 'Project';
+    const unitNote = data.metric.isCurrency ? '' : (data.metric.unit ? ` (${data.metric.unit})` : '');
+    const svg = R().buildParetoSvg(data, {
+      standalone: true,
+      width: 920,
+      height: 360,
+      title: `PBS Pareto \u2014 ${data.metric.label}${unitNote} \u2014 ${projLabel}`,
+    });
+    C().downloadText(R().paretoSvgFilename(p, C().state.activeProjectId, metricKey), svg, 'image/svg+xml;charset=utf-8');
+    C().toast(`Pareto SVG (${data.metric.label}) exported.`, 'success');
+  }
+
   function openPrintFallback(model) {
     const url = URL.createObjectURL(new Blob([R().buildPrintHtml(model)], { type: 'text/html' }));
     const w = window.open(url, '_blank');
@@ -31355,7 +32630,7 @@ border-color: #334155;
     C().toast('PDF library unavailable. Opened a print view: choose "Save as PDF".', 'info');
   }
 
-  function buildPdfOptions(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
+  function buildPdfOptions(currentViewOnly, selectedFieldKeys, applyActiveFilters, paretoConfig) {
     const date = todayIso();
     const d = doc();
     const db = C().getDb();
@@ -31365,7 +32640,12 @@ border-color: #334155;
       opts.selectedFieldKeys = Array.from(selectedFieldKeys);
     } else if (currentViewOnly) {
       opts.visibleOptKeys = V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key);
-    } else {
+    }
+    if (paretoConfig && Array.isArray(paretoConfig.metrics) && paretoConfig.metrics.length) {
+      opts.paretoMetrics = paretoConfig.metrics;
+      opts.paretoGroupBy = paretoConfig.groupBy || 'leaves';
+    }
+    if (!selectedFieldKeys && !currentViewOnly) {
       return opts;
     }
     if (useFilters && hasActiveFilter()) {
@@ -31378,16 +32658,18 @@ border-color: #334155;
     return opts;
   }
 
-  function exportPdf(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
+  function exportPdf(currentViewOnly, selectedFieldKeys, applyActiveFilters, paretoConfig) {
     const p = project();
     const date = todayIso();
-    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly), selectedFieldKeys, applyActiveFilters));
+    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly), selectedFieldKeys, applyActiveFilters, paretoConfig));
     const JsPdf = window.jspdf && window.jspdf.jsPDF;
     if (JsPdf) {
       try {
         R().renderPdf(JsPdf, model).save(R().pdfFilename(p, C().state.activeProjectId, date));
+        const pCnt = Array.isArray(model.paretoCharts) ? model.paretoCharts.length : 0;
+        const pSuffix = pCnt ? ` + ${pCnt} Pareto${pCnt === 1 ? '' : 's'}` : '';
         const msg = selectedFieldKeys
-          ? `PBS PDF exported (${model.cols.length} field${model.cols.length === 1 ? '' : 's'}).`
+          ? `PBS PDF exported (${model.cols.length} field${model.cols.length === 1 ? '' : 's'}${pSuffix}).`
           : (currentViewOnly ? 'PBS current-view PDF exported.' : 'PBS PDF report exported.');
         C().toast(msg, 'success');
         return;
@@ -31402,7 +32684,11 @@ border-color: #334155;
       C().toast('Select at least one field to include in the PDF.', 'warning');
       return;
     }
-    exportPdf(false, sel, Boolean(ui.pdfApplyFilters));
+    const pSet = ensurePdfParetoConfig(doc(), C().getDb());
+    const paretoConfig = ui.pdfIncludePareto && pSet.size
+      ? { metrics: Array.from(pSet), groupBy: ui.pdfParetoGroupBy || 'leaves' }
+      : null;
+    exportPdf(false, sel, Boolean(ui.pdfApplyFilters), paretoConfig);
     closePdfPanel();
   }
 
@@ -31502,6 +32788,9 @@ border-color: #334155;
     ppPbsPasteBtn: () => (ui.pasteOpen ? closePastePanel() : openPastePanel()),
     ppPbsPasteCancel: () => closePastePanel(),
     ppPbsPasteSubmit: safe(submitPaste),
+    ppPbsParetoBtn: () => (ui.paretoOpen ? closeParetoPanel() : openParetoPanel()),
+    ppPbsParetoCloseBtn: () => closeParetoPanel(),
+    ppPbsParetoSvgBtn: safe(exportParetoSvg),
     ppPbsExportSvgBtn: safe(exportSvg),
     ppPbsExportPdfBtn: () => (ui.pdfPanelOpen ? closePdfPanel() : openPdfPanel()),
     ppPbsPdfCancelBtn: () => closePdfPanel(),
@@ -31523,6 +32812,7 @@ border-color: #334155;
       render();
       return;
     }
+    if (d.pbsParetoMetric) return setParetoMetric(d.pbsParetoMetric);
     if (d.pbsPdfPreset) return applyPdfPreset(d.pbsPdfPreset);
     if (d.pbsPdfGroupToggle) return togglePdfGroup(d.pbsPdfGroupToggle);
     if (d.pbsColGroup) return toggleColGroup(d.pbsColGroup);
@@ -31548,6 +32838,24 @@ border-color: #334155;
     const files = t.files;
     if (t.hasAttribute && t.hasAttribute('data-pbs-pdf-field')) {
       togglePdfField(t.getAttribute('data-pbs-pdf-field'), Boolean(t.checked));
+    } else if (t.hasAttribute && t.hasAttribute('data-pbs-pdf-pareto')) {
+      togglePdfParetoMetric(t.getAttribute('data-pbs-pdf-pareto'), Boolean(t.checked));
+    } else if (t.id === 'ppPbsPdfIncludePareto') {
+      togglePdfIncludePareto(Boolean(t.checked));
+    } else if (t.id === 'ppPbsPdfParetoGroup') {
+      ui.pdfParetoGroupBy = ['leaves', 'roots', 'dept'].includes(t.value) ? t.value : 'leaves';
+      savePdfParetoPrefs();
+      render();
+    } else if (t.id === 'ppPbsParetoGroup') {
+      ui.paretoGroupBy = ['leaves', 'roots', 'dept'].includes(t.value) ? t.value : 'leaves';
+      render();
+    } else if (t.id === 'ppPbsParetoMaxBars') {
+      const n = parseInt(t.value, 10);
+      ui.paretoMaxBars = Number.isFinite(n) && n >= 0 ? n : 12;
+      render();
+    } else if (t.id === 'ppPbsParetoApplyFilters') {
+      ui.paretoApplyFilters = Boolean(t.checked);
+      render();
     } else if (t.id === 'ppPbsPdfApplyFilters') {
       ui.pdfApplyFilters = Boolean(t.checked);
       render();
@@ -31621,6 +32929,7 @@ border-color: #334155;
     el.addEventListener('cancel', (e) => {
       if (ui.edit) { e.preventDefault(); closeForm(ui.edit.itemId); }
       else if (ui.pasteOpen) { e.preventDefault(); closePastePanel(); }
+      else if (ui.paretoOpen) { e.preventDefault(); closeParetoPanel(); }
       else if (ui.pdfPanelOpen) { e.preventDefault(); closePdfPanel(); }
     });
     el.addEventListener('close', () => { safe(onClosed)(); });
@@ -31634,7 +32943,7 @@ border-color: #334155;
     if (lockedOrSigningOut) {
       core.stopPolling();
       if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
-      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
+      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false; ui.undoStack = []; ui.redoStack = [];
       return;
     }
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
@@ -31643,7 +32952,7 @@ border-color: #334155;
       S.saveQueued = false;
       await core.writeToFolder(false);
     }
-    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
+    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false; ui.undoStack = []; ui.redoStack = [];
     if (S.dirHandle) core.startPolling();
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
@@ -31657,7 +32966,7 @@ border-color: #334155;
     ensureDialog();
     V().injectStyles();
     ui.filter = emptyFilter();
-    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.pdfSelectedFields = null;
+    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.pdfSelectedFields = null; ui.paretoOpen = false; ui.paretoMetric = ''; ui.pdfParetoLoaded = false;
     ui.expanded = loadExpandPref();
     applyExpandedClass();
     ui.undoStack = []; ui.redoStack = []; ui.notices = [];

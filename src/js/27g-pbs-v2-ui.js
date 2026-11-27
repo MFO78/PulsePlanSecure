@@ -5,12 +5,16 @@
   const COL_PREFS_KEY = 'pulseplan_pbs_colprefs_v1';
   const EXPAND_PREF_KEY = 'pulseplan_pbs_expanded_v1';
   const PDF_FIELDS_PREF_KEY = 'pulseplan_pbs_pdf_fields_v1';
+  const PDF_PARETO_PREF_KEY = 'pulseplan_pbs_pdf_pareto_v1';
   const MAX_UNDO = 40;
   const emptyFilter = () => ({ search: '', deptId: '', maturity: '', milestoneId: '', heritage: '', procStatus: '', flag: '' });
   const ui = {
     dialog: null, wired: false, filter: emptyFilter(),
     colGroups: { docs: false, proc: false, swp: false }, userLockedCols: false,
-    expanded: false, pdfPanelOpen: false, pdfSelectedFields: null, pdfApplyFilters: true,
+    expanded: false,
+    pdfPanelOpen: false, pdfSelectedFields: null, pdfApplyFilters: true,
+    pdfIncludePareto: false, pdfParetoMetrics: null, pdfParetoGroupBy: 'leaves', pdfParetoLoaded: false,
+    paretoOpen: false, paretoMetric: '', paretoGroupBy: 'leaves', paretoMaxBars: 12, paretoApplyFilters: true,
     collapsedIds: new Set(), edit: null, editSeq: 0, draft: null, pasteOpen: false,
     undoStack: [], redoStack: [], notices: [], badgeRefresh: null,
   };
@@ -163,6 +167,86 @@
     return ui.pdfSelectedFields;
   }
 
+  function getAllowedParetoMetricKeys() {
+    if (T() && typeof T().getAvailableParetoMetrics === 'function') {
+      return T().getAvailableParetoMetrics().map(m => m.key);
+    }
+    return ['mass', 'powerConsumption', 'powerDissipation'];
+  }
+
+  function loadPdfParetoPrefs() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PDF_PARETO_PREF_KEY) : localStorage.getItem(PDF_PARETO_PREF_KEY);
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      if (!p || typeof p !== 'object') return null;
+      const valid = new Set(getAllowedParetoMetricKeys());
+      const metrics = Array.isArray(p.metrics) ? p.metrics.filter(k => valid.has(k)) : [];
+      const groupBy = ['leaves', 'roots', 'dept'].includes(p.groupBy) ? p.groupBy : 'leaves';
+      return { enabled: Boolean(p.enabled), metrics: new Set(metrics), groupBy };
+    } catch (_e) { return null; }
+  }
+
+  function savePdfParetoPrefs() {
+    try {
+      const raw = JSON.stringify({
+        enabled: Boolean(ui.pdfIncludePareto),
+        metrics: Array.from(ui.pdfParetoMetrics || []),
+        groupBy: ui.pdfParetoGroupBy || 'leaves',
+      });
+      if (typeof safeSetStorage === 'function') safeSetStorage(PDF_PARETO_PREF_KEY, raw);
+      else localStorage.setItem(PDF_PARETO_PREF_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function getPopulatedParetoKeys(d, db, matchedIds) {
+    const allowed = getAllowedParetoMetricKeys();
+    const counts = (T() && typeof T().getParetoMetricCounts === 'function')
+      ? T().getParetoMetricCounts(d, { groupBy: 'leaves', matchedIds: matchedIds || null, db })
+      : {};
+    const populated = allowed.filter(k => (counts[k] || 0) > 0);
+    return { counts, populated };
+  }
+
+  function ensurePdfParetoConfig(d, db) {
+    const valid = new Set(getAllowedParetoMetricKeys());
+    if (!ui.pdfParetoLoaded) {
+      ui.pdfParetoLoaded = true;
+      const saved = loadPdfParetoPrefs();
+      if (saved) {
+        ui.pdfIncludePareto = saved.enabled;
+        ui.pdfParetoMetrics = saved.metrics;
+        ui.pdfParetoGroupBy = saved.groupBy;
+      } else {
+        const { populated } = getPopulatedParetoKeys(d, db, null);
+        ui.pdfIncludePareto = false;
+        ui.pdfParetoMetrics = new Set(populated.length ? populated : Array.from(valid));
+        ui.pdfParetoGroupBy = ui.paretoGroupBy || 'leaves';
+      }
+    }
+    if (!(ui.pdfParetoMetrics instanceof Set)) {
+      ui.pdfParetoMetrics = new Set();
+    }
+    // Always prune finance-restricted metric keys if user lost finance access
+    Array.from(ui.pdfParetoMetrics).forEach(k => { if (!valid.has(k)) ui.pdfParetoMetrics.delete(k); });
+    return ui.pdfParetoMetrics;
+  }
+
+  function pickDefaultParetoMetric(d, db, matchedIds) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (ui.paretoMetric && allowed.includes(ui.paretoMetric)) return ui.paretoMetric;
+    const { populated } = getPopulatedParetoKeys(d, db, matchedIds);
+    return populated[0] || (allowed.includes('mass') ? 'mass' : (allowed[0] || 'mass'));
+  }
+
+  function isDarkThemeActive() {
+    if (typeof document === 'undefined') return false;
+    return Boolean(
+      (document.documentElement && document.documentElement.classList && document.documentElement.classList.contains('dark'))
+      || (document.body && document.body.classList && document.body.classList.contains('dark'))
+    );
+  }
+
   function pushUndo(label) {
     const d = doc();
     if (!d || !Array.isArray(d.items)) return;
@@ -228,15 +312,57 @@
     const filteredRollups = isFiltered ? T().computeFilteredRollups(d, matchedIds) : null;
     const lastUndo = ui.undoStack.length ? ui.undoStack[ui.undoStack.length - 1] : null;
     const lastRedo = ui.redoStack.length ? ui.redoStack[ui.redoStack.length - 1] : null;
-    const pdfExport = ui.pdfPanelOpen
-      ? { open: true, selectedFields: ensurePdfSelectedFields(), populatedFields: getPopulatedFieldKeys(d), applyFilters: Boolean(ui.pdfApplyFilters) }
-      : { open: false };
+
+    let pdfExport = { open: false };
+    if (ui.pdfPanelOpen) {
+      const pMetrics = ensurePdfParetoConfig(d, db);
+      const pdfScopeIds = (isFiltered && ui.pdfApplyFilters) ? matchedIds : null;
+      const pCounts = (T() && typeof T().getParetoMetricCounts === 'function')
+        ? T().getParetoMetricCounts(d, { groupBy: ui.pdfParetoGroupBy, matchedIds: pdfScopeIds, db })
+        : {};
+      pdfExport = {
+        open: true,
+        selectedFields: ensurePdfSelectedFields(),
+        populatedFields: getPopulatedFieldKeys(d),
+        applyFilters: Boolean(ui.pdfApplyFilters),
+        includePareto: Boolean(ui.pdfIncludePareto),
+        paretoMetrics: pMetrics,
+        paretoCounts: pCounts,
+        paretoGroupBy: ui.pdfParetoGroupBy || 'leaves',
+      };
+    }
+
+    let pareto = { open: false };
+    if (ui.paretoOpen && T() && typeof T().computeParetoData === 'function') {
+      const pScopeIds = (isFiltered && ui.paretoApplyFilters) ? matchedIds : null;
+      const activeMetric = pickDefaultParetoMetric(d, db, pScopeIds);
+      ui.paretoMetric = activeMetric;
+      const pData = T().computeParetoData(d, activeMetric, {
+        groupBy: ui.paretoGroupBy || 'leaves',
+        matchedIds: pScopeIds,
+        maxBars: ui.paretoMaxBars,
+        db,
+      });
+      const metricCounts = typeof T().getParetoMetricCounts === 'function'
+        ? T().getParetoMetricCounts(d, { groupBy: ui.paretoGroupBy || 'leaves', matchedIds: pScopeIds, db })
+        : {};
+      pareto = {
+        open: true,
+        metric: activeMetric,
+        groupBy: ui.paretoGroupBy || 'leaves',
+        maxBars: ui.paretoMaxBars,
+        applyFilters: Boolean(ui.paretoApplyFilters),
+        data: pData,
+        metricCounts,
+      };
+    }
+
     return {
       doc: d, db, project: core.getProject(S.activeProjectId),
       summary, rollups, filteredRollups, isFiltered, matchedCount: matchedIds ? matchedIds.size : d.items.length,
       rows, collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
       filter: ui.filter, edit, pasteOpen: ui.pasteOpen,
-      isExpanded: ui.expanded, pdfExport,
+      isExpanded: ui.expanded, isDark: isDarkThemeActive(), pdfExport, pareto,
       canUndo: Boolean(lastUndo), canRedo: Boolean(lastRedo),
       undoLabel: lastUndo ? `Undo: ${lastUndo.label} (Ctrl+Z)` : 'Nothing to undo',
       redoLabel: lastRedo ? `Redo: ${lastRedo.label} (Ctrl+Y)` : 'Nothing to redo',
@@ -259,7 +385,7 @@
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-pdf-field', 'data-pbs-pdf-preset', 'data-pbs-pdf-group-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-pareto-metric', 'data-pbs-pdf-pareto', 'data-pbs-pdf-field', 'data-pbs-pdf-preset', 'data-pbs-pdf-group-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -348,6 +474,7 @@
   function openForm(itemId, parentId) {
     ui.pasteOpen = false;
     ui.pdfPanelOpen = false;
+    ui.paretoOpen = false;
     ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq, openSections: null };
     if (parentId) ui.collapsedIds.delete(parentId);
     render('#ppPbsFName');
@@ -524,6 +651,7 @@
   function openPastePanel() {
     ui.edit = null;
     ui.pdfPanelOpen = false;
+    ui.paretoOpen = false;
     ui.pasteOpen = true;
     render('#ppPbsPasteInput');
   }
@@ -548,11 +676,34 @@
     C().toast(`Imported ${items.length} pasted item${items.length === 1 ? '' : 's'}.`, 'success');
   }
 
+  function openParetoPanel() {
+    ui.edit = null;
+    ui.pasteOpen = false;
+    ui.pdfPanelOpen = false;
+    ui.paretoOpen = true;
+    ui.paretoApplyFilters = hasActiveFilter();
+    const b = q('.pp-pbs-body');
+    if (b) b.scrollTop = 0;
+    render('#ppPbsParetoGroup');
+  }
+  function closeParetoPanel() {
+    ui.paretoOpen = false;
+    render('#ppPbsParetoBtn');
+  }
+  function setParetoMetric(metricKey) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (!allowed.includes(metricKey)) return;
+    ui.paretoMetric = metricKey;
+    render();
+  }
+
   function openPdfPanel() {
     ui.edit = null;
     ui.pasteOpen = false;
+    ui.paretoOpen = false;
     ui.pdfPanelOpen = true;
     ensurePdfSelectedFields();
+    ensurePdfParetoConfig(doc(), C().getDb());
     ui.pdfApplyFilters = hasActiveFilter();
     const b = q('.pp-pbs-body');
     if (b) b.scrollTop = 0;
@@ -584,6 +735,31 @@
     if (checked) sel.add(fieldKey);
     else sel.delete(fieldKey);
     savePdfFieldPrefs(sel);
+    render();
+  }
+  function togglePdfIncludePareto(checked) {
+    const pMetrics = ensurePdfParetoConfig(doc(), C().getDb());
+    ui.pdfIncludePareto = Boolean(checked);
+    if (ui.pdfIncludePareto && !pMetrics.size) {
+      const { populated } = getPopulatedParetoKeys(doc(), C().getDb(), null);
+      const fallback = populated.length ? populated : getAllowedParetoMetricKeys();
+      fallback.forEach(k => pMetrics.add(k));
+    }
+    savePdfParetoPrefs();
+    render();
+  }
+  function togglePdfParetoMetric(metricKey, checked) {
+    const allowed = getAllowedParetoMetricKeys();
+    if (!allowed.includes(metricKey)) return;
+    const pMetrics = ensurePdfParetoConfig(doc(), C().getDb());
+    if (checked) {
+      pMetrics.add(metricKey);
+      ui.pdfIncludePareto = true;
+    } else {
+      pMetrics.delete(metricKey);
+      if (!pMetrics.size) ui.pdfIncludePareto = false;
+    }
+    savePdfParetoPrefs();
     render();
   }
 
@@ -664,7 +840,7 @@
     pushUndo(`Load ${file.name}`);
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false;
+    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false;
     syncPopulatedColGroups(true);
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
@@ -701,6 +877,40 @@
     C().toast('SVG diagram exported.', 'success');
   }
 
+  function exportParetoSvg() {
+    const p = project();
+    const d = doc();
+    const db = C().getDb();
+    let matchedIds = null;
+    if (ui.paretoApplyFilters && hasActiveFilter()) {
+      const summary = T().computeMaturitySummary(d, db.milestones || [], todayIso());
+      const rollups = T().computeSwpRollups(d);
+      const rows = T().getFilteredTreeRows(d, ui.filter, new Set(), { summary, rollups });
+      matchedIds = new Set(rows.filter(r => !r.isContextOnly).map(r => r.item.id));
+    }
+    const metricKey = pickDefaultParetoMetric(d, db, matchedIds);
+    const data = T().computeParetoData(d, metricKey, {
+      groupBy: ui.paretoGroupBy || 'leaves',
+      matchedIds,
+      maxBars: ui.paretoMaxBars,
+      db,
+    });
+    if (!data || !data.bars.length) {
+      C().toast('No Pareto data available for the selected metric.', 'warning');
+      return;
+    }
+    const projLabel = p ? `[${p.code}] ${p.name}` : 'Project';
+    const unitNote = data.metric.isCurrency ? '' : (data.metric.unit ? ` (${data.metric.unit})` : '');
+    const svg = R().buildParetoSvg(data, {
+      standalone: true,
+      width: 920,
+      height: 360,
+      title: `PBS Pareto \u2014 ${data.metric.label}${unitNote} \u2014 ${projLabel}`,
+    });
+    C().downloadText(R().paretoSvgFilename(p, C().state.activeProjectId, metricKey), svg, 'image/svg+xml;charset=utf-8');
+    C().toast(`Pareto SVG (${data.metric.label}) exported.`, 'success');
+  }
+
   function openPrintFallback(model) {
     const url = URL.createObjectURL(new Blob([R().buildPrintHtml(model)], { type: 'text/html' }));
     const w = window.open(url, '_blank');
@@ -709,7 +919,7 @@
     C().toast('PDF library unavailable. Opened a print view: choose "Save as PDF".', 'info');
   }
 
-  function buildPdfOptions(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
+  function buildPdfOptions(currentViewOnly, selectedFieldKeys, applyActiveFilters, paretoConfig) {
     const date = todayIso();
     const d = doc();
     const db = C().getDb();
@@ -719,7 +929,12 @@
       opts.selectedFieldKeys = Array.from(selectedFieldKeys);
     } else if (currentViewOnly) {
       opts.visibleOptKeys = V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key);
-    } else {
+    }
+    if (paretoConfig && Array.isArray(paretoConfig.metrics) && paretoConfig.metrics.length) {
+      opts.paretoMetrics = paretoConfig.metrics;
+      opts.paretoGroupBy = paretoConfig.groupBy || 'leaves';
+    }
+    if (!selectedFieldKeys && !currentViewOnly) {
       return opts;
     }
     if (useFilters && hasActiveFilter()) {
@@ -732,16 +947,18 @@
     return opts;
   }
 
-  function exportPdf(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
+  function exportPdf(currentViewOnly, selectedFieldKeys, applyActiveFilters, paretoConfig) {
     const p = project();
     const date = todayIso();
-    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly), selectedFieldKeys, applyActiveFilters));
+    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly), selectedFieldKeys, applyActiveFilters, paretoConfig));
     const JsPdf = window.jspdf && window.jspdf.jsPDF;
     if (JsPdf) {
       try {
         R().renderPdf(JsPdf, model).save(R().pdfFilename(p, C().state.activeProjectId, date));
+        const pCnt = Array.isArray(model.paretoCharts) ? model.paretoCharts.length : 0;
+        const pSuffix = pCnt ? ` + ${pCnt} Pareto${pCnt === 1 ? '' : 's'}` : '';
         const msg = selectedFieldKeys
-          ? `PBS PDF exported (${model.cols.length} field${model.cols.length === 1 ? '' : 's'}).`
+          ? `PBS PDF exported (${model.cols.length} field${model.cols.length === 1 ? '' : 's'}${pSuffix}).`
           : (currentViewOnly ? 'PBS current-view PDF exported.' : 'PBS PDF report exported.');
         C().toast(msg, 'success');
         return;
@@ -756,7 +973,11 @@
       C().toast('Select at least one field to include in the PDF.', 'warning');
       return;
     }
-    exportPdf(false, sel, Boolean(ui.pdfApplyFilters));
+    const pSet = ensurePdfParetoConfig(doc(), C().getDb());
+    const paretoConfig = ui.pdfIncludePareto && pSet.size
+      ? { metrics: Array.from(pSet), groupBy: ui.pdfParetoGroupBy || 'leaves' }
+      : null;
+    exportPdf(false, sel, Boolean(ui.pdfApplyFilters), paretoConfig);
     closePdfPanel();
   }
 
@@ -856,6 +1077,9 @@
     ppPbsPasteBtn: () => (ui.pasteOpen ? closePastePanel() : openPastePanel()),
     ppPbsPasteCancel: () => closePastePanel(),
     ppPbsPasteSubmit: safe(submitPaste),
+    ppPbsParetoBtn: () => (ui.paretoOpen ? closeParetoPanel() : openParetoPanel()),
+    ppPbsParetoCloseBtn: () => closeParetoPanel(),
+    ppPbsParetoSvgBtn: safe(exportParetoSvg),
     ppPbsExportSvgBtn: safe(exportSvg),
     ppPbsExportPdfBtn: () => (ui.pdfPanelOpen ? closePdfPanel() : openPdfPanel()),
     ppPbsPdfCancelBtn: () => closePdfPanel(),
@@ -877,6 +1101,7 @@
       render();
       return;
     }
+    if (d.pbsParetoMetric) return setParetoMetric(d.pbsParetoMetric);
     if (d.pbsPdfPreset) return applyPdfPreset(d.pbsPdfPreset);
     if (d.pbsPdfGroupToggle) return togglePdfGroup(d.pbsPdfGroupToggle);
     if (d.pbsColGroup) return toggleColGroup(d.pbsColGroup);
@@ -902,6 +1127,24 @@
     const files = t.files;
     if (t.hasAttribute && t.hasAttribute('data-pbs-pdf-field')) {
       togglePdfField(t.getAttribute('data-pbs-pdf-field'), Boolean(t.checked));
+    } else if (t.hasAttribute && t.hasAttribute('data-pbs-pdf-pareto')) {
+      togglePdfParetoMetric(t.getAttribute('data-pbs-pdf-pareto'), Boolean(t.checked));
+    } else if (t.id === 'ppPbsPdfIncludePareto') {
+      togglePdfIncludePareto(Boolean(t.checked));
+    } else if (t.id === 'ppPbsPdfParetoGroup') {
+      ui.pdfParetoGroupBy = ['leaves', 'roots', 'dept'].includes(t.value) ? t.value : 'leaves';
+      savePdfParetoPrefs();
+      render();
+    } else if (t.id === 'ppPbsParetoGroup') {
+      ui.paretoGroupBy = ['leaves', 'roots', 'dept'].includes(t.value) ? t.value : 'leaves';
+      render();
+    } else if (t.id === 'ppPbsParetoMaxBars') {
+      const n = parseInt(t.value, 10);
+      ui.paretoMaxBars = Number.isFinite(n) && n >= 0 ? n : 12;
+      render();
+    } else if (t.id === 'ppPbsParetoApplyFilters') {
+      ui.paretoApplyFilters = Boolean(t.checked);
+      render();
     } else if (t.id === 'ppPbsPdfApplyFilters') {
       ui.pdfApplyFilters = Boolean(t.checked);
       render();
@@ -975,6 +1218,7 @@
     el.addEventListener('cancel', (e) => {
       if (ui.edit) { e.preventDefault(); closeForm(ui.edit.itemId); }
       else if (ui.pasteOpen) { e.preventDefault(); closePastePanel(); }
+      else if (ui.paretoOpen) { e.preventDefault(); closeParetoPanel(); }
       else if (ui.pdfPanelOpen) { e.preventDefault(); closePdfPanel(); }
     });
     el.addEventListener('close', () => { safe(onClosed)(); });
@@ -988,7 +1232,7 @@
     if (lockedOrSigningOut) {
       core.stopPolling();
       if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
-      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
+      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false; ui.undoStack = []; ui.redoStack = [];
       return;
     }
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
@@ -997,7 +1241,7 @@
       S.saveQueued = false;
       await core.writeToFolder(false);
     }
-    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
+    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.paretoOpen = false; ui.undoStack = []; ui.redoStack = [];
     if (S.dirHandle) core.startPolling();
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
@@ -1011,7 +1255,7 @@
     ensureDialog();
     V().injectStyles();
     ui.filter = emptyFilter();
-    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.pdfSelectedFields = null;
+    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.pdfSelectedFields = null; ui.paretoOpen = false; ui.paretoMetric = ''; ui.pdfParetoLoaded = false;
     ui.expanded = loadExpandPref();
     applyExpandedClass();
     ui.undoStack = []; ui.redoStack = []; ui.notices = [];

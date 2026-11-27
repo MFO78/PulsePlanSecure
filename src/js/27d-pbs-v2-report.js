@@ -16,6 +16,7 @@
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
   function svgFilename(project, fallbackId) { return `pbs_${safeName(project, fallbackId)}_diagram.svg`; }
+  function paretoSvgFilename(project, fallbackId, metricKey) { return `pbs_${safeName(project, fallbackId)}_pareto_${P.data.sanitizeFilenamePart(metricKey || 'metric')}.svg`; }
   function pdfFilename(project, fallbackId, dateStr) { return `pbs_${safeName(project, fallbackId)}_${dateStr}.pdf`; }
 
   function xmlEsc(str) {
@@ -34,8 +35,242 @@
   /* Helvetica in jsPDF only covers Latin-1: map common punctuation and drop the rest. */
   function pdfSafe(str) {
     return String(str ?? '')
+      .replace(/\u20AC/g, 'EUR ')
       .replace(/[\u2013\u2014]/g, '-').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\u2026/g, '...')
       .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  }
+
+  function paretoGroupLabel(groupBy) {
+    if (groupBy === 'roots') return 'Top-Level Subsystems';
+    if (groupBy === 'dept') return 'By Department';
+    return 'Contributors (Items)';
+  }
+
+  function fmtGroupedNumber(v) {
+    if (!isNum(v)) return '0';
+    const abs = Math.abs(v);
+    const maxFrac = abs >= 1000 ? 0 : (abs >= 10 ? 1 : (abs >= 1 ? 2 : 3));
+    try {
+      return v.toLocaleString('en-US', { maximumFractionDigits: maxFrac });
+    } catch (_e) {
+      return fmtNum(v);
+    }
+  }
+
+  function formatParetoValue(val, metric, forPdf) {
+    if (!isNum(val)) return '-';
+    const numStr = fmtGroupedNumber(val);
+    if (!metric) return forPdf ? pdfSafe(numStr) : numStr;
+    if (metric.isCurrency) {
+      const sym = String(metric.currency || '€');
+      const raw = sym.length > 1 ? `${sym} ${numStr}` : `${sym}${numStr}`;
+      return forPdf ? pdfSafe(raw) : raw;
+    }
+    const raw = metric.unit ? `${numStr} ${metric.unit}` : numStr;
+    return forPdf ? pdfSafe(raw) : raw;
+  }
+
+  function formatParetoAxisTick(val, metric, forPdf) {
+    if (!isNum(val)) return '0';
+    const abs = Math.abs(val);
+    let compact;
+    if (abs >= 1e6) compact = `${fmtNum(Math.round((val / 1e6) * 10) / 10)}M`;
+    else if (abs >= 1e4) compact = `${fmtNum(Math.round((val / 1e3) * 10) / 10)}k`;
+    else compact = fmtGroupedNumber(val);
+    if (metric && metric.isCurrency) {
+      const sym = String(metric.currency || '€');
+      const raw = sym.length > 1 ? `${sym} ${compact}` : `${sym}${compact}`;
+      return forPdf ? pdfSafe(raw) : raw;
+    }
+    return forPdf ? pdfSafe(compact) : compact;
+  }
+
+  function niceParetoMax(maxVal) {
+    if (!isNum(maxVal) || maxVal <= 0) return 10;
+    const exp = Math.floor(Math.log10(maxVal));
+    const mag = Math.pow(10, exp);
+    const norm = maxVal / mag;
+    let nice;
+    if (norm <= 1) nice = 1;
+    else if (norm <= 1.2) nice = 1.2;
+    else if (norm <= 1.5) nice = 1.5;
+    else if (norm <= 2) nice = 2;
+    else if (norm <= 2.5) nice = 2.5;
+    else if (norm <= 3) nice = 3;
+    else if (norm <= 4) nice = 4;
+    else if (norm <= 5) nice = 5;
+    else if (norm <= 6) nice = 6;
+    else if (norm <= 8) nice = 8;
+    else nice = 10;
+    return nice * mag;
+  }
+
+  /* Builds a responsive or standalone dual-axis Pareto SVG diagram (descending bars + cumulative % curve + 80% threshold). */
+  function buildParetoSvg(paretoData, opts) {
+    const o = opts || {};
+    const standalone = Boolean(o.standalone);
+    const dark = Boolean(o.darkMode) && !o.printMode && !standalone;
+    const W = o.width || 820;
+    const headerH = standalone ? 58 : 0;
+    const H = (o.height || 340) + headerH;
+    const metric = (paretoData && paretoData.metric) || { label: 'Metric', unit: '', color: '#4f46e5', softColor: '#c7d2fe', lineColor: '#f59e0b' };
+    const bars = (paretoData && Array.isArray(paretoData.bars)) ? paretoData.bars : [];
+
+    const bg = dark ? '#0f172a' : '#ffffff';
+    const plotBg = dark ? '#111c33' : '#f8fafc';
+    const gridStroke = dark ? '#334155' : '#e2e8f0';
+    const axisText = dark ? '#94a3b8' : '#64748b';
+    const labelText = dark ? '#e2e8f0' : '#0f172a';
+    const mutedBarFill = dark ? '#334155' : (metric.softColor || '#cbd5e1');
+    const othersBarFill = dark ? '#475569' : '#94a3b8';
+    const lineColor = metric.lineColor || '#f59e0b';
+    const dotInner = dark ? '#0f172a' : '#ffffff';
+
+    const titleStr = o.title || `Pareto Analysis \u2014 ${metric.label}${metric.unit && !metric.isCurrency ? ` (${metric.unit})` : ''}`;
+    const vitalStr = paretoData && paretoData.contributorCount > 0
+      ? `80/20 Vital Few: Top ${paretoData.vitalCount} of ${paretoData.contributorCount} (${paretoData.vitalShareOfItemsPct}%) drive ${paretoData.vitalPct}% \u00b7 Total ${formatParetoValue(paretoData.total, metric, false)}`
+      : 'No recorded values in scope';
+    const subtitleStr = o.subtitle || `${paretoGroupLabel(paretoData && paretoData.groupBy)} \u00b7 ${vitalStr}`;
+
+    const sizeAttrs = standalone
+      ? `width="${W}" height="${H}"`
+      : `width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"`;
+    const vbAttr = standalone ? `viewBox="0 0 ${W} ${H}"` : '';
+
+    const headerSvg = standalone
+      ? `<rect width="${W}" height="${headerH}" fill="#0f172a"/>
+  <rect y="${headerH - 4}" width="${W}" height="4" fill="${xmlEsc(metric.color || '#4f46e5')}"/>
+  <text x="20" y="25" font-size="15" font-weight="800" fill="#ffffff">${xmlEsc(titleStr)}</text>
+  <text x="20" y="43" font-size="10.5" fill="#cbd5e1">${xmlEsc(subtitleStr)}</text>`
+      : '';
+
+    if (!bars.length) {
+      const msg = paretoData && paretoData.restricted
+        ? 'Financial cost data is restricted for your account.'
+        : `No PBS items have positive ${metric.label} values in this scope.`;
+      const body = `${headerSvg}
+  <rect x="0" y="${headerH}" width="${W}" height="${H - headerH}" fill="${bg}" rx="${standalone ? 0 : 8}"/>
+  <text x="${W / 2}" y="${headerH + (H - headerH) / 2 - 4}" text-anchor="middle" font-size="13" font-weight="700" fill="${axisText}">${xmlEsc(msg)}</text>
+  <text x="${W / 2}" y="${headerH + (H - headerH) / 2 + 16}" text-anchor="middle" font-size="11" fill="${axisText}">Add ${xmlEsc(metric.label)} values to PBS items to generate the Pareto diagram.</text>`;
+      return `${standalone ? '<?xml version="1.0" encoding="UTF-8"?>\n' : ''}<svg xmlns="http://www.w3.org/2000/svg" ${sizeAttrs} ${vbAttr} role="img" aria-label="${xmlEsc(titleStr)}" style="font-family:Inter,system-ui,-apple-system,sans-serif;display:block;max-width:100%;background:${bg}">${body}</svg>`;
+    }
+
+    const padL = 72;
+    const padR = 58;
+    const padT = headerH + 34;
+    const padB = 82;
+    const plotW = Math.max(240, W - padL - padR);
+    const plotH = Math.max(120, H - padT - padB);
+    const maxBarVal = Math.max(...bars.map(b => b.value), 0);
+    const yMax = niceParetoMax(maxBarVal * 1.12);
+
+    const yVal = (v) => padT + plotH - (Math.min(yMax, Math.max(0, v)) / yMax) * plotH;
+    const yPct = (p) => padT + plotH - (Math.min(100, Math.max(0, p)) / 100) * plotH;
+
+    const parts = [];
+    if (headerSvg) parts.push(headerSvg);
+    parts.push(`<rect x="0" y="${headerH}" width="${W}" height="${H - headerH}" fill="${bg}" rx="${standalone ? 0 : 8}"/>`);
+    parts.push(`<rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="${plotBg}" rx="4"/>`);
+
+    // Legend row at top of plot
+    const legY = headerH + 17;
+    parts.push(`<g font-size="10" font-weight="600" fill="${axisText}">
+    <rect x="${padL}" y="${legY - 8}" width="10" height="10" rx="2" fill="${xmlEsc(metric.color)}"/>
+    <text x="${padL + 14}" y="${legY}">Vital Few (\u226480%)</text>
+    <rect x="${padL + 112}" y="${legY - 8}" width="10" height="10" rx="2" fill="${mutedBarFill}" stroke="${xmlEsc(metric.color)}" stroke-width="1"/>
+    <text x="${padL + 126}" y="${legY}">Remaining 20%</text>
+    <line x1="${padL + 220}" y1="${legY - 3}" x2="${padL + 236}" y2="${legY - 3}" stroke="${xmlEsc(lineColor)}" stroke-width="2.2"/>
+    <circle cx="${padL + 228}" cy="${legY - 3}" r="3" fill="${dotInner}" stroke="${xmlEsc(lineColor)}" stroke-width="1.8"/>
+    <text x="${padL + 241}" y="${legY}">Cumulative %</text>
+    <line x1="${padL + 324}" y1="${legY - 3}" x2="${padL + 340}" y2="${legY - 3}" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="4,3"/>
+    <text x="${padL + 345}" y="${legY}">80% Threshold</text>
+  </g>`);
+
+    // Gridlines + Left/Right Y-axis ticks (5 steps: 0, 20, 40, 60, 80, 100%)
+    for (let i = 0; i <= 5; i++) {
+      const pctTick = i * 20;
+      const valTick = (yMax * i) / 5;
+      const y = yPct(pctTick);
+      parts.push(`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${padL + plotW}" y2="${y.toFixed(1)}" stroke="${gridStroke}" stroke-width="${i === 0 ? 1.2 : 0.8}"/>`);
+      parts.push(`<text x="${padL - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="${axisText}">${xmlEsc(formatParetoAxisTick(valTick, metric, false))}</text>`);
+      parts.push(`<text x="${padL + plotW + 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="start" font-size="10" fill="${axisText}">${pctTick}%</text>`);
+    }
+
+    // Axis titles
+    const leftAxisTitle = metric.isCurrency ? `${metric.label} (${metric.currency})` : `${metric.label} (${metric.unit})`;
+    parts.push(`<text x="16" y="${(padT + plotH / 2).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${axisText}" transform="rotate(-90 16 ${(padT + plotH / 2).toFixed(1)})">${xmlEsc(leftAxisTitle)}</text>`);
+    parts.push(`<text x="${W - 14}" y="${(padT + plotH / 2).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="700" fill="${axisText}" transform="rotate(90 ${W - 14} ${(padT + plotH / 2).toFixed(1)})">Cumulative %</text>`);
+
+    // Bars
+    const slotW = plotW / bars.length;
+    const barW = Math.max(10, Math.min(54, slotW * 0.64));
+    const showValLabels = bars.length <= 16;
+    const pts = [];
+
+    bars.forEach((b, idx) => {
+      const cx = padL + slotW * (idx + 0.5);
+      const bx = cx - barW / 2;
+      const by = yVal(b.value);
+      const bh = Math.max(2, padT + plotH - by);
+      const fill = b.isOthers ? othersBarFill : (b.vitalFew ? metric.color : mutedBarFill);
+      const stroke = b.isOthers ? '#64748b' : metric.color;
+      const tipLines = [
+        `#${b.rank} ${b.label}`,
+        `${metric.label}: ${formatParetoValue(b.value, metric, false)} (${b.pct}% of total)`,
+        `Cumulative: ${b.cumPct}%`,
+      ];
+      if (b.effectiveQty && b.effectiveQty > 1) tipLines.push(`Effective Qty: \u00d7${b.effectiveQty}`);
+      if (b.isOthers && b.otherCount) tipLines.push(`Includes ${b.otherCount} remaining entries`);
+      else if (b.vitalFew) tipLines.push('Classification: Vital Few (\u226480% driver)');
+
+      parts.push(`<g>
+    <title>${xmlEsc(tipLines.join('\n'))}</title>
+    <rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" rx="3.5" fill="${xmlEsc(fill)}" stroke="${xmlEsc(stroke)}" stroke-width="${b.vitalFew ? 0 : 1}"/>
+  </g>`);
+
+      if (showValLabels) {
+        const valLbl = formatParetoAxisTick(b.value, metric, false);
+        const lblY = Math.max(padT + 11, by - 5);
+        parts.push(`<text x="${cx.toFixed(1)}" y="${lblY.toFixed(1)}" text-anchor="middle" font-size="9.5" font-weight="700" fill="${labelText}">${xmlEsc(valLbl)}</text>`);
+      }
+
+      // X-axis label (angled slightly when more than 6 bars for readability)
+      const maxChars = bars.length > 14 ? 12 : (bars.length > 8 ? 16 : 20);
+      const xLbl = clip(b.shortLabel || b.label, maxChars);
+      const xLblY = padT + plotH + 14;
+      if (bars.length > 5) {
+        parts.push(`<text x="${cx.toFixed(1)}" y="${xLblY.toFixed(1)}" text-anchor="end" font-size="9.5" font-weight="${b.vitalFew ? 700 : 500}" fill="${b.isOthers ? axisText : labelText}" transform="rotate(-32 ${cx.toFixed(1)} ${xLblY.toFixed(1)})"><title>${xmlEsc(b.label)}</title>${xmlEsc(xLbl)}</text>`);
+      } else {
+        parts.push(`<text x="${cx.toFixed(1)}" y="${(xLblY + 4).toFixed(1)}" text-anchor="middle" font-size="10" font-weight="${b.vitalFew ? 700 : 500}" fill="${b.isOthers ? axisText : labelText}"><title>${xmlEsc(b.label)}</title>${xmlEsc(xLbl)}</text>`);
+      }
+
+      pts.push({ cx, cy: yPct(b.cumPct), bar: b });
+    });
+
+    // 80% Pareto threshold dashed line (drawn above bars, below cumulative curve)
+    const y80 = yPct(80);
+    parts.push(`<line x1="${padL}" y1="${y80.toFixed(1)}" x2="${padL + plotW}" y2="${y80.toFixed(1)}" stroke="#ef4444" stroke-width="1.4" stroke-dasharray="5,4"/>`);
+    parts.push(`<rect x="${(padL + plotW - 34).toFixed(1)}" y="${(y80 - 15).toFixed(1)}" width="31" height="13" rx="3" fill="#ef4444"/><text x="${(padL + plotW - 18.5).toFixed(1)}" y="${(y80 - 5.5).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#ffffff">80%</text>`);
+
+    // Cumulative % polyline + dots
+    if (pts.length > 1) {
+      const polyPts = pts.map(p => `${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(' ');
+      parts.push(`<polyline points="${polyPts}" fill="none" stroke="${xmlEsc(lineColor)}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`);
+    }
+    const labelStep = bars.length > 14 ? 2 : 1;
+    pts.forEach((p, idx) => {
+      const b = p.bar;
+      parts.push(`<circle cx="${p.cx.toFixed(1)}" cy="${p.cy.toFixed(1)}" r="3.8" fill="${dotInner}" stroke="${xmlEsc(lineColor)}" stroke-width="2"><title>${xmlEsc(`${b.label}: ${b.cumPct}% cumulative`)}</title></circle>`);
+      if (idx % labelStep === 0 || idx === pts.length - 1) {
+        const py = p.cy < padT + 18 ? p.cy + 14 : p.cy - 8;
+        parts.push(`<text x="${p.cx.toFixed(1)}" y="${py.toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="${xmlEsc(lineColor)}">${Math.round(b.cumPct)}%</text>`);
+      }
+    });
+
+    return `${standalone ? '<?xml version="1.0" encoding="UTF-8"?>\n' : ''}<svg xmlns="http://www.w3.org/2000/svg" ${sizeAttrs} ${vbAttr} role="img" aria-label="${xmlEsc(titleStr)}" style="font-family:Inter,system-ui,-apple-system,sans-serif;display:block;max-width:100%;background:${bg}">
+  <title>${xmlEsc(titleStr)}</title>
+  ${parts.join('\n  ')}
+</svg>`;
   }
 
   function buildCardTooltip(n, dept) {
@@ -401,12 +636,45 @@
     if (totalRollups && totalRollups.totalMass !== null) swpSub.push(`Mass: ${fmtNum(totalRollups.totalMass)} kg`);
     if (totalRollups && totalRollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(totalRollups.totalPowerConsumption)} W`);
     if (totalRollups && totalRollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(totalRollups.totalPowerDissipation)} W`);
+    if (allowFin && totalRollups && totalRollups.totalUnitCost !== null) {
+      const curSym = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
+      swpSub.push(`Cost: ${curSym}${fmtNum(totalRollups.totalUnitCost)}`);
+    }
     const scopeTag = isFiltered ? `Filtered (${matchedIdSet.size} of ${allFlat.length} items)` : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
     const viewTag = selFieldSet ? `Selected fields (${activeCols.length})` : (visOptSet ? 'Current columns' : '');
 
+    // Optional Pareto diagrams requested in PDF export options
+    const paretoCharts = [];
+    const reqPareto = Array.isArray(opts.paretoMetrics) ? opts.paretoMetrics : (opts.paretoMetrics instanceof Set ? Array.from(opts.paretoMetrics) : []);
+    if (reqPareto.length && P.tree && typeof P.tree.computeParetoData === 'function') {
+      const validKeys = new Set((P.PARETO_METRICS || []).filter(m => !m.financeOnly || allowFin).map(m => m.key));
+      const pGroupBy = ['leaves', 'roots', 'dept'].includes(opts.paretoGroupBy) ? opts.paretoGroupBy : 'leaves';
+      const pMaxBars = typeof opts.paretoMaxBars === 'number' && opts.paretoMaxBars > 1 ? Math.floor(opts.paretoMaxBars) : 12;
+      const seenMetric = new Set();
+      reqPareto.forEach(mk => {
+        if (!validKeys.has(mk) || seenMetric.has(mk)) return;
+        seenMetric.add(mk);
+        const data = P.tree.computeParetoData(doc, mk, {
+          groupBy: pGroupBy,
+          matchedIds: matchedIdSet,
+          maxBars: pMaxBars,
+          db,
+        });
+        if (!data.restricted) {
+          paretoCharts.push({
+            ...data,
+            scopeTag,
+            projectLabel: `[${project ? project.code : ''}] ${project ? project.name : 'Project'}`,
+            dateStr: dateStr || '',
+            userName: userName || 'Project Mgr',
+          });
+        }
+      });
+    }
+
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
-      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${scopeTag}${viewTag ? `  |  ${viewTag}` : ''}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
+      subtitle: pdfSafe(`Revision ${(doc.meta && doc.meta.revision) || 1}  |  ${scopeTag}${viewTag ? `  |  ${viewTag}` : ''}${paretoCharts.length ? `  |  ${paretoCharts.length} Pareto${paretoCharts.length === 1 ? '' : 's'}` : ''}  |  Exported ${dateStr} by ${userName || 'Project Mgr'}${swpSub.length ? `  |  ${swpSub.join('  |  ')}` : ''}`),
       projectColor: project && project.color ? project.color : null,
       cols: activeCols,
       colIdx,
@@ -415,8 +683,242 @@
       totalRow,
       hasOpt,
       isFiltered,
+      paretoCharts,
       layout: { pageFormat, pageLabel, neededW, marginX, fontSize, cellPadding },
     };
+  }
+
+  /* Draws a crisp pure-vector Pareto chart + ranked breakdown table onto a new landscape PDF page. */
+  function renderPdfParetoPage(pdf, chart, model, projRgb) {
+    if (typeof pdf.addPage === 'function') pdf.addPage();
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = typeof pdf.internal.pageSize.getHeight === 'function' ? pdf.internal.pageSize.getHeight() : 595;
+    const marginX = Math.max(30, (model.layout && model.layout.marginX) || 36);
+    const printableW = Math.max(400, pageW - marginX * 2);
+    const metric = chart.metric || { label: 'Metric', unit: '', rgb: [79, 70, 229], softRgb: [199, 210, 254], lineRgb: [217, 119, 6] };
+    const barRgb = Array.isArray(metric.rgb) ? metric.rgb : [79, 70, 229];
+    const softRgb = Array.isArray(metric.softRgb) ? metric.softRgb : tint(barRgb, 0.35);
+    const lineRgb = Array.isArray(metric.lineRgb) ? metric.lineRgb : [217, 119, 6];
+
+    const setDraw = (r, g, b) => { if (typeof pdf.setDrawColor === 'function') pdf.setDrawColor(r, g, b); };
+    const setLW = (w) => { if (typeof pdf.setLineWidth === 'function') pdf.setLineWidth(w); };
+    const drawLine = (x1, y1, x2, y2) => { if (typeof pdf.line === 'function') pdf.line(x1, y1, x2, y2); };
+    const setDash = (pat) => { if (typeof pdf.setLineDashPattern === 'function') pdf.setLineDashPattern(pat, 0); };
+
+    // Matching dark banner header
+    pdf.setFillColor(15, 23, 42); pdf.rect(0, 0, pageW, 60, 'F');
+    pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]); pdf.rect(0, 56, pageW, 4, 'F');
+    const unitNote = metric.isCurrency ? '' : (metric.unit ? ` (${metric.unit})` : '');
+    const pTitle = pdfSafe(`Pareto Analysis: ${metric.label}${unitNote}  -  ${chart.projectLabel || model.title}`);
+    const vitalSummary = chart.contributorCount > 0
+      ? `80/20 Vital Few: Top ${chart.vitalCount} of ${chart.contributorCount} (${chart.vitalShareOfItemsPct}%) drive ${chart.vitalPct}%  |  Total: ${formatParetoValue(chart.total, metric, true)}`
+      : 'No recorded values in current scope';
+    const pSub = pdfSafe(`${paretoGroupLabel(chart.groupBy)}  |  ${chart.scopeTag || ''}  |  ${vitalSummary}`);
+    pdf.setTextColor(255, 255, 255); pdf.setFont('helvetica', 'bold'); pdf.setFontSize(13.5); pdf.text(pTitle, marginX, 26);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(9); pdf.setTextColor(203, 213, 225); pdf.text(pSub, marginX, 44);
+
+    const bars = Array.isArray(chart.bars) ? chart.bars : [];
+    if (!bars.length) {
+      pdf.setFillColor(248, 250, 252);
+      setDraw(203, 213, 225);
+      setLW(0.8);
+      pdf.rect(marginX, 90, printableW, 110, 'FD');
+      pdf.setTextColor(100, 116, 139);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(11);
+      pdf.text(pdfSafe(`No PBS items have positive ${metric.label} values in this scope.`), marginX + printableW / 2, 142, { align: 'center' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.text(pdfSafe(`Populate ${metric.label} values on PBS items to render the Pareto breakdown.`), marginX + printableW / 2, 162, { align: 'center' });
+      return;
+    }
+
+    // Legend row
+    const legY = 76;
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(8);
+    pdf.setTextColor(71, 85, 105);
+    pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]); pdf.rect(marginX, legY - 7, 9, 8, 'F');
+    pdf.text('Vital Few (<=80%)', marginX + 13, legY);
+    pdf.setFillColor(softRgb[0], softRgb[1], softRgb[2]); setDraw(barRgb[0], barRgb[1], barRgb[2]); setLW(0.6); pdf.rect(marginX + 104, legY - 7, 9, 8, 'FD');
+    pdf.text('Remaining 20%', marginX + 117, legY);
+    setDraw(lineRgb[0], lineRgb[1], lineRgb[2]); setLW(1.6); drawLine(marginX + 196, legY - 3, marginX + 210, legY - 3);
+    pdf.text('Cumulative %', marginX + 214, legY);
+    setDraw(239, 68, 68); setLW(1); setDash([3, 2]); drawLine(marginX + 286, legY - 3, marginX + 300, legY - 3); setDash([]);
+    pdf.text('80% Threshold', marginX + 304, legY);
+
+    // Chart plot geometry (upper portion of landscape page, leaving room for compact summary table below)
+    const chartTop = 90;
+    const chartH = Math.max(155, Math.min(235, Math.floor((pageH - 130) * 0.48)));
+    const plotL = marginX + 54;
+    const plotR = marginX + printableW - 42;
+    const plotW = Math.max(200, plotR - plotL);
+    const plotB = chartTop + chartH;
+
+    pdf.setFillColor(248, 250, 252);
+    pdf.rect(plotL, chartTop, plotW, chartH, 'F');
+
+    const maxBarVal = Math.max(...bars.map(b => b.value), 0);
+    const yMax = niceParetoMax(maxBarVal * 1.14);
+    const yForVal = (v) => plotB - (Math.min(yMax, Math.max(0, v)) / yMax) * chartH;
+    const yForPct = (p) => plotB - (Math.min(100, Math.max(0, p)) / 100) * chartH;
+
+    // Gridlines + Y-axis labels
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(100, 116, 139);
+    for (let i = 0; i <= 5; i++) {
+      const pctTick = i * 20;
+      const valTick = (yMax * i) / 5;
+      const y = yForPct(pctTick);
+      setDraw(226, 232, 240);
+      setLW(i === 0 ? 0.9 : 0.45);
+      drawLine(plotL, y, plotR, y);
+      pdf.text(formatParetoAxisTick(valTick, metric, true), plotL - 6, y + 2.5, { align: 'right' });
+      pdf.text(`${pctTick}%`, plotR + 6, y + 2.5);
+    }
+
+    // Bars + X-axis labels
+    const slotW = plotW / bars.length;
+    const barW = Math.max(12, Math.min(48, slotW * 0.62));
+    const pts = [];
+
+    bars.forEach((b, idx) => {
+      const cx = plotL + slotW * (idx + 0.5);
+      const bx = cx - barW / 2;
+      const by = yForVal(b.value);
+      const bh = Math.max(1.5, plotB - by);
+      if (b.isOthers) {
+        pdf.setFillColor(148, 163, 184);
+        pdf.rect(bx, by, barW, bh, 'F');
+      } else if (b.vitalFew) {
+        pdf.setFillColor(barRgb[0], barRgb[1], barRgb[2]);
+        pdf.rect(bx, by, barW, bh, 'F');
+      } else {
+        pdf.setFillColor(softRgb[0], softRgb[1], softRgb[2]);
+        setDraw(barRgb[0], barRgb[1], barRgb[2]);
+        setLW(0.6);
+        pdf.rect(bx, by, barW, bh, 'FD');
+      }
+
+      // Bar value label
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7);
+      pdf.setTextColor(15, 23, 42);
+      const valTxt = formatParetoAxisTick(b.value, metric, true);
+      pdf.text(valTxt, cx, Math.max(chartTop + 9, by - 3.5), { align: 'center' });
+
+      // X-axis label (2 compact lines if needed, clean without overlapping)
+      pdf.setFont('helvetica', b.vitalFew ? 'bold' : 'normal');
+      pdf.setFontSize(7);
+      pdf.setTextColor(b.isOthers ? 100 : 30, b.isOthers ? 116 : 41, b.isOthers ? 139 : 59);
+      const maxChars = Math.max(8, Math.floor(slotW / 4.2));
+      const rawLbl = pdfSafe(b.shortLabel || b.label);
+      const xLbl = clip(rawLbl, maxChars);
+      pdf.text(xLbl, cx, plotB + 11, { align: 'center' });
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(`${b.pct}%`, cx, plotB + 20, { align: 'center' });
+
+      pts.push({ cx, cy: yForPct(b.cumPct), bar: b });
+    });
+
+    // 80% threshold line
+    const y80 = yForPct(80);
+    setDraw(239, 68, 68);
+    setLW(1);
+    setDash([4, 3]);
+    drawLine(plotL, y80, plotR, y80);
+    setDash([]);
+    pdf.setFillColor(239, 68, 68);
+    pdf.rect(plotR - 26, y80 - 11, 24, 10, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(6.8);
+    pdf.text('80%', plotR - 14, y80 - 3.5, { align: 'center' });
+
+    // Cumulative % polyline + point markers
+    setDraw(lineRgb[0], lineRgb[1], lineRgb[2]);
+    setLW(1.7);
+    for (let i = 1; i < pts.length; i++) {
+      drawLine(pts[i - 1].cx, pts[i - 1].cy, pts[i].cx, pts[i].cy);
+    }
+    pts.forEach((p) => {
+      if (typeof pdf.circle === 'function') {
+        pdf.setFillColor(255, 255, 255);
+        setDraw(lineRgb[0], lineRgb[1], lineRgb[2]);
+        setLW(1.3);
+        pdf.circle(p.cx, p.cy, 2.7, 'FD');
+      }
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(7);
+      pdf.setTextColor(lineRgb[0], lineRgb[1], lineRgb[2]);
+      const py = p.cy < chartTop + 14 ? p.cy + 10 : p.cy - 5;
+      pdf.text(`${Math.round(p.bar.cumPct)}%`, p.cx, py, { align: 'center' });
+    });
+
+    // Ranked Breakdown Table underneath chart
+    const showQty = chart.groupBy === 'leaves';
+    const valHead = pdfSafe(metric.isCurrency ? `${metric.label}` : `${metric.label} (${metric.unit})`);
+    const tHead = showQty
+      ? ['#', 'Code', 'Deliverable / Subsystem', 'Eff. Qty', valHead, 'Share %', 'Cum. %', 'Pareto Class']
+      : ['#', 'Code', chart.groupBy === 'dept' ? 'Department' : 'Subsystem', 'Items', valHead, 'Share %', 'Cum. %', 'Pareto Class'];
+    const tBody = bars.map(b => [
+      b.isOthers ? '-' : String(b.rank),
+      pdfSafe(b.code || '-'),
+      pdfSafe(b.name || b.label),
+      showQty ? (b.effectiveQty ? `x${b.effectiveQty}` : '-') : String(b.itemCount || 1),
+      formatParetoValue(b.value, metric, true),
+      `${b.pct}%`,
+      `${b.cumPct}%`,
+      b.isOthers ? 'Others' : (b.vitalFew ? 'Vital Few (<=80%)' : 'Remaining 20%'),
+    ]);
+    tBody.push([
+      '',
+      'TOTAL',
+      pdfSafe(`${chart.contributorCount} contributor${chart.contributorCount === 1 ? '' : 's'}`),
+      '',
+      formatParetoValue(chart.total, metric, true),
+      '100%',
+      '100%',
+      pdfSafe(`Top ${chart.vitalCount} = ${chart.vitalPct}%`),
+    ]);
+
+    pdf.autoTable({
+      startY: plotB + 30,
+      head: [tHead],
+      body: tBody,
+      styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 3.5, textColor: [15, 23, 42], lineColor: [226, 232, 240], lineWidth: 0.45 },
+      headStyles: { fillColor: barRgb, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: {
+        0: { halign: 'center', cellWidth: 26, fontStyle: 'bold' },
+        1: { cellWidth: 52, fontStyle: 'bold' },
+        3: { halign: 'right', cellWidth: 46 },
+        4: { halign: 'right', cellWidth: 82, fontStyle: 'bold' },
+        5: { halign: 'right', cellWidth: 50 },
+        6: { halign: 'right', cellWidth: 52, fontStyle: 'bold' },
+        7: { halign: 'center', cellWidth: 86 },
+      },
+      didParseCell(data) {
+        if (data.section !== 'body') return;
+        const isLast = data.row.index === tBody.length - 1;
+        if (isLast) {
+          data.cell.styles.fillColor = [226, 232, 240];
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.textColor = [15, 23, 42];
+          return;
+        }
+        const entry = bars[data.row.index];
+        if (entry && entry.vitalFew && data.column.index === 7) {
+          data.cell.styles.textColor = barRgb;
+          data.cell.styles.fontStyle = 'bold';
+        }
+      },
+      didDrawCell() {},
+      margin: { left: marginX, right: marginX, bottom: 26 },
+    });
   }
 
   /* JsPdf = window.jspdf.jsPDF. Returns the jsPDF instance (caller calls .save(filename)). Throws if autoTable is missing. */
@@ -509,6 +1011,12 @@
       margin: { left: marginX, right: marginX, bottom: 32 },
     });
 
+    if (Array.isArray(model.paretoCharts) && model.paretoCharts.length) {
+      model.paretoCharts.forEach(chart => {
+        renderPdfParetoPage(pdf, chart, model, projRgb);
+      });
+    }
+
     return pdf;
   }
 
@@ -540,11 +1048,39 @@
     }).join('');
 
     const ths = cols.map(c => `<th${c.align ? ` style="text-align:${c.align}"` : ''}>${htmlEsc(c.label)}</th>`).join('');
+
+    const paretoHtml = (Array.isArray(model.paretoCharts) ? model.paretoCharts : []).map(chart => {
+      const m = chart.metric || { label: 'Metric', unit: '', color: '#4f46e5' };
+      const unitNote = m.isCurrency ? '' : (m.unit ? ` (${m.unit})` : '');
+      const svg = buildParetoSvg(chart, { printMode: true, width: 920, height: 310 });
+      const showQty = chart.groupBy === 'leaves';
+      const vitalNote = chart.contributorCount > 0
+        ? `80/20 Vital Few: Top <strong>${chart.vitalCount}</strong> of ${chart.contributorCount} (${chart.vitalShareOfItemsPct}%) drive <strong>${chart.vitalPct}%</strong> &middot; Total: <strong>${htmlEsc(formatParetoValue(chart.total, m, false))}</strong>`
+        : 'No recorded values in scope.';
+      const pRows = (chart.bars || []).map(b => `<tr>
+        <td style="text-align:center;font-weight:700">${b.isOthers ? '\u2014' : b.rank}</td>
+        <td style="font-family:monospace;font-weight:700">${htmlEsc(b.code || '\u2014')}</td>
+        <td>${htmlEsc(b.name || b.label)}</td>
+        <td style="text-align:right">${showQty ? (b.effectiveQty ? `&times;${b.effectiveQty}` : '\u2014') : (b.itemCount || 1)}</td>
+        <td style="text-align:right;font-weight:700">${htmlEsc(formatParetoValue(b.value, m, false))}</td>
+        <td style="text-align:right">${b.pct}%</td>
+        <td style="text-align:right;font-weight:700">${b.cumPct}%</td>
+        <td style="text-align:center;font-weight:${b.vitalFew ? 700 : 500};color:${b.vitalFew ? htmlEsc(m.color) : '#64748b'}">${b.isOthers ? 'Others' : (b.vitalFew ? 'Vital Few (\u226480%)' : 'Remaining 20%')}</td>
+      </tr>`).join('');
+      const tbl = chart.bars && chart.bars.length
+        ? `<table style="margin-top:10px"><thead><tr><th style="background:${htmlEsc(m.color)};text-align:center">#</th><th style="background:${htmlEsc(m.color)}">Code</th><th style="background:${htmlEsc(m.color)}">${chart.groupBy === 'dept' ? 'Department' : (chart.groupBy === 'roots' ? 'Subsystem' : 'Deliverable / Subsystem')}</th><th style="background:${htmlEsc(m.color)};text-align:right">${showQty ? 'Eff. Qty' : 'Items'}</th><th style="background:${htmlEsc(m.color)};text-align:right">${htmlEsc(m.label)}${htmlEsc(unitNote)}</th><th style="background:${htmlEsc(m.color)};text-align:right">Share %</th><th style="background:${htmlEsc(m.color)};text-align:right">Cum. %</th><th style="background:${htmlEsc(m.color)};text-align:center">Class</th></tr></thead><tbody>${pRows}<tr style="background:#e2e8f0;font-weight:700"><td></td><td>TOTAL</td><td>${chart.contributorCount} contributor${chart.contributorCount === 1 ? '' : 's'}</td><td></td><td style="text-align:right">${htmlEsc(formatParetoValue(chart.total, m, false))}</td><td style="text-align:right">100%</td><td style="text-align:right">100%</td><td style="text-align:center">Top ${chart.vitalCount} = ${chart.vitalPct}%</td></tr></tbody></table>`
+        : '';
+      return `<section class="pp-print-pareto"><h2>Pareto Analysis &mdash; ${htmlEsc(m.label)}${htmlEsc(unitNote)}</h2><p>${htmlEsc(paretoGroupLabel(chart.groupBy))} &middot; ${vitalNote}</p><div class="pp-print-pareto-svg">${svg}</div>${tbl}</section>`;
+    }).join('');
+
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${htmlEsc(model.title)}</title>`
-      + `<style>@page{size:landscape;margin:10mm}body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:20px;font-size:${dense ? '10.5px' : '12px'}}h1{font-size:17px;margin:0 0 4px}p{color:#475569;margin:0 0 14px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:${dense ? '4px 5px' : '6px 8px'};text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:${dense ? '9.5px' : '11px'};white-space:nowrap}</style>`
+      + `<style>@page{size:landscape;margin:10mm}body{font-family:Inter,system-ui,sans-serif;color:#0f172a;margin:20px;font-size:${dense ? '10.5px' : '12px'}}h1{font-size:17px;margin:0 0 4px}h2{font-size:15px;margin:0 0 4px}p{color:#475569;margin:0 0 12px;font-size:11px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:${dense ? '4px 5px' : '6px 8px'};text-align:left;vertical-align:top}th{background:#4f46e5;color:#fff;font-size:${dense ? '9.5px' : '11px'};white-space:nowrap}.pp-print-pareto{page-break-before:always;break-before:page;padding-top:4px}.pp-print-pareto-svg{border:1px solid #cbd5e1;border-radius:6px;padding:6px;background:#fff}</style>`
       + `</head><body><h1>${htmlEsc(model.title)}</h1><p>${htmlEsc(model.subtitle)}</p><table><thead><tr>${ths}</tr></thead>`
-      + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table></body></html>`;
+      + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table>${paretoHtml}</body></html>`;
   }
 
-  P.report = { REPORT_COLS, svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };
+  P.report = {
+    REPORT_COLS, svgFilename, paretoSvgFilename, pdfFilename, pdfSafe,
+    paretoGroupLabel, formatParetoValue, buildSvg, buildParetoSvg, buildReportModel, renderPdf, buildPrintHtml,
+  };
 })();

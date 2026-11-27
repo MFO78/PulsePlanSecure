@@ -3936,6 +3936,220 @@ test('ExternalCosts migration/3-way merge/period matching, Default Login View, a
   assert.equal(out.overrideSurvivedPassiveRender, true, 'Passive renderAll() does not destructively mutate capacityOverrides');
 });
 
+test('PBS Pareto diagrams compute non-double-counting SWaP-C rollups, respect Finance RBAC, render SVG/UI, and embed into PDF & Print HTML', () => {
+  const out = vm.runInContext(`(() => {
+    const P = globalThis.__ppPbsV2;
+    const auth = globalThis.__ppAuthRbacTestApi;
+    if (!P || !P.tree || !P.report || !P.view) throw new Error('Missing PBS v2 modules');
+
+    const db = createSampleDemoDB();
+    db.settings = { ...(db.settings || {}), currency: '€' };
+    const proj = db.projects[0];
+    const d1 = db.departments[0].id;
+    const d2 = (db.departments[1] && db.departments[1].id) || d1;
+
+    // Ensure admin/finance access first
+    if (auth && typeof auth.ppApplyAuthenticatedSession === 'function') {
+      auth.ppApplyAuthenticatedSession('admin', null);
+    }
+
+    const doc = {
+      schemaVersion: 1,
+      meta: { revision: 4, projectId: proj.id, projectCode: proj.code },
+      items: [
+        // Parent with overlapping mass budget (999) + qty=2 -> children MUST drive total (no double-counting) and inherit qty=2!
+        { id: 'p1', parentId: null, code: '1', name: 'Propulsion Module', maturity: 'CDR', deptId: d1, qty: 2, mass: 999, unitCost: 99999 },
+        { id: 'p1a', parentId: 'p1', code: '1.1', name: 'Thruster', acronym: 'THR', maturity: 'CDR', deptId: d1, qty: 3, mass: 5, unitCost: 1000, powerConsumption: 40, powerDissipation: 15 },
+        { id: 'p1b', parentId: 'p1', code: '1.2', name: 'Fuel Valve', acronym: 'VLV', maturity: 'Qualified', deptId: d1, qty: 1, mass: 2, unitCost: 500, powerConsumption: 10, powerDissipation: 5 },
+        // Second root subsystem
+        { id: 'p2', parentId: null, code: '2', name: 'Avionics Bay', maturity: 'PDR', deptId: d2, qty: 1 },
+        { id: 'p2a', parentId: 'p2', code: '2.1', name: 'Flight Computer', acronym: 'OBC', maturity: 'Qualified', deptId: d2, qty: 1, mass: 8, unitCost: 8000, powerConsumption: 120, powerDissipation: 85 },
+        { id: 'p2b', parentId: 'p2', code: '2.2', name: 'Sensor Pack', acronym: 'SNS', maturity: 'Draft', deptId: d2, qty: 2, mass: 1, unitCost: 300, powerConsumption: 5, powerDissipation: 2 },
+        // Third root leaf
+        { id: 'p3', parentId: null, code: '3', name: 'Structure Frame', acronym: 'STR', maturity: 'Delivered', deptId: d1, qty: 1, mass: 14, unitCost: 2400 },
+      ],
+    };
+
+    const rollups = P.tree.computeSwpRollups(doc);
+    // Expected totals:
+    // Mass: p1a = 2*3*5 = 30, p1b = 2*1*2 = 4, p2a = 8, p2b = 2, p3 = 14 -> total = 58 kg
+    // Cost: p1a = 2*3*1000 = 6000, p1b = 2*500 = 1000, p2a = 8000, p2b = 600, p3 = 2400 -> total = 18000
+    // PowerCons: p1a = 2*3*40 = 240, p1b = 2*10 = 20, p2a = 120, p2b = 10 -> total = 390 W
+    const massLeaves = P.tree.computeParetoData(doc, 'mass', { groupBy: 'leaves', maxBars: 12, db });
+    const costLeaves = P.tree.computeParetoData(doc, 'unitCost', { groupBy: 'leaves', maxBars: 12, db });
+    const pwrLeaves = P.tree.computeParetoData(doc, 'powerConsumption', { groupBy: 'leaves', maxBars: 12, db });
+    const dissLeaves = P.tree.computeParetoData(doc, 'powerDissipation', { groupBy: 'leaves', maxBars: 12, db });
+    const massRoots = P.tree.computeParetoData(doc, 'mass', { groupBy: 'roots', maxBars: 12, db });
+    const massDept = P.tree.computeParetoData(doc, 'mass', { groupBy: 'dept', maxBars: 12, db });
+    const massTop3 = P.tree.computeParetoData(doc, 'mass', { groupBy: 'leaves', maxBars: 3, db });
+    const massFiltered = P.tree.computeParetoData(doc, 'mass', { groupBy: 'leaves', matchedIds: new Set(['p2a', 'p3']), db });
+
+    // Standalone & inline SVG generation
+    const svgMass = P.report.buildParetoSvg(massLeaves, { standalone: true });
+    const svgEmpty = P.report.buildParetoSvg(P.tree.computeParetoData({ items: [] }, 'mass', { db }), {});
+
+    // Report model + Vector PDF + Print HTML with 3 Pareto diagrams
+    const modelWithParetos = P.report.buildReportModel(doc, proj, db, 'Alice', '2026-11-27', {
+      selectedFieldKeys: ['code', 'name', 'mass'],
+      paretoMetrics: ['unitCost', 'mass', 'powerConsumption'],
+      paretoGroupBy: 'leaves',
+    });
+
+    let addPageCalls = 0;
+    let lineCalls = 0;
+    let circleCalls = 0;
+    let autoTableCalls = 0;
+    function MockJsPdf() {
+      this.internal = { pageSize: { getWidth: () => 842, getHeight: () => 595 } };
+      this.addPage = () => { addPageCalls++; };
+      this.setFillColor = () => {};
+      this.setDrawColor = () => {};
+      this.setLineWidth = () => {};
+      this.setLineDashPattern = () => {};
+      this.rect = () => {};
+      this.line = () => { lineCalls++; };
+      this.circle = () => { circleCalls++; };
+      this.setTextColor = () => {};
+      this.setFont = () => {};
+      this.setFontSize = () => {};
+      this.text = () => {};
+      this.autoTable = (cfg) => {
+        autoTableCalls++;
+        cfg.body.forEach((rowCells, rIdx) => {
+          rowCells.forEach((_cell, cIdx) => {
+            const cellData = { section: 'body', row: { index: rIdx }, column: { index: cIdx }, cell: { x: 10, y: 10, height: 14, styles: {} } };
+            if (cfg.didParseCell) cfg.didParseCell(cellData);
+            if (cfg.didDrawCell) cfg.didDrawCell(cellData);
+          });
+        });
+      };
+    }
+    P.report.renderPdf(MockJsPdf, modelWithParetos);
+    const printHtmlWithParetos = P.report.buildPrintHtml(modelWithParetos);
+
+    // Dialog HTML with Pareto panel open and PDF panel with 2 Pareto metrics checked
+    const summary = P.tree.computeMaturitySummary(doc, db.milestones || [], '2026-11-27');
+    const rows = P.tree.getFilteredTreeRows(doc, {}, new Set(), { summary, rollups });
+    const baseCtx = {
+      doc, db, project: proj, summary, rollups, filteredRollups: null, isFiltered: false, matchedCount: doc.items.length,
+      rows, collapsedIds: new Set(), colGroups: { docs: false, proc: false, swp: false },
+      filter: {}, edit: null, pasteOpen: false, isExpanded: false, isDark: false,
+      pdfExport: {
+        open: true,
+        selectedFields: new Set(['code', 'name', 'mass']),
+        populatedFields: new Set(['code', 'name', 'mass', 'unitCost']),
+        applyFilters: false,
+        includePareto: true,
+        paretoMetrics: new Set(['unitCost', 'mass']),
+        paretoCounts: P.tree.getParetoMetricCounts(doc, { db }),
+        paretoGroupBy: 'leaves',
+      },
+      pareto: {
+        open: true,
+        metric: 'mass',
+        groupBy: 'leaves',
+        maxBars: 12,
+        applyFilters: false,
+        data: massLeaves,
+        metricCounts: P.tree.getParetoMetricCounts(doc, { db }),
+      },
+      canUndo: false, canRedo: false, undoLabel: '', redoLabel: '', conflict: null, notices: [],
+      owners: [], manufacturers: [], procStatuses: [], projectMilestones: [], cloneSources: [],
+      canDirSync: false, dirName: '', hasRemembered: false, status: { text: 'Saved', tone: 'ok' },
+    };
+    const dialogHtmlAdmin = P.view.buildDialogHtml(baseCtx);
+
+    // Finance RBAC check: sign in as non-finance user
+    let nonFinCostRestricted = false;
+    let nonFinMetrics = [];
+    let nonFinModelParetoKeys = [];
+    let nonFinPdfHasCostCheckbox = true;
+    if (auth && typeof auth.ppApplyAuthenticatedSession === 'function') {
+      auth.ppApplyAuthenticatedSession('user', { id: 'u_nf', name: 'Engineer', role: 'user', financeAccess: false });
+      nonFinMetrics = P.tree.getAvailableParetoMetrics().map(m => m.key);
+      nonFinCostRestricted = P.tree.computeParetoData(doc, 'unitCost', { db }).restricted;
+      const nfModel = P.report.buildReportModel(doc, proj, db, 'Engineer', '2026-11-27', {
+        selectedFieldKeys: ['code', 'name', 'unitCost', 'mass'],
+        paretoMetrics: ['unitCost', 'mass'],
+      });
+      nonFinModelParetoKeys = nfModel.paretoCharts.map(c => c.metric.key);
+      const nfHtml = P.view.buildDialogHtml(baseCtx);
+      nonFinPdfHasCostCheckbox = nfHtml.includes('data-pbs-pdf-pareto="unitCost"');
+      // Restore admin session
+      auth.ppApplyAuthenticatedSession('admin', null);
+    }
+
+    return {
+      rollupMass: rollups.totalMass,
+      rollupCost: rollups.totalUnitCost,
+      rollupPower: rollups.totalPowerConsumption,
+      massTotal: massLeaves.total,
+      massTopIds: massLeaves.bars.map(b => b.id),
+      massLastCum: massLeaves.bars[massLeaves.bars.length - 1].cumPct,
+      massVitalCount: massLeaves.vitalCount,
+      costTotal: costLeaves.total,
+      costTopId: costLeaves.bars[0].id,
+      pwrTotal: pwrLeaves.total,
+      dissTotal: dissLeaves.total,
+      rootsCount: massRoots.bars.length,
+      rootsTopVal: massRoots.bars[0].value,
+      deptTotal: massDept.total,
+      top3Len: massTop3.bars.length,
+      top3HasOthers: massTop3.bars[massTop3.bars.length - 1].isOthers,
+      top3LastCum: massTop3.bars[massTop3.bars.length - 1].cumPct,
+      filteredTotal: massFiltered.total,
+      svgHasPolyline: svgMass.includes('<polyline') && svgMass.includes('80%'),
+      svgEmptyMsg: svgEmpty.includes('No PBS items have positive Mass values'),
+      paretoChartCount: modelWithParetos.paretoCharts.length,
+      modelSubtitleHasPareto: modelWithParetos.subtitle.includes('3 Paretos'),
+      addPageCalls,
+      lineCalls,
+      circleCalls,
+      autoTableCalls,
+      printParetoSections: (printHtmlWithParetos.match(/class="pp-print-pareto"/g) || []).length,
+      dialogHasParetoBtn: dialogHtmlAdmin.includes('id="ppPbsParetoBtn"'),
+      dialogHasParetoPanel: dialogHtmlAdmin.includes('id="ppPbsParetoPanel"') && dialogHtmlAdmin.includes('data-pbs-pareto-metric="unitCost"') && dialogHtmlAdmin.includes('data-pbs-pareto-metric="powerConsumption"'),
+      dialogHasPdfParetoControls: dialogHtmlAdmin.includes('id="ppPbsPdfIncludePareto"') && dialogHtmlAdmin.includes('data-pbs-pdf-pareto="mass"') && dialogHtmlAdmin.includes('Export PDF (3 fields + 2 Paretos)'),
+      nonFinCostRestricted,
+      nonFinMetrics,
+      nonFinModelParetoKeys,
+      nonFinPdfHasCostCheckbox,
+    };
+  })()`, ctx);
+
+  assert.equal(out.massTotal, out.rollupMass, 'Leaf Pareto total Mass reconciles exactly with non-double-counting rollup (58 kg)');
+  assert.equal(out.massTotal, 58, 'Ancestor qty=2 propagates into Thruster (30 kg) & Valve (4 kg) without double-counting parent budget');
+  assert.deepEqual(Array.from(out.massTopIds), ['p1a', 'p3', 'p2a', 'p1b', 'p2b'], 'Mass Pareto bars are sorted descending by effective contribution');
+  assert.equal(out.massLastCum, 100, 'Cumulative percentage finishes at 100%');
+  assert.equal(out.massVitalCount, 3, 'Top 3 items cross 80% threshold (30+14+8 = 52/58 = 89.7%)');
+  assert.equal(out.costTotal, out.rollupCost, 'Cost Pareto total reconciles with rollup (€18,000)');
+  assert.equal(out.costTopId, 'p2a', 'Flight Computer (€8,000) is #1 Cost driver');
+  assert.equal(out.pwrTotal, out.rollupPower, 'Power Consumption Pareto reconciles with rollup (390 W)');
+  assert.ok(out.dissTotal > 0, 'Power Dissipation Pareto computes positive total');
+  assert.equal(out.rootsCount, 3, 'Top-Level Subsystems grouping aggregates into 3 roots');
+  assert.equal(out.rootsTopVal, 34, 'Propulsion Module root sums to 34 kg (30 + 4)');
+  assert.equal(out.deptTotal, 58, 'By Department grouping sums to 100% of total mass');
+  assert.equal(out.top3Len, 3, 'maxBars=3 limits chart to 2 top bars + 1 Others bar');
+  assert.equal(out.top3HasOthers, true, 'Last bar is Others bucket when truncated');
+  assert.equal(out.top3LastCum, 100, 'Others bucket closes cumulative curve at 100%');
+  assert.equal(out.filteredTotal, 22, 'Filtered Pareto sums only matched items (8 + 14 = 22 kg)');
+  assert.equal(out.svgHasPolyline, true, 'Pareto SVG renders cumulative curve and 80% reference line');
+  assert.equal(out.svgEmptyMsg, true, 'Empty Pareto SVG renders informative empty state');
+  assert.equal(out.paretoChartCount, 3, 'buildReportModel includes all 3 requested Pareto charts');
+  assert.equal(out.modelSubtitleHasPareto, true, 'PDF report subtitle notes included Pareto count');
+  assert.equal(out.addPageCalls, 3, 'renderPdf adds 1 dedicated landscape page per Pareto chart');
+  assert.ok(out.lineCalls > 15 && out.circleCalls >= 10, 'renderPdf draws vector axes, 80% line, cumulative polyline, and markers');
+  assert.equal(out.autoTableCalls, 4, 'renderPdf renders main PBS table + 3 Pareto breakdown tables');
+  assert.equal(out.printParetoSections, 3, 'Offline print HTML fallback renders all 3 Pareto sections');
+  assert.equal(out.dialogHasParetoBtn, true, 'PBS toolbar renders Pareto trigger button');
+  assert.equal(out.dialogHasParetoPanel, true, 'PBS Pareto panel renders metric switcher chips and SVG');
+  assert.equal(out.dialogHasPdfParetoControls, true, 'PDF export panel renders Pareto toggle, metric checkboxes, and updated Export button');
+  assert.equal(out.nonFinCostRestricted, true, 'Cost Pareto is blocked for non-finance users');
+  assert.equal(out.nonFinMetrics.includes('unitCost'), false, 'Available Pareto metrics exclude Cost for non-finance users');
+  assert.deepEqual(Array.from(out.nonFinModelParetoKeys), ['mass'], 'PDF report strips Cost Pareto for non-finance users while keeping Mass');
+  assert.equal(out.nonFinPdfHasCostCheckbox, false, 'PDF panel hides Cost Pareto checkbox for non-finance users');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

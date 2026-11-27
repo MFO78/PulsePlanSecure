@@ -382,30 +382,391 @@
     };
   }
 
-  /* Computes non-double-counting SWaP/LRU/Spare subtotals over a subset of matched item IDs. */
-  function computeFilteredRollups(doc, matchedIds) {
-    if (!doc || !Array.isArray(doc.items) || !matchedIds || !matchedIds.size) return computeSwpRollups({ items: [] });
+  function buildFilteredSubDoc(doc, matchedIds) {
+    if (!doc || !Array.isArray(doc.items)) return { items: [] };
+    const idSet = matchedIds instanceof Set ? matchedIds : (Array.isArray(matchedIds) ? new Set(matchedIds) : null);
+    if (!idSet || !idSet.size) return { items: [] };
     const byId = new Map(doc.items.map(it => [it.id, it]));
     const nearestMatchedAncestor = (it) => {
       let cur = it.parentId ? byId.get(it.parentId) : null;
       let guard = 0;
       while (cur && guard < 200) {
-        if (matchedIds.has(cur.id)) return cur.id;
+        if (idSet.has(cur.id)) return cur.id;
         cur = cur.parentId ? byId.get(cur.parentId) : null;
         guard++;
       }
       return null;
     };
-    const subItems = doc.items
-      .filter(it => matchedIds.has(it.id))
-      .map(it => ({ ...it, parentId: nearestMatchedAncestor(it) }));
-    return computeSwpRollups({ items: subItems });
+    return {
+      items: doc.items
+        .filter(it => idSet.has(it.id))
+        .map(it => ({ ...it, parentId: nearestMatchedAncestor(it) })),
+    };
+  }
+
+  /* Computes non-double-counting SWaP/LRU/Spare subtotals over a subset of matched item IDs. */
+  function computeFilteredRollups(doc, matchedIds) {
+    if (!doc || !Array.isArray(doc.items) || !matchedIds || !(matchedIds instanceof Set ? matchedIds.size : matchedIds.length)) {
+      return computeSwpRollups({ items: [] });
+    }
+    return computeSwpRollups(buildFilteredSubDoc(doc, matchedIds));
+  }
+
+  /* ---------- Pareto Analysis (non-double-counting SWaP-C contributor ranking & 80/20 vital-few breakdown) ---------- */
+  const PARETO_METRICS = [
+    {
+      key: 'unitCost',
+      label: 'Cost',
+      shortLabel: 'Cost',
+      unit: '',
+      isCurrency: true,
+      financeOnly: true,
+      descKey: 'descUnitCost',
+      lineKey: 'lineUnitCost',
+      color: '#059669',
+      rgb: [5, 150, 105],
+      softColor: '#a7f3d0',
+      softRgb: [167, 243, 208],
+      lineColor: '#f59e0b',
+      lineRgb: [217, 119, 6],
+    },
+    {
+      key: 'mass',
+      label: 'Mass',
+      shortLabel: 'Mass',
+      unit: 'kg',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descMass',
+      lineKey: 'lineMass',
+      color: '#4f46e5',
+      rgb: [79, 70, 229],
+      softColor: '#c7d2fe',
+      softRgb: [199, 210, 254],
+      lineColor: '#f59e0b',
+      lineRgb: [217, 119, 6],
+    },
+    {
+      key: 'powerConsumption',
+      label: 'Power Consumption',
+      shortLabel: 'Power Cons.',
+      unit: 'W',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descPowerCons',
+      lineKey: 'linePowerCons',
+      color: '#d97706',
+      rgb: [217, 119, 6],
+      softColor: '#fde68a',
+      softRgb: [253, 230, 138],
+      lineColor: '#4f46e5',
+      lineRgb: [79, 70, 229],
+    },
+    {
+      key: 'powerDissipation',
+      label: 'Power Dissipation',
+      shortLabel: 'Power Diss.',
+      unit: 'W',
+      isCurrency: false,
+      financeOnly: false,
+      descKey: 'descPowerDiss',
+      lineKey: 'linePowerDiss',
+      color: '#e11d48',
+      rgb: [225, 29, 72],
+      softColor: '#fecdd3',
+      softRgb: [254, 205, 211],
+      lineColor: '#4f46e5',
+      lineRgb: [79, 70, 229],
+    },
+  ];
+
+  function canAccessParetoFinance() {
+    return typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+  }
+
+  function getAvailableParetoMetrics() {
+    const allowFin = canAccessParetoFinance();
+    return PARETO_METRICS.filter(m => !m.financeOnly || allowFin);
+  }
+
+  function resolveParetoMetric(metricKey) {
+    return PARETO_METRICS.find(m => m.key === metricKey) || null;
+  }
+
+  function extractLeafContributors(workDoc, rollups, metric) {
+    const items = (workDoc && Array.isArray(workDoc.items)) ? workDoc.items : [];
+    if (!items.length) return [];
+    const itemById = new Map(items.map(it => [it.id, it]));
+    const childrenByParent = new Map();
+    items.forEach(it => {
+      const pid = (it.parentId && itemById.has(it.parentId) && it.parentId !== it.id) ? it.parentId : null;
+      if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+      childrenByParent.get(pid).push(it);
+    });
+
+    const entries = [];
+    const visited = new Set();
+    function walk(item, ancQty, stack) {
+      if (stack.has(item.id)) return;
+      visited.add(item.id);
+      stack.add(item.id);
+      const q = effQty(item);
+      const cumQty = ancQty * q;
+      const sub = rollups.byId.get(item.id);
+      const hasDesc = Boolean(sub && sub[metric.descKey] !== null);
+      if (hasDesc) {
+        (childrenByParent.get(item.id) || []).forEach(child => walk(child, cumQty, stack));
+      } else if (isNum(item[metric.key]) && item[metric.key] > 0) {
+        const val = round4(item[metric.key] * cumQty);
+        if (val > 0) {
+          const code = String(item.code || '').trim();
+          const name = String(item.name || '').trim();
+          const acronym = String(item.acronym || '').trim();
+          entries.push({
+            id: item.id,
+            code,
+            name,
+            acronym,
+            deptId: item.deptId || '',
+            label: code ? `${code} ${name}` : name,
+            shortLabel: acronym && code ? `${code} · ${acronym}` : (code ? `${code} ${name}` : name),
+            value: val,
+            unitValue: item[metric.key],
+            effectiveQty: cumQty,
+            itemCount: 1,
+            isOthers: false,
+          });
+        }
+      }
+      stack.delete(item.id);
+    }
+
+    (childrenByParent.get(null) || []).forEach(root => walk(root, 1, new Set()));
+    items.forEach(it => { if (!visited.has(it.id)) walk(it, 1, new Set()); });
+    return entries;
+  }
+
+  /* options?: { groupBy?: 'leaves'|'roots'|'dept', matchedIds?: Set|Array|null, maxBars?: number, db?: object } */
+  function computeParetoData(doc, metricKey, options) {
+    const opts = options || {};
+    const metricDef = resolveParetoMetric(metricKey) || PARETO_METRICS[1];
+    const db = opts.db || null;
+    const currency = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
+    const metric = {
+      ...metricDef,
+      currency,
+      unit: metricDef.isCurrency ? currency : metricDef.unit,
+    };
+    const groupBy = ['leaves', 'roots', 'dept'].includes(opts.groupBy) ? opts.groupBy : 'leaves';
+    const maxBars = typeof opts.maxBars === 'number' && opts.maxBars >= 0 ? Math.floor(opts.maxBars) : 12;
+    const isFiltered = Boolean(opts.matchedIds);
+
+    const empty = (restricted) => ({
+      metric,
+      groupBy,
+      isFiltered,
+      restricted: Boolean(restricted),
+      total: 0,
+      contributorCount: 0,
+      vitalCount: 0,
+      vitalPct: 0,
+      vitalShareOfItemsPct: 0,
+      bars: [],
+      allEntries: [],
+    });
+
+    if (metric.financeOnly && !canAccessParetoFinance()) return empty(true);
+    if (!doc || !Array.isArray(doc.items) || !doc.items.length) return empty(false);
+
+    const workDoc = isFiltered ? buildFilteredSubDoc(doc, opts.matchedIds) : doc;
+    if (!workDoc.items.length) return empty(false);
+    const rollups = computeSwpRollups(workDoc);
+    const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
+
+    let rawEntries = [];
+    if (groupBy === 'roots') {
+      const itemById = new Map(workDoc.items.map(it => [it.id, it]));
+      const roots = workDoc.items.filter(it => !(it.parentId && itemById.has(it.parentId) && it.parentId !== it.id));
+      const leafEntries = extractLeafContributors(workDoc, rollups, metric);
+      const rootOf = (id) => {
+        let cur = itemById.get(id);
+        let guard = 0;
+        while (cur && cur.parentId && itemById.has(cur.parentId) && cur.parentId !== cur.id && guard < 200) {
+          cur = itemById.get(cur.parentId);
+          guard++;
+        }
+        return cur ? cur.id : id;
+      };
+      const countByRoot = new Map();
+      leafEntries.forEach(e => {
+        const rid = rootOf(e.id);
+        countByRoot.set(rid, (countByRoot.get(rid) || 0) + 1);
+      });
+      roots.forEach(root => {
+        const sub = rollups.byId.get(root.id);
+        const val = sub
+          ? (sub[metric.descKey] !== null ? sub[metric.descKey] : (sub[metric.lineKey] !== null ? sub[metric.lineKey] : 0))
+          : 0;
+        if (val > 0) {
+          const code = String(root.code || '').trim();
+          const name = String(root.name || '').trim();
+          const acronym = String(root.acronym || '').trim();
+          const dept = root.deptId ? deptMap.get(root.deptId) : null;
+          rawEntries.push({
+            id: root.id,
+            code,
+            name,
+            acronym,
+            deptId: root.deptId || '',
+            deptColor: dept && dept.color ? dept.color : '',
+            label: code ? `${code} ${name}` : name,
+            shortLabel: acronym && code ? `${code} · ${acronym}` : (code ? `${code} ${name}` : name),
+            value: round4(val),
+            unitValue: null,
+            effectiveQty: sub ? sub.effQty : 1,
+            itemCount: countByRoot.get(root.id) || 1,
+            isOthers: false,
+          });
+        }
+      });
+    } else if (groupBy === 'dept') {
+      const leafEntries = extractLeafContributors(workDoc, rollups, metric);
+      const buckets = new Map();
+      leafEntries.forEach(e => {
+        const key = e.deptId && deptMap.has(e.deptId) ? e.deptId : '__unassigned__';
+        if (!buckets.has(key)) {
+          const dept = key !== '__unassigned__' ? deptMap.get(key) : null;
+          buckets.set(key, {
+            id: key,
+            code: dept ? String(dept.code || '').trim() : '',
+            name: dept ? String(dept.name || '').trim() : 'Unassigned',
+            acronym: '',
+            deptId: dept ? dept.id : '',
+            deptColor: dept && dept.color ? dept.color : '',
+            label: dept ? `[${dept.code}] ${dept.name}` : 'Unassigned',
+            shortLabel: dept ? `[${dept.code}] ${dept.name}` : 'Unassigned',
+            value: 0,
+            unitValue: null,
+            effectiveQty: null,
+            itemCount: 0,
+            isOthers: false,
+          });
+        }
+        const b = buckets.get(key);
+        b.value = round4(b.value + e.value);
+        b.itemCount += 1;
+      });
+      rawEntries = Array.from(buckets.values()).filter(b => b.value > 0);
+    } else {
+      rawEntries = extractLeafContributors(workDoc, rollups, metric).map(e => {
+        const dept = e.deptId ? deptMap.get(e.deptId) : null;
+        return { ...e, deptColor: dept && dept.color ? dept.color : '' };
+      });
+    }
+
+    if (!rawEntries.length) return empty(false);
+
+    rawEntries.sort((a, b) => (b.value - a.value) || String(a.code || a.label).localeCompare(String(b.code || b.label), undefined, { numeric: true }));
+
+    const total = round4(rawEntries.reduce((sum, e) => sum + e.value, 0));
+    if (total <= 0) return empty(false);
+
+    let cumVal = 0;
+    let prevCumPct = 0;
+    let vitalCount = 0;
+    let vitalPct = 0;
+
+    const allEntries = rawEntries.map((e, idx) => {
+      cumVal = round4(cumVal + e.value);
+      const pct = (e.value / total) * 100;
+      const cumPct = idx === rawEntries.length - 1 ? 100 : Math.min(100, (cumVal / total) * 100);
+      const vitalFew = prevCumPct < 80;
+      if (vitalFew) {
+        vitalCount = idx + 1;
+        vitalPct = cumPct;
+      }
+      prevCumPct = cumPct;
+      return {
+        ...e,
+        rank: idx + 1,
+        pct: Math.round(pct * 10) / 10,
+        cumValue: cumVal,
+        cumPct: Math.round(cumPct * 10) / 10,
+        vitalFew,
+      };
+    });
+
+    let bars = allEntries;
+    if (maxBars > 1 && allEntries.length > maxBars) {
+      const keepCount = maxBars - 1;
+      const head = allEntries.slice(0, keepCount);
+      const tail = allEntries.slice(keepCount);
+      const tailValue = round4(tail.reduce((s, e) => s + e.value, 0));
+      const tailItemCount = tail.reduce((s, e) => s + (e.itemCount || 1), 0);
+      const lastHeadCum = head.length ? head[head.length - 1].cumValue : 0;
+      const tailPct = Math.round(((tailValue / total) * 100) * 10) / 10;
+      bars = [
+        ...head,
+        {
+          id: '__others__',
+          code: '',
+          name: `Others (${tail.length} ${groupBy === 'dept' ? 'depts' : (groupBy === 'roots' ? 'subsystems' : 'items')})`,
+          acronym: '',
+          deptId: '',
+          deptColor: '',
+          label: `Others (${tail.length})`,
+          shortLabel: `Others (${tail.length})`,
+          value: tailValue,
+          unitValue: null,
+          effectiveQty: null,
+          itemCount: tailItemCount,
+          otherCount: tail.length,
+          rank: keepCount + 1,
+          pct: tailPct,
+          cumValue: round4(lastHeadCum + tailValue),
+          cumPct: 100,
+          vitalFew: false,
+          isOthers: true,
+        },
+      ];
+    }
+
+    return {
+      metric,
+      groupBy,
+      isFiltered,
+      restricted: false,
+      total,
+      contributorCount: allEntries.length,
+      vitalCount,
+      vitalPct: Math.round(vitalPct * 10) / 10,
+      vitalShareOfItemsPct: Math.round((vitalCount / allEntries.length) * 100),
+      bars,
+      allEntries,
+    };
+  }
+
+  function getParetoMetricCounts(doc, options) {
+    const opts = options || {};
+    const counts = {};
+    getAvailableParetoMetrics().forEach(m => {
+      const res = computeParetoData(doc, m.key, {
+        groupBy: opts.groupBy || 'leaves',
+        matchedIds: opts.matchedIds || null,
+        maxBars: 0,
+        db: opts.db || null,
+      });
+      counts[m.key] = res.contributorCount;
+    });
+    return counts;
   }
 
   P.MATURITY_OPTIONS = MATURITY_OPTIONS;
   P.MATURITY_RANK = MATURITY_RANK;
+  P.PARETO_METRICS = PARETO_METRICS;
   P.tree = {
     getChildren, isDescendant, suggestNextCode, reorderItem, renumberTree,
     flattenTreeRows, computeMaturitySummary, getFilteredTreeRows, computeSwpRollups, computeFilteredRollups,
+    getAvailableParetoMetrics, computeParetoData, getParetoMetricCounts,
   };
 })();
