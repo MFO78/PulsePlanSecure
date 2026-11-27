@@ -1,8 +1,8 @@
 /* Isolated UX Enhancements:
  * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
- * 3. Log Notes in ChangeLog + Notes category in Evolution & Snapshot Comparison
- * 4. Bidirectional Weeks/Months & Horizon controls in Health & Evolution tab (hidden on mobile)
+ * 3. Log Notes in ChangeLog + Show/Hide Notes toggle in Evolution & Snapshot Comparison
+ * 4. Bidirectional Weeks/Months, Horizon & Project controls in Health & Evolution tab (synced with Roadmap)
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
  * 6. EUPL-1.2 User Licence badge & dialog alignment
  */
@@ -144,7 +144,7 @@
     });
   }
 
-  /* ---------- 3. Log Notes in ChangeLog + Notes Category in Snapshot Comparison ---------- */
+  /* ---------- 3. Log Notes in ChangeLog + Show/Hide Notes in Snapshot Comparison ---------- */
   if (typeof setCellProjectComment === 'function') {
     const nativeSetComment = setCellProjectComment;
     setCellProjectComment = function (deptId, projId, periodKey, text, db = getDb()) {
@@ -167,54 +167,100 @@
     };
   }
 
+  function syncSnapshotNotesUI(container, notesBtn) {
+    const show = Boolean(typeof ui !== 'undefined' && ui.showSnapshotNotes);
+    if (notesBtn) {
+      notesBtn.setAttribute('aria-pressed', String(show));
+      notesBtn.textContent = show ? 'Hide Notes' : 'Show Notes';
+      notesBtn.classList.toggle('bg-indigo-600', show);
+      notesBtn.classList.toggle('text-white', show);
+    }
+    if (show && container) {
+      renderSnapshotNotesDiff(container, notesBtn);
+    } else {
+      document.getElementById('ppNotesDiffCard')?.remove();
+    }
+  }
+
   function enhanceSnapshotNotesTab() {
     const healthTab = document.getElementById('tab-health');
     if (!healthTab) return;
     const buttons = Array.from(healthTab.querySelectorAll('button'));
     const capBtn = buttons.find(b => String(b.textContent || '').trim().toLowerCase() === 'capacity');
-    if (!capBtn || !capBtn.parentElement || document.getElementById('ppCompareNotesBtn')) return;
+    if (!capBtn || !capBtn.parentElement) return;
 
-    const notesBtn = document.createElement('button');
-    notesBtn.id = 'ppCompareNotesBtn';
-    notesBtn.type = 'button';
-    notesBtn.className = capBtn.className.replace(/bg-indigo-\d+|text-white/g, '');
-    notesBtn.textContent = 'Notes';
-    notesBtn.addEventListener('click', () => {
-      renderSnapshotNotesDiff(capBtn.closest('section, div.rounded-2xl') || healthTab);
-    });
-    capBtn.parentElement.appendChild(notesBtn);
+    const container = capBtn.closest('section, div.rounded-2xl') || healthTab;
+    let notesBtn = document.getElementById('ppCompareNotesBtn');
+    if (!notesBtn) {
+      notesBtn = document.createElement('button');
+      notesBtn.id = 'ppCompareNotesBtn';
+      notesBtn.type = 'button';
+      notesBtn.className = capBtn.className.replace(/bg-indigo-\d+|text-white/g, '');
+      notesBtn.addEventListener('click', () => {
+        if (typeof ui !== 'undefined') ui.showSnapshotNotes = !ui.showSnapshotNotes;
+        syncSnapshotNotesUI(container, notesBtn);
+      });
+      capBtn.parentElement.appendChild(notesBtn);
+    }
+    syncSnapshotNotesUI(container, notesBtn);
   }
 
-  function renderSnapshotNotesDiff(container) {
+  function renderSnapshotNotesDiff(container, notesBtn) {
     document.getElementById('ppNotesDiffCard')?.remove();
     const db = getDb();
     const snapId = typeof ui !== 'undefined' ? ui.compareSnapshotId : '';
+    const targetId = typeof ui !== 'undefined' ? (ui.compareTargetId || '__CURRENT__') : '__CURRENT__';
     const baseSnap = (db.snapshots || []).find(s => s.id === snapId) || (db.snapshots || [])[0];
+    const targetSnap = targetId && targetId !== '__CURRENT__'
+      ? (db.snapshots || []).find(s => s.id === targetId)
+      : null;
     const baseComments = (baseSnap && baseSnap.data && baseSnap.data.comments) || {};
-    const curComments = db.comments || {};
+    const curComments = targetSnap ? ((targetSnap.data && targetSnap.data.comments) || {}) : (db.comments || {});
+    const deptMap = new Map((db.departments || []).map(d => [d.id, d.name]));
+    const projMap = new Map((db.projects || []).map(p => [p.id, p.code ? `[${p.code}] ${p.name}` : p.name]));
+
     const allKeys = Array.from(new Set([...Object.keys(baseComments), ...Object.keys(curComments)])).sort();
-    const diffs = allKeys.filter(k => String(baseComments[k] || '').trim() !== String(curComments[k] || '').trim());
+    const diffs = allKeys.filter(k => {
+      const [dId, pId] = k.split('::');
+      if (typeof ui !== 'undefined' && ui.filterDept && ui.filterDept !== 'all' && dId !== ui.filterDept) return false;
+      if (typeof ui !== 'undefined' && ui.filterProj && ui.filterProj !== 'all' && pId !== ui.filterProj) return false;
+      return String(baseComments[k] || '').trim() !== String(curComments[k] || '').trim();
+    });
+
+    const formatKeyLabel = (k) => {
+      const [dId, pId, pk] = k.split('::');
+      if (!pId || !pk) return k;
+      return `${deptMap.get(dId) || dId} -> ${projMap.get(pId) || pId} (${pk})`;
+    };
 
     const card = document.createElement('div');
     card.id = 'ppNotesDiffCard';
     card.className = 'pp-notes-diff-card';
     card.innerHTML = `
-      <div style="font-weight:800;margin-bottom:.5rem">Notes Comparison (${diffs.length} change${diffs.length === 1 ? '' : 's'})</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.5rem">
+        <div style="font-weight:800">Notes Comparison (${diffs.length} change${diffs.length === 1 ? '' : 's'})</div>
+        <button type="button" id="ppHideNotesDiffBtn" class="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold cursor-pointer">Hide Notes</button>
+      </div>
       ${diffs.length ? diffs.map(k => `
         <div class="pp-notes-diff-row">
-          <div><strong>${esc(k)}</strong></div>
-          <div style="color:#64748b">${esc(baseComments[k] || '—')}</div>
+          <div><strong>${esc(formatKeyLabel(k))}</strong></div>
+          <div style="color:#64748b">${esc(baseComments[k] || '(none)')}</div>
           <div style="color:#0f172a">${esc(curComments[k] || '(removed)')}</div>
-        </div>`).join('') : '<div style="color:#64748b">No note differences between baseline snapshot and current plan.</div>'}
+        </div>`).join('') : '<div style="color:#64748b">No note differences between baseline and target.</div>'}
     `;
+    card.querySelector('#ppHideNotesDiffBtn')?.addEventListener('click', () => {
+      if (typeof ui !== 'undefined') ui.showSnapshotNotes = false;
+      syncSnapshotNotesUI(container, notesBtn || document.getElementById('ppCompareNotesBtn'));
+    });
     container.appendChild(card);
   }
 
-  /* ---------- 4. Bidirectional Weeks/Months & Horizon Bar in Health & Evolution ---------- */
+  /* ---------- 4. Bidirectional Weeks/Months, Horizon & Project Bar in Health & Evolution ---------- */
   function renderHealthControlBar() {
     const healthTab = document.getElementById('tab-health');
     if (!healthTab || typeof ui === 'undefined') return;
     injectStyles();
+    const db = getDb();
     let bar = document.getElementById('ppHealthCtrlBar');
     if (!bar) {
       bar = document.createElement('div');
@@ -224,9 +270,15 @@
     }
     const horizons = [1, 2, 3, 4, 6, 12, 18, 24];
     const curHorizon = Number(ui.horizon) || 4;
+    const sortedProjs = (typeof getSortedProjects === 'function' ? getSortedProjects(db) : (db.projects || []))
+      .filter(p => !p.archived || ui.filterProj === p.id);
+    const fmtProj = (p) => (typeof formatProjectOptionLabel === 'function'
+      ? formatProjectOptionLabel(p)
+      : (p.code ? `[${p.code}] ${p.name}` : p.name));
+
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
-        <strong style="font-size:12px">Timeframe (synced with Roadmap):</strong>
+        <strong style="font-size:12px">Synced with Roadmap:</strong>
         <div class="pp-health-btn-grp" role="group" aria-label="Time unit">
           <button type="button" class="pp-health-seg ${ui.timeUnit === 'month' ? 'active' : ''}" data-pp-tu="month">Months</button>
           <button type="button" class="pp-health-seg ${ui.timeUnit === 'week' ? 'active' : ''}" data-pp-tu="week">Weeks</button>
@@ -235,6 +287,13 @@
           <span>Periods:</span>
           <select id="ppHealthHorizonSel" class="pp-health-sel">
             ${horizons.map(h => `<option value="${h}" ${h === curHorizon ? 'selected' : ''}>${h} ${ui.timeUnit === 'week' ? 'weeks' : 'months'}</option>`).join('')}
+          </select>
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:600">
+          <span>Project:</span>
+          <select id="ppHealthProjectSel" class="pp-health-sel" aria-label="Filter Health and Evolution by project">
+            <option value="all" ${(!ui.filterProj || ui.filterProj === 'all') ? 'selected' : ''}>All Projects (${sortedProjs.length})</option>
+            ${sortedProjs.map(p => `<option value="${esc(p.id)}" ${ui.filterProj === p.id ? 'selected' : ''}>${esc(fmtProj(p))}</option>`).join('')}
           </select>
         </label>
       </div>`;
@@ -248,6 +307,11 @@
 
     bar.querySelector('#ppHealthHorizonSel')?.addEventListener('change', (ev) => {
       ui.horizon = parseInt(ev.target.value, 10) || 4;
+      if (typeof renderAll === 'function') renderAll();
+    });
+
+    bar.querySelector('#ppHealthProjectSel')?.addEventListener('change', (ev) => {
+      ui.filterProj = ev.target.value || 'all';
       if (typeof renderAll === 'function') renderAll();
     });
   }

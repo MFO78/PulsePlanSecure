@@ -92,8 +92,10 @@
       let hasOverride = false;
       weeks.forEach(wk => {
         const key = `${deptId}::${wk}`;
-        if (capOverrides && capOverrides[key] !== undefined) {
-          sum += Number(capOverrides[key]);
+        const raw = capOverrides ? capOverrides[key] : undefined;
+        const num = Number(raw);
+        if (raw !== undefined && raw !== null && raw !== '' && !isNaN(num) && Math.abs(num - base) > 0.0005) {
+          sum += num;
           hasOverride = true;
         } else {
           sum += base;
@@ -204,4 +206,3 @@
       }
       return count;
     }
-
