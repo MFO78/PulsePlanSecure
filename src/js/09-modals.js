@@ -1856,6 +1856,8 @@
         pushUndoState(`Delete project [${p.code}]`);
         db.projects = db.projects.filter(x => x.id !== id);
         db.milestones = db.milestones.filter(m => m.projectId !== id);
+        if (Array.isArray(db.externalCosts)) db.externalCosts = db.externalCosts.filter(c => c && c.projectId !== id);
+        if (db.settings && Array.isArray(db.settings.externalCosts)) db.settings.externalCosts = db.settings.externalCosts.filter(c => c && c.projectId !== id);
         Object.keys(db.allocations || {}).forEach(k => { if (k.split('::')[1] === id) delete db.allocations[k]; });
         Object.keys(db.comments || {}).forEach(k => { if (k.split('::')[1] === id) delete db.comments[k]; });
         if (ui.filterProj === id) ui.filterProj = 'all';

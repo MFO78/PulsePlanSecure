@@ -50,6 +50,7 @@
     if (n.partNumber) lines.push(`Part Number: ${n.partNumber}`);
     if (n.procurementStatus) lines.push(`Procurement: ${n.procurementStatus}`);
     if (isNum(n.leadTime)) lines.push(`Lead Time: ${fmtNum(n.leadTime)} wks`);
+    if ((typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance()) && isNum(n.unitCost)) lines.push(`Unit Cost: ${fmtNum(n.unitCost)}`);
     if (n.componentAlt) lines.push(`Alternative: ${n.componentAlt}`);
     if (isNum(n.qty) && n.qty > 1) lines.push(`Quantity: ${n.qty}`);
     if (isNum(n.mass)) lines.push(`Mass: ${fmtNum(n.mass)} kg`);
@@ -171,6 +172,7 @@
     { key: 'partNumber', label: 'Part No.', group: 'proc', w: 80, has: it => Boolean(it.partNumber) },
     { key: 'procurementStatus', label: 'Proc. Status', group: 'proc', w: 66, has: it => Boolean(it.procurementStatus) },
     { key: 'leadTime', label: 'Lead (wks)', group: 'proc', w: 52, align: 'right', has: it => isNum(it.leadTime) },
+    { key: 'unitCost', label: 'Unit Cost', group: 'proc', w: 54, align: 'right', financeOnly: true, has: it => (typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance()) && isNum(it.unitCost) },
     { key: 'componentAlt', label: 'Alternative', group: 'proc', w: 80, has: it => Boolean(it.componentAlt) },
     { key: 'qty', label: 'Qty', group: 'swp', w: 30, align: 'right', has: it => isNum(it.qty) && it.qty > 1 },
     { key: 'mass', label: 'Mass (kg)', group: 'swp', w: 54, align: 'right', has: it => isNum(it.mass) },
@@ -188,6 +190,7 @@
   /* options?: { selectedFieldKeys?: Set|Array, visibleOptKeys?: Set|Array, rowIds?: Set|Array, matchedIds?: Set|Array, todayIso?: string } */
   function buildReportModel(doc, project, db, userName, dateStr, options) {
     const opts = options || {};
+    const allowFin = typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
     const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
     const msMap = new Map(((db && db.milestones) || []).map(m => [m.id, m]));
     const fullRollups = P.tree && typeof P.tree.computeSwpRollups === 'function' ? P.tree.computeSwpRollups(doc) : null;
@@ -210,10 +213,11 @@
     const visOptSet = !selFieldSet && opts.visibleOptKeys ? new Set(opts.visibleOptKeys) : null;
     let activeCols;
     if (selFieldSet) {
-      activeCols = REPORT_COLS.filter(c => selFieldSet.has(c.key));
+      activeCols = REPORT_COLS.filter(c => selFieldSet.has(c.key) && (!c.financeOnly || allowFin));
       if (!activeCols.length) activeCols = REPORT_COLS.filter(c => c.key === 'code' || c.key === 'name');
     } else {
       activeCols = REPORT_COLS.filter(c => {
+        if (c.financeOnly && !allowFin) return false;
         if (c.always) return true;
         if (visOptSet && !visOptSet.has(c.key)) return false;
         return flat.some(({ item }) => c.has(item));
@@ -276,6 +280,14 @@
             }
             return pdfSafe(fmtNum(item.leadTime));
           }
+          case 'unitCost': {
+            if (!allowFin) return '-';
+            const m = metricCell(item.unitCost, sub && sub.descUnitCost, sub && sub.descUnitCostUnit, Boolean(sub && sub.unitCostOverlap), Boolean(sub && sub.unitCostOverBudget), effQ);
+            if (m.isRollup) rollupCols.add(idx);
+            if (m.isWarn) warnCols.add(idx);
+            if (m.isErr) errCols.add(idx);
+            return m.text;
+          }
           case 'componentAlt': return item.componentAlt ? pdfSafe(item.componentAlt) : '-';
           case 'qty': return isNum(item.qty) && item.qty > 1 ? String(item.qty) : (isNum(item.qty) ? '1' : '-');
           case 'mass': {
@@ -325,12 +337,13 @@
       };
     });
 
-    /* Append a single unified TOTAL (or FILTERED) row directly at the bottom when numeric SWaP / LRU / Spare columns are present. */
+    /* Append a single unified TOTAL (or FILTERED) row directly at the bottom when numeric SWaP / Cost / LRU / Spare columns are present. */
     const hasTotalCols = Boolean(
       totalRollups && (
         (colIdx.mass !== undefined && totalRollups.totalMass !== null)
         || (colIdx.powerConsumption !== undefined && totalRollups.totalPowerConsumption !== null)
         || (colIdx.powerDissipation !== undefined && totalRollups.totalPowerDissipation !== null)
+        || (allowFin && colIdx.unitCost !== undefined && totalRollups.totalUnitCost !== null)
         || (colIdx.lru !== undefined && totalRollups.lruCount > 0)
         || (colIdx.spareAvailable !== undefined && totalRollups.spareAvailCount > 0)
         || (colIdx.spareToDeliver !== undefined && totalRollups.spareDelivCount > 0)
@@ -342,7 +355,7 @@
     let totalRow = null;
     if (hasTotalCols && rows.length) {
       const totalLabel = isFiltered ? 'FILTERED' : 'TOTAL';
-      const metricKeySet = new Set(['mass', 'powerConsumption', 'powerDissipation', 'lru', 'spareAvailable', 'spareToDeliver']);
+      const metricKeySet = new Set(['mass', 'powerConsumption', 'powerDissipation', 'unitCost', 'lru', 'spareAvailable', 'spareToDeliver']);
       const fallbackLabelIdx = colIdx.code === undefined ? activeCols.findIndex(c => !metricKeySet.has(c.key)) : -1;
       totalRow = {
         depth: 0, maturity: '', deptColor: null, isTotal: true, isContext: false,
@@ -354,6 +367,7 @@
           if (col.key === 'mass') return totalRollups.totalMass !== null ? pdfSafe(fmtNum(totalRollups.totalMass)) : '-';
           if (col.key === 'powerConsumption') return totalRollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(totalRollups.totalPowerConsumption)) : '-';
           if (col.key === 'powerDissipation') return totalRollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(totalRollups.totalPowerDissipation)) : '-';
+          if (col.key === 'unitCost') return (allowFin && totalRollups.totalUnitCost !== null) ? pdfSafe(fmtNum(totalRollups.totalUnitCost)) : '-';
           if (col.key === 'lru') return totalRollups.lruCount ? `${totalRollups.lruCount} Yes` : '-';
           if (col.key === 'spareAvailable') return totalRollups.spareAvailCount ? `${totalRollups.spareAvailCount} Yes` : '-';
           if (col.key === 'spareToDeliver') return totalRollups.spareDelivCount ? `${totalRollups.spareDelivCount} Yes` : '-';

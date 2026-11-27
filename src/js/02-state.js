@@ -162,6 +162,7 @@
         changeLog: [],
         dumpHistory: [],       // [{ id, timestamp, user, format, filename, revision, sizeBytes, summary }]
         peopleDirectory: [],   // [{ id, name, role }]
+        externalCosts: [],     // [{ id, projectId, label, amount, period }]
         accessControl: {       // Multi-user RBAC & wrapped-key login metadata
           version: 1,
           adminName: 'Administrator',
@@ -750,6 +751,7 @@
               roleTitle: String(u.roleTitle || '').trim(),
               enabled: u.enabled !== false,
               isAdmin: Boolean(u.isAdmin),
+              defaultDeptRoadmapView: Boolean(u.defaultDeptRoadmapView),
               mustChangePassword: Boolean(u.mustChangePassword),
               needsAdminKeyReset: Boolean(u.needsAdminKeyReset),
               permissions: {
@@ -761,6 +763,25 @@
             };
           }),
       };
+
+      const topExt = Array.isArray(src.externalCosts) ? src.externalCosts : [];
+      const setExt = (src.settings && Array.isArray(src.settings.externalCosts)) ? src.settings.externalCosts : [];
+      const rawExt = topExt.length > 0 ? topExt : setExt;
+      const seenExtIds = new Set();
+      db.externalCosts = rawExt
+        .filter(c => c && typeof c === 'object' && c.projectId && String(c.label || '').trim() && Number.isFinite(Number(c.amount)) && Number(c.amount) > 0)
+        .map(c => {
+          let id = String(c.id || '').trim();
+          if (!id || seenExtIds.has(id)) id = uid('ext');
+          seenExtIds.add(id);
+          return {
+            id,
+            projectId: String(c.projectId),
+            label: String(c.label).trim().slice(0, 120),
+            amount: Math.round(Number(c.amount) * 100) / 100,
+            period: String(c.period || '').trim(),
+          };
+        });
 
       return db;
     }
@@ -831,6 +852,10 @@
           orphansRemoved++;
         }
       });
+      const extArr = Array.isArray(db.externalCosts) ? db.externalCosts : [];
+      const keptExt = extArr.filter(c => c && projIds.has(c.projectId));
+      const orphanExtCount = extArr.length - keptExt.length;
+      if (orphanExtCount > 0) orphansRemoved += orphanExtCount;
 
       const retiredArchive = (retiredLog.length || retiredSnaps.length || retiredDumps.length)
         ? {
@@ -849,6 +874,7 @@
         allocKeysToRemove.forEach(k => delete db.allocations[k]);
         capKeysToRemove.forEach(k => delete db.capacityOverrides[k]);
         commentKeysToRemove.forEach(k => delete db.comments[k]);
+        if (orphanExtCount > 0) db.externalCosts = keptExt;
 
         const validSnapIds = new Set((db.snapshots || []).map(s => s.id));
         if (ui.compareSnapshotId && !validSnapIds.has(ui.compareSnapshotId)) ui.compareSnapshotId = '';
@@ -949,8 +975,10 @@
         ui.startMonth = getWeekOwningMonth(earliestWk);
         ui.mobileSelectedPeriod = ui.timeUnit === 'month' ? ui.startMonth : ui.startWeek;
         persistUIPrefs();
+        if (typeof globalThis !== 'undefined') globalThis.__ppHorizonShiftedByLoad = true;
         return true;
       }
+      if (typeof globalThis !== 'undefined') globalThis.__ppHorizonShiftedByLoad = false;
       return false;
     }
 
@@ -1416,6 +1444,7 @@
         capacityOverrides: db.capacityOverrides || {},
         comments: db.comments || {},
         milestones: db.milestones || [],
+        externalCosts: db.externalCosts || [],
       });
     }
 
@@ -1427,6 +1456,7 @@
       db.capacityOverrides = parsed.capacityOverrides || {};
       db.comments = parsed.comments || {};
       db.milestones = parsed.milestones || [];
+      db.externalCosts = Array.isArray(parsed.externalCosts) ? parsed.externalCosts : [];
     }
 
     function pushUndoState(label = 'Change') {

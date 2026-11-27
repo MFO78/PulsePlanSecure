@@ -134,8 +134,9 @@
 
     const headings = Array.from(healthTab.querySelectorAll('h2, h3, div'));
     const portHeading = headings.find(h => String(h.textContent || '').includes('Project Portfolio'));
-    const container = portHeading ? (portHeading.closest('section, div.rounded-2xl, div.rounded-xl') || portHeading.parentElement) : healthTab;
-    if (!container) return;
+    if (!portHeading) return;
+    const container = portHeading.closest('section, div.rounded-2xl, div.rounded-xl') || portHeading.parentElement;
+    if (!container || container === healthTab) return;
 
     container.querySelectorAll('tbody tr').forEach(tr => {
       const txt = String(tr.textContent || '');
@@ -171,7 +172,12 @@
   }
 
   function syncSnapshotNotesUI(container, notesBtn) {
-    const show = Boolean(typeof ui !== 'undefined' && ui.showSnapshotNotes);
+    const hasValidPair = Boolean(
+      typeof ui !== 'undefined' &&
+      ui.compareSnapshotId &&
+      ui.compareSnapshotId !== (ui.compareTargetId || '__CURRENT__')
+    );
+    const show = hasValidPair && Boolean(typeof ui !== 'undefined' && ui.showSnapshotNotes);
     if (notesBtn) {
       notesBtn.setAttribute('aria-pressed', String(show));
       notesBtn.textContent = show ? 'Hide Notes' : 'Show Notes';
@@ -188,22 +194,22 @@
   function enhanceSnapshotNotesTab() {
     const healthTab = document.getElementById('tab-health');
     if (!healthTab) return;
-    const buttons = Array.from(healthTab.querySelectorAll('button'));
-    const capBtn = buttons.find(b => String(b.textContent || '').trim().toLowerCase() === 'capacity');
+    const capBtn = document.getElementById('snapTab-capacity') || Array.from(healthTab.querySelectorAll('button')).find(b => /^capacity\b/i.test(String(b.textContent || '').trim()));
     if (!capBtn || !capBtn.parentElement) return;
 
-    const container = capBtn.closest('section, div.rounded-2xl') || healthTab;
+    const tabsBox = document.getElementById('snapshotCompareTabs') || capBtn.parentElement;
+    const container = tabsBox.closest('section, div.rounded-2xl') || tabsBox.parentElement || healthTab;
     let notesBtn = document.getElementById('ppCompareNotesBtn');
     if (!notesBtn) {
       notesBtn = document.createElement('button');
       notesBtn.id = 'ppCompareNotesBtn';
       notesBtn.type = 'button';
-      notesBtn.className = capBtn.className.replace(/bg-indigo-\d+|text-white/g, '');
+      notesBtn.className = 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition whitespace-nowrap cursor-pointer';
       notesBtn.addEventListener('click', () => {
         if (typeof ui !== 'undefined') ui.showSnapshotNotes = !ui.showSnapshotNotes;
         syncSnapshotNotesUI(container, notesBtn);
       });
-      capBtn.parentElement.appendChild(notesBtn);
+      tabsBox.appendChild(notesBtn);
     }
     syncSnapshotNotesUI(container, notesBtn);
   }
@@ -213,10 +219,13 @@
     const db = getDb();
     const snapId = typeof ui !== 'undefined' ? ui.compareSnapshotId : '';
     const targetId = typeof ui !== 'undefined' ? (ui.compareTargetId || '__CURRENT__') : '__CURRENT__';
-    const baseSnap = (db.snapshots || []).find(s => s.id === snapId) || (db.snapshots || [])[0];
+    if (!snapId || snapId === targetId) return;
+    const baseSnap = (db.snapshots || []).find(s => s.id === snapId);
+    if (!baseSnap) return;
     const targetSnap = targetId && targetId !== '__CURRENT__'
       ? (db.snapshots || []).find(s => s.id === targetId)
       : null;
+    if (targetId !== '__CURRENT__' && !targetSnap) return;
     const baseComments = (baseSnap && baseSnap.data && baseSnap.data.comments) || {};
     const curComments = targetSnap ? ((targetSnap.data && targetSnap.data.comments) || {}) : (db.comments || {});
     const deptMap = new Map((db.departments || []).map(d => [d.id, d.name]));
@@ -279,11 +288,13 @@
     if (document.__ppHealthArrowShortcutsWired || typeof document.addEventListener !== 'function') return;
     document.__ppHealthArrowShortcutsWired = true;
     document.addEventListener('keydown', (ev) => {
+      if (ev.defaultPrevented) return;
       if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
       if (typeof ui === 'undefined' || ui.activeTab !== 'health') return;
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       const t = ev.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (t && typeof t.getAttribute === 'function' && t.getAttribute('role') === 'tab' && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) return;
       const overlay = document.getElementById('modalOverlay');
       if (overlay && !overlay.classList.contains('hidden')) return;
       if (document.querySelector('dialog[open]')) return;
@@ -447,6 +458,8 @@
         db.milestones = [];
         db.snapshots = [];
         db.changeLog = [];
+        db.externalCosts = [];
+        if (db.settings && 'externalCosts' in db.settings) delete db.settings.externalCosts;
         if (typeof recordChange === 'function') recordChange('Plan', 'Cleared roadmap plan, notes, milestones & snapshots (kept Setup & Data)');
         else if (typeof touchDBAndSave === 'function') touchDBAndSave();
         if (typeof renderAll === 'function') renderAll();
@@ -515,6 +528,15 @@
     openLicenceDialog = function (...args) {
       applyEuplLicenceBranding();
       return nativeOpenLicence.apply(this, args);
+    };
+  }
+
+  if (typeof renderSnapshotComparison === 'function') {
+    const nativeRenderSnapshotComparison = renderSnapshotComparison;
+    renderSnapshotComparison = function (...args) {
+      const res = nativeRenderSnapshotComparison.apply(this, args);
+      enhanceSnapshotNotesTab();
+      return res;
     };
   }
 

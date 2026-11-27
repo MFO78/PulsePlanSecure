@@ -318,7 +318,29 @@
     }
   }
 
-  /* ---------- Exact Financial Schema (dayRate & budgetCost), 3-Way Merge + ChangeLog Redaction ---------- */
+  /* ---------- Exact Financial Schema (dayRate, budgetCost & externalCosts), 3-Way Merge + ChangeLog Redaction ---------- */
+  function normalizeExtCostsList(rawList) {
+    if (!Array.isArray(rawList)) return [];
+    const seen = new Set();
+    return rawList
+      .filter(c => c && typeof c === 'object' && c.projectId && String(c.label || '').trim() && Number.isFinite(Number(c.amount)) && Number(c.amount) > 0)
+      .map(c => {
+        const id = String(c.id || '').trim() || `ext_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        return {
+          id,
+          projectId: String(c.projectId),
+          label: String(c.label).trim().slice(0, 120),
+          amount: Math.round(Number(c.amount) * 100) / 100,
+          period: String(c.period || '').trim(),
+        };
+      })
+      .filter(c => {
+        if (seen.has(c.id)) return false;
+        seen.add(c.id);
+        return true;
+      });
+  }
+
   function extractFinancialsFromDb(db) {
     const deptRates = {};
     (db?.departments || []).forEach(d => {
@@ -334,7 +356,12 @@
       }
     });
 
-    return { deptRates, projectCosts, exportedAt: new Date().toISOString() };
+    const rawExt = (Array.isArray(db?.externalCosts) && db.externalCosts.length > 0)
+      ? db.externalCosts
+      : (Array.isArray(db?.settings?.externalCosts) ? db.settings.externalCosts : []);
+    const externalCosts = normalizeExtCostsList(rawExt);
+
+    return { deptRates, projectCosts, externalCosts, exportedAt: new Date().toISOString() };
   }
 
   function canonicalFinanceJson(payload) {
@@ -348,12 +375,14 @@
       const v = Number(payload.projectCosts[k]?.budgetCost || 0);
       if (v > 0) projectCosts[k] = v;
     });
-    return JSON.stringify({ deptRates, projectCosts });
+    const externalCosts = normalizeExtCostsList(payload?.externalCosts).sort((a, b) => a.id.localeCompare(b.id));
+    return JSON.stringify({ deptRates, projectCosts, externalCosts });
   }
 
   function hasNonEmptyFinancials(payload) {
     return Object.keys(payload?.deptRates || {}).some(k => Number(payload.deptRates[k]?.dayRate || 0) > 0)
-      || Object.keys(payload?.projectCosts || {}).some(k => Number(payload.projectCosts[k]?.budgetCost || 0) > 0);
+      || Object.keys(payload?.projectCosts || {}).some(k => Number(payload.projectCosts[k]?.budgetCost || 0) > 0)
+      || normalizeExtCostsList(payload?.externalCosts).length > 0;
   }
 
   function cloneFinancePayload(payload) {
@@ -367,7 +396,8 @@
       const n = Number(v?.budgetCost || 0);
       if (n > 0) projectCosts[k] = { budgetCost: n };
     });
-    return { deptRates, projectCosts, exportedAt: payload?.exportedAt || new Date().toISOString() };
+    const externalCosts = normalizeExtCostsList(payload?.externalCosts);
+    return { deptRates, projectCosts, externalCosts, exportedAt: payload?.exportedAt || new Date().toISOString() };
   }
 
   function mergeFinancialsIntoDb(db, payload) {
@@ -382,13 +412,17 @@
       if (!p || !p.id) return;
       p.budgetCost = projectCosts[p.id] !== undefined ? (Number(projectCosts[p.id].budgetCost) || 0) : 0;
     });
+    if (Array.isArray(payload.externalCosts)) {
+      db.externalCosts = normalizeExtCostsList(payload.externalCosts);
+      if (db.settings && 'externalCosts' in db.settings) delete db.settings.externalCosts;
+    }
   }
 
   function mergeFinancePayloadsThreeWay(basePayload, localPayload, diskPayload) {
-    const base = basePayload || { deptRates: {}, projectCosts: {} };
-    const local = localPayload || { deptRates: {}, projectCosts: {} };
-    const disk = diskPayload || { deptRates: {}, projectCosts: {} };
-    const merged = { deptRates: {}, projectCosts: {}, exportedAt: new Date().toISOString() };
+    const base = basePayload || { deptRates: {}, projectCosts: {}, externalCosts: [] };
+    const local = localPayload || { deptRates: {}, projectCosts: {}, externalCosts: [] };
+    const disk = diskPayload || { deptRates: {}, projectCosts: {}, externalCosts: [] };
+    const merged = { deptRates: {}, projectCosts: {}, externalCosts: [], exportedAt: new Date().toISOString() };
     const conflicts = [];
 
     const deptIds = new Set([
@@ -431,6 +465,25 @@
       if (chosen > 0) merged.projectCosts[id] = { budgetCost: chosen };
     });
 
+    const baseExtMap = new Map(normalizeExtCostsList(base.externalCosts).map(c => [c.id, c]));
+    const localExtMap = new Map(normalizeExtCostsList(local.externalCosts).map(c => [c.id, c]));
+    const diskExtMap = new Map(normalizeExtCostsList(disk.externalCosts).map(c => [c.id, c]));
+    const extIds = new Set([...baseExtMap.keys(), ...localExtMap.keys(), ...diskExtMap.keys()]);
+    extIds.forEach(id => {
+      const bStr = baseExtMap.has(id) ? JSON.stringify(baseExtMap.get(id)) : '';
+      const lStr = localExtMap.has(id) ? JSON.stringify(localExtMap.get(id)) : '';
+      const dStr = diskExtMap.has(id) ? JSON.stringify(diskExtMap.get(id)) : '';
+      let chosen = localExtMap.get(id) || null;
+      if (lStr === dStr) chosen = localExtMap.get(id) || null;
+      else if (lStr === bStr) chosen = diskExtMap.get(id) || null;
+      else if (dStr === bStr) chosen = localExtMap.get(id) || null;
+      else {
+        chosen = localExtMap.get(id) || null;
+        conflicts.push(`ext:${id}`);
+      }
+      if (chosen) merged.externalCosts.push({ ...chosen });
+    });
+
     const mergedJson = canonicalFinanceJson(merged);
     return {
       merged,
@@ -448,6 +501,8 @@
     (db.projects || []).forEach(p => {
       if (p) p.budgetCost = 0;
     });
+    if (Array.isArray(db.externalCosts)) db.externalCosts = [];
+    if (db.settings && 'externalCosts' in db.settings) delete db.settings.externalCosts;
     if (Array.isArray(db.changeLog)) {
       db.changeLog.forEach(entry => {
         if (!entry) return;

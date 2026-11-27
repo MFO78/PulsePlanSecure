@@ -3326,7 +3326,7 @@ test('PBS fullscreen expand button, PDF custom field selector, v9.0-secure versi
     };
   })()`, ctx);
 
-  assert.equal(out.colCount, 26, 'REPORT_COLS exports all 26 PBS PDF fields');
+  assert.equal(out.colCount, 27, 'REPORT_COLS exports all 27 PBS PDF fields including Unit Cost');
   assert.deepEqual(Array.from(out.customHead), ['Deliverable / Subsystem', 'Part No.', 'Mass (kg)'], 'Custom selectedFieldKeys restricts PDF table to exact chosen core & optional fields');
   assert.ok(out.customSubtitle.includes('Selected fields (3)'), 'Custom PDF subtitle notes selected field count');
   assert.ok(out.customTotalFirstCell && out.customTotalFirstCell.startsWith('TOTAL'), 'Total row places TOTAL label cleanly even when Code column is unchecked');
@@ -3557,6 +3557,383 @@ test('Administrator login always shows exact Administrator acronym/name (never s
   assert.equal(out.s3AvatarAfterLogout, '--', 'Sign-out scrubs header avatar while locked');
   assert.equal(out.s4User, 'Administrator', 'Default Administrator login sets ui.userName to Administrator');
   assert.equal(out.s4Avatar, 'AD', 'Default Administrator acronym renders as AD');
+});
+
+test('Allocation modal preserves existing monthly FTE, defaults new cells to 1 FTE across units, and ignores Admin projects', () => {
+  const out = vm.runInContext(`(() => {
+    const db = createSampleDemoDB();
+    liveDB = db;
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.timeUnit = 'month';
+    ui.manpowerUnit = 'fte';
+    const curM = getCurrentMonthKey();
+    ui.startMonth = curM;
+
+    // Minimal modal DOM stub that parses <input id="mAllocValue" value="..."> and <select id="mAlloc*">
+    const stubEls = {};
+    const makeEl = (id, val = '') => ({
+      id,
+      value: val,
+      innerHTML: '',
+      textContent: '',
+      className: '',
+      style: { setProperty: () => {} },
+      classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+      setAttribute: () => {},
+      getAttribute: () => null,
+      focus: () => {},
+      contains: () => true,
+      querySelector: (sel) => {
+        const m = String(sel || '').match(/^#([A-Za-z0-9_-]+)$/);
+        return m ? (stubEls[m[1]] || null) : null;
+      },
+      querySelectorAll: () => [],
+    });
+    const overlay = makeEl('modalOverlay');
+    const card = makeEl('modalCard');
+    stubEls.modalOverlay = overlay;
+    stubEls.modalCard = card;
+
+    const origShowModal = showModal;
+    const origGetById = document.getElementById;
+    try {
+      showModal = (html) => {
+        card.innerHTML = html;
+        const mVal = html.match(/id="mAllocValue"[^>]*value="([^"]*)"/);
+        const mDeptSel = html.match(/id="mAllocDept"[\\s\\S]*?<option value="([^"]+)"\\s+selected/);
+        const mProjSel = html.match(/id="mAllocProj"[\\s\\S]*?<option value="([^"]+)"\\s+selected/);
+        const mPerSel = html.match(/id="mAllocPeriod"[\\s\\S]*?<option value="([^"]+)"\\s+selected/);
+        stubEls.mAllocDept = makeEl('mAllocDept', mDeptSel ? mDeptSel[1] : '');
+        stubEls.mAllocProj = makeEl('mAllocProj', mProjSel ? mProjSel[1] : '');
+        stubEls.mAllocPeriod = makeEl('mAllocPeriod', mPerSel ? mPerSel[1] : '');
+        stubEls.mAllocValue = makeEl('mAllocValue', mVal ? mVal[1] : '');
+        stubEls.mAllocRepeat = makeEl('mAllocRepeat', '1');
+        stubEls.mAllocEndPeriod = makeEl('mAllocEndPeriod', '1');
+        stubEls.mAllocConversionPreview = makeEl('mAllocConversionPreview', '');
+      };
+      document.getElementById = (id) => stubEls[id] || origGetById.call(document, id);
+
+      // 1. Existing monthly allocation (3.5 FTE in Demo DB: d_eng -> p_nova -> curM) MUST NOT be overwritten to 1!
+      openAllocationModal('d_eng', 'p_nova', curM);
+      const existingMonthVal = stubEls.mAllocValue.value;
+
+      // 2. Truly new empty cell in Month view defaults to 1 FTE
+      openAllocationModal('d_ops', 'p_pulse', curM);
+      const newEmptyFteVal = stubEls.mAllocValue.value;
+
+      // 3. New empty cell in Days mode defaults to 1 FTE converted to Days for curM
+      ui.manpowerUnit = 'days';
+      openAllocationModal('d_ops', 'p_pulse', curM);
+      const newEmptyDaysVal = Number(stubEls.mAllocValue.value);
+      const expectedDays = Math.round(fteToDisplayValue(1, curM, 'month', 'days') * 100) / 100;
+
+      // 4. Admin (Non-FTE) project is NOT defaulted to 1
+      ui.manpowerUnit = 'fte';
+      db.projects.push({ id: 'p_adm_test', name: 'Admin Meetings', code: 'ADM', color: '#0ea5e9', status: 'Active', priority: 'Low', owner: '', techLead: '', budgetDays: 0, budgetCost: 0, tentative: false, nonFte: true, category: 'admin', archived: false });
+      openAllocationModal('d_eng', 'p_adm_test', curM);
+      const adminProjVal = stubEls.mAllocValue.value;
+
+      return { existingMonthVal, newEmptyFteVal, newEmptyDaysVal, expectedDays, adminProjVal };
+    } finally {
+      showModal = origShowModal;
+      document.getElementById = origGetById;
+      ui.manpowerUnit = 'fte';
+    }
+  })()`, ctx);
+
+  assert.equal(out.existingMonthVal, '3.5', 'Opening an existing monthly allocation preserves 3.5 FTE instead of overwriting to 1');
+  assert.equal(out.newEmptyFteVal, '1', 'Opening a truly new empty cell defaults to 1 FTE');
+  assert.equal(out.newEmptyDaysVal, out.expectedDays, 'New empty cell in Days mode defaults to 1 FTE converted to Days');
+  assert.equal(out.adminProjVal, '', 'Admin (Non-FTE) project modal does not get defaulted to 1 FTE');
+});
+
+test('Finance RBAC gates Burn & Budget + PBS Unit Cost, Finance Vault strips/merges externalCosts, and Escape cannot bypass forced password change', () => {
+  const out = vm.runInContext(`(() => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    const hb = globalThis.__ppHealthBurnTestApi;
+    const fin = globalThis.__ppFinanceVaultTestApi;
+    const P = globalThis.__ppPbsV2;
+    const db = createSampleDemoDB();
+    db.externalCosts = [
+      { id: 'ext_1', projectId: 'p_nova', label: 'EMC Lab SOW', amount: 12000, period: getCurrentMonthKey() },
+    ];
+    liveDB = db;
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+
+    const pbsCache = {
+      p_nova: {
+        schema: 'pulseplan-pbs-v1',
+        projectId: 'p_nova',
+        items: [{ id: 'i1', parentId: null, code: '1', name: 'Board', maturity: 'CDR', unitCost: 500, qty: 2 }],
+      },
+    };
+    const periods = [getCurrentMonthKey()];
+
+    // 1. Admin / finance-authorized user sees costs
+    auth.ppApplyAuthenticatedSession('admin', null, 'Administrator');
+    const adminBurn = hb.computeBurnBudgetAnalysis(db, periods, 'month', 'p_nova', 'all', true, pbsCache);
+    const adminPbs = hb.computePbsMaterialCost(['p_nova'], pbsCache);
+    const adminReport = P.report.buildReportModel(pbsCache.p_nova, db.projects[0], db, 'Admin', '2026-11-27');
+
+    const dbForFinVault = JSON.parse(JSON.stringify(db));
+
+    // 2. Finance-restricted user sees ZERO rates, ZERO costs, ZERO PBS material cost, ZERO external costs
+    auth.ppApplyAuthenticatedSession('user', {
+      id: 'u_nofin', name: 'NoFin User', enabled: true, isAdmin: false,
+      permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+    });
+    const restrictedBurn = hb.computeBurnBudgetAnalysis(db, periods, 'month', 'p_nova', 'all', true, pbsCache);
+    const restrictedPbs = hb.computePbsMaterialCost(['p_nova'], pbsCache);
+    const restrictedReport = P.report.buildReportModel(pbsCache.p_nova, db.projects[0], db, 'NoFin User', '2026-11-27');
+    const restrictedCsv = P.io.buildPbsCsv(pbsCache.p_nova, db);
+
+    // Restore open session
+    auth.ppApplyAuthenticatedSession('open');
+
+    // 3. Finance Vault extracts, strips, and 3-way merges externalCosts cleanly
+    const extracted = fin.extractFinancialsFromDb(dbForFinVault);
+    const clonedForStrip = JSON.parse(JSON.stringify(dbForFinVault));
+    fin.stripFinancialsFromDb(clonedForStrip);
+    const baseFin = JSON.parse(JSON.stringify(extracted));
+    const localFin = JSON.parse(JSON.stringify(extracted));
+    localFin.externalCosts.push({ id: 'ext_local', projectId: 'p_nova', label: 'Local SOW', amount: 3000, period: '' });
+    const diskFin = JSON.parse(JSON.stringify(extracted));
+    diskFin.externalCosts.push({ id: 'ext_disk', projectId: 'p_atlas', label: 'Disk SOW', amount: 4500, period: '' });
+    const finMerge = fin.mergeFinancePayloadsThreeWay(baseFin, localFin, diskFin);
+
+    // 4. Escape key cannot bypass forced password change modal
+    let modalClosed = false;
+    const origClose = closeModal;
+    const origGetById = document.getElementById;
+    const origQuerySel = document.querySelector;
+    let escBypassed = false;
+    try {
+      const overlay = { classList: { contains: () => false } };
+      const card = { querySelectorAll: () => [] };
+      document.getElementById = (id) => id === 'modalOverlay' ? overlay : (id === 'modalCard' ? card : origGetById.call(document, id));
+      document.querySelector = (sel) => sel === '#ppChangeMyPwForm[data-forced="1"]' ? { id: 'ppChangeMyPwForm' } : null;
+      closeModal = () => { modalClosed = true; };
+      // Also verify 30-health-burn-and-fixes did not register a duplicate Escape bypass listener
+      escBypassed = Boolean(document.__ppModalTrapWired);
+    } finally {
+      closeModal = origClose;
+      document.getElementById = origGetById;
+      document.querySelector = origQuerySel;
+    }
+
+    return {
+      adminHasRates: adminBurn.hasRates,
+      adminPbsTotal: adminPbs.total,
+      adminExtTotal: adminBurn.externalTotalCost,
+      adminReportHasUnitCost: adminReport.head.includes('Unit Cost'),
+      restrictedHasRates: restrictedBurn.hasRates,
+      restrictedWindowCost: restrictedBurn.windowCost,
+      restrictedTotalCost: restrictedBurn.effectiveTotalCost,
+      restrictedBudgetCost: restrictedBurn.totalBudgetCost,
+      restrictedPbsTotal: restrictedPbs.total,
+      restrictedExtCount: restrictedBurn.externalCosts.length,
+      restrictedReportHasUnitCost: restrictedReport.head.includes('Unit Cost'),
+      restrictedCsvHasCostVal: restrictedCsv.includes(',500'),
+      extractedExtCount: extracted.externalCosts.length,
+      strippedExtCount: clonedForStrip.externalCosts.length,
+      finMergeExtIds: finMerge.merged.externalCosts.map(c => c.id).sort(),
+      finMergeConflicts: finMerge.conflicts.length,
+      escBypassed,
+      modalClosed,
+    };
+  })()`, ctx);
+
+  assert.equal(out.adminHasRates, true, 'Admin sees financial rates in Burn & Budget');
+  assert.equal(out.adminPbsTotal, 1000, 'Admin sees PBS material cost (500 x 2 = 1000)');
+  assert.equal(out.adminExtTotal, 12000, 'Admin sees External Consultant costs');
+  assert.equal(out.adminReportHasUnitCost, true, 'Admin PBS PDF report includes Unit Cost column when populated');
+  assert.equal(out.restrictedHasRates, false, 'Finance-restricted user never sees rates');
+  assert.equal(out.restrictedWindowCost, 0, 'Finance-restricted user sees 0 window cost');
+  assert.equal(out.restrictedTotalCost, 0, 'Finance-restricted user sees 0 total cost');
+  assert.equal(out.restrictedBudgetCost, 0, 'Finance-restricted user sees 0 cost budget');
+  assert.equal(out.restrictedPbsTotal, 0, 'Finance-restricted user sees 0 PBS material cost');
+  assert.equal(out.restrictedExtCount, 0, 'Finance-restricted user sees 0 external consultant costs');
+  assert.equal(out.restrictedReportHasUnitCost, false, 'Finance-restricted user PBS PDF omits Unit Cost column');
+  assert.equal(out.restrictedCsvHasCostVal, false, 'Finance-restricted user PBS CSV export redacts Unit Cost values');
+  assert.equal(out.extractedExtCount, 1, 'Finance Vault extracts externalCosts');
+  assert.equal(out.strippedExtCount, 0, 'stripFinancialsFromDb strips externalCosts from Main DB');
+  assert.deepEqual(Array.from(out.finMergeExtIds), ['ext_1', 'ext_disk', 'ext_local'], 'Finance Vault 3-way merge preserves disjoint externalCosts');
+  assert.equal(out.finMergeConflicts, 0, 'Finance Vault 3-way merge has zero conflicts on disjoint externalCosts');
+  assert.equal(out.escBypassed, false, 'Duplicate modal Escape trap was removed so forced password change cannot be bypassed');
+});
+
+test('PBS Unit Cost computes hierarchical non-double-counting roll-ups, preserves legacy headerless CSV order, and renders natively in Procurement grid', () => {
+  const out = vm.runInContext(`(() => {
+    const P = globalThis.__ppPbsV2;
+    const hb = globalThis.__ppHealthBurnTestApi;
+    const db = createSampleDemoDB();
+    liveDB = db;
+
+    // Parent assembly (qty 2, own budget 9999) + child (qty 3, unitCost 100) + sibling leaf (qty 1, unitCost 50)
+    // Non-double-counting: parent uses children (3*100 = 300) * parent qty 2 = 600; sibling = 50; total = 650!
+    const doc = P.data.normalizePbsDoc({
+      schema: 'pulseplan-pbs-v1',
+      projectId: 'p_nova',
+      items: [
+        { id: 'a1', parentId: null, code: '1', name: 'Assembly', maturity: 'CDR', qty: 2, unitCost: 9999 },
+        { id: 'c1', parentId: 'a1', code: '1.1', name: 'Sensor', maturity: 'CDR', qty: 3, unitCost: 100 },
+        { id: 'b1', parentId: null, code: '2', name: 'Cable', maturity: 'CDR', qty: 1, unitCost: 50 },
+      ],
+    }, db.projects[0], 'Tester');
+
+    const rollups = P.tree.computeSwpRollups(doc);
+    const pbsCost = hb.computePbsMaterialCost(['p_nova'], { p_nova: doc });
+
+    // Headerless legacy 27-col CSV: col 25 = componentAlt, col 26 = qty, col 27 (optional) = unitCost
+    const legacyRow = new Array(28).fill('');
+    legacyRow[0] = '1';
+    legacyRow[2] = 'Legacy Item';
+    legacyRow[3] = 'PDR';
+    legacyRow[24] = '8';        // leadTime
+    legacyRow[25] = 'ALT-PN';   // componentAlt
+    legacyRow[26] = '4';        // qty
+    legacyRow[27] = '250.50';   // unitCost
+    const parsedLegacy = P.io.parsePbsCsv(legacyRow.join(','), db);
+
+    // Native PBS form HTML includes #ppPbsFUnitCost inside .pp-pbs-sec-grid
+    const summary = P.tree.computeMaturitySummary(doc, [], '2026-11-27');
+    const rows = P.tree.getFilteredTreeRows(doc, {}, new Set(), { summary, rollups });
+    const formHtml = P.view.buildDialogHtml({
+      doc, db, project: db.projects[0], summary, rollups, filteredRollups: null, isFiltered: false, matchedCount: 3,
+      rows, collapsedIds: new Set(), colGroups: { docs: false, proc: true, swp: false },
+      filter: {}, edit: { open: true, item: doc.items[1], parentId: 'a1', suggestedCode: '1.2', parentCandidates: [doc.items[0]], openSections: { docs: false, proc: true, eng: false } },
+      pasteOpen: false, isExpanded: false, pdfExport: { open: false },
+      canUndo: false, canRedo: false, undoLabel: '', redoLabel: '', conflict: null, notices: [],
+      owners: [], manufacturers: [], procStatuses: [], projectMilestones: [], cloneSources: [],
+      canDirSync: false, dirName: '', hasRemembered: false, status: { text: 'Saved', tone: 'ok' },
+    });
+
+    return {
+      totalUnitCost: rollups.totalUnitCost,
+      parentOverlap: Boolean(rollups.byId.get('a1')?.unitCostOverlap),
+      pbsCostTotal: pbsCost.total,
+      legacyAlt: parsedLegacy.items[0]?.componentAlt,
+      legacyQty: parsedLegacy.items[0]?.qty,
+      legacyUnitCost: parsedLegacy.items[0]?.unitCost,
+      hasNativeUnitCostInput: formHtml.includes('id="ppPbsFUnitCost"') && formHtml.includes('value="100"'),
+      hasUnitCostColHeader: formHtml.includes('Unit Cost'),
+      hasTotalCostFoot: formHtml.includes('data-label="Total Cost">650<'),
+    };
+  })()`, ctx);
+
+  assert.equal(out.totalUnitCost, 650, 'PBS unitCost rollup multiplies parent qty (2 * 3 * 100 + 50 = 650) without double-counting parent budget');
+  assert.equal(out.parentOverlap, true, 'PBS unitCost rollup flags parent/child overlap');
+  assert.equal(out.pbsCostTotal, 650, 'computePbsMaterialCost uses hierarchical non-double-counting PBS total');
+  assert.equal(out.legacyAlt, 'ALT-PN', 'Headerless CSV preserves componentAlt in column 26');
+  assert.equal(out.legacyQty, 4, 'Headerless CSV preserves qty in column 27');
+  assert.equal(out.legacyUnitCost, 250.5, 'Headerless CSV parses unitCost in column 28');
+  assert.equal(out.hasNativeUnitCostInput, true, 'PBS edit form renders #ppPbsFUnitCost natively with item value');
+  assert.equal(out.hasUnitCostColHeader, true, 'PBS table renders Unit Cost column when Procurement group is visible');
+  assert.equal(out.hasTotalCostFoot, true, 'PBS table footer displays non-double-counted Total Cost');
+});
+
+test('ExternalCosts migration/3-way merge/period matching, Default Login View, and Capacity hygiene preserve data cleanly', () => {
+  const out = vm.runInContext(`(() => {
+    const hb = globalThis.__ppHealthBurnTestApi;
+    const auth = globalThis.__ppAuthRbacTestApi;
+
+    // 1. normalizeAndMigrateDB never lets empty externalCosts: [] wipe legacy settings.externalCosts, and preserves defaultDeptRoadmapView
+    const rawDb = createSampleDemoDB();
+    rawDb.externalCosts = [];
+    rawDb.settings.externalCosts = [{ id: 'ext_legacy', projectId: 'p_nova', label: 'Legacy Consultant', amount: 7500, period: '2026-11' }];
+    rawDb.accessControl.users = [{
+      id: 'u_elena', name: 'Elena Rostova', roleTitle: 'Engineering Lead', enabled: true, isAdmin: false,
+      defaultDeptRoadmapView: true,
+      permissions: { tabs: { matrix: true, health: true, data: false, sync: false }, finance: false },
+    }];
+    const migrated = normalizeAndMigrateDB(rawDb);
+    const migratedExtLen = migrated.externalCosts.length;
+    const migratedExtId = migrated.externalCosts[0]?.id;
+    const migratedUserFlag = migrated.accessControl.users[0]?.defaultDeptRoadmapView;
+
+    // 2. 3-way merge auto-merges disjoint externalCosts by ID without collision
+    const base = cloneSyncSnapshot(migrated);
+    const local = cloneSyncSnapshot(migrated);
+    local.externalCosts.push({ id: 'ext_l', projectId: 'p_nova', label: 'Local', amount: 1000, period: '' });
+    const disk = cloneSyncSnapshot(migrated);
+    disk.externalCosts.push({ id: 'ext_d', projectId: 'p_atlas', label: 'Disk', amount: 2000, period: '' });
+    const merged = tryThreeWayAutoMerge(base, local, disk);
+
+    // 3. Month <-> Week external cost period matching pro-rates month cost into weeks and rolls week cost into owning month
+    const mKey = '2026-11';
+    const wksInM = getWeeksInMonth(mKey);
+    const monthCost = { id: 'c_m', projectId: 'p_nova', label: 'Monthly SOW', amount: 4000, period: mKey };
+    const weekSumFromMonth = wksInM.reduce((s, wk) => s + hb.matchExternalCostForPeriod(monthCost, wk, 'week'), 0);
+    const weekCost = { id: 'c_w', projectId: 'p_nova', label: 'Weekly SOW', amount: 1500, period: wksInM[0] };
+    const monthFromWeek = hb.matchExternalCostForPeriod(weekCost, getWeekOwningMonth(wksInM[0]), 'month');
+
+    // 4. Default Login View clears stale filterProj and applies 2-week Department view, while respecting syncHorizonAfterDBLoad for Admin
+    liveDB = migrated;
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.filterProj = 'p_stale';
+    ui.activeTab = 'health';
+    ui.timeUnit = 'month';
+    ui.horizon = 6;
+    ui.axis = 'project';
+    globalThis.__ppHorizonShiftedByLoad = false;
+    auth.ppApplyAuthenticatedSession('user', migrated.accessControl.users[0]);
+    const scrubbedOnNonFinanceLogin = liveDB.externalCosts.length;
+    hb.applySessionStartupAndDefaultView();
+    const userViewState = {
+      activeTab: ui.activeTab,
+      timeUnit: ui.timeUnit,
+      horizon: ui.horizon,
+      axis: ui.axis,
+      filterDept: ui.filterDept,
+      filterProj: ui.filterProj,
+    };
+
+    // Admin login after syncHorizonAfterDBLoad shifted to '2027-05' MUST keep '2027-05'
+    ui.startMonth = '2027-05';
+    globalThis.__ppHorizonShiftedByLoad = true;
+    auth.ppApplyAuthenticatedSession('admin', null, 'Administrator');
+    hb.applySessionStartupAndDefaultView();
+    const adminKeptShift = ui.startMonth;
+
+    // 5. Passive renderAll() does NOT destructively wipe capacity overrides matching defaultCapacity during transient stepping
+    const dept = migrated.departments[0];
+    const testWk = '2027-W10';
+    migrated.capacityOverrides[dept.id + '::' + testWk] = dept.defaultCapacity;
+    renderAll();
+    const overrideSurvivedPassiveRender = Object.prototype.hasOwnProperty.call(migrated.capacityOverrides, dept.id + '::' + testWk);
+
+    auth.ppApplyAuthenticatedSession('open');
+    return {
+      migratedExtLen,
+      migratedExtId,
+      migratedUserFlag,
+      scrubbedOnNonFinanceLogin,
+      mergeOk: merged.ok,
+      mergedExtIds: merged.ok ? merged.mergedDB.externalCosts.map(c => c.id).sort() : [],
+      weekSumFromMonth: Math.round(weekSumFromMonth * 100) / 100,
+      monthFromWeek,
+      userViewState,
+      adminKeptShift,
+      overrideSurvivedPassiveRender,
+    };
+  })()`, ctx);
+
+  assert.equal(out.migratedExtLen, 1, 'normalizeAndMigrateDB rescues settings.externalCosts even when top-level externalCosts is []');
+  assert.equal(out.migratedExtId, 'ext_legacy', 'Migrated external cost retains ID');
+  assert.equal(out.migratedUserFlag, true, 'normalizeAndMigrateDB preserves user.defaultDeptRoadmapView natively');
+  assert.equal(out.scrubbedOnNonFinanceLogin, 0, 'Non-finance user login scrubs externalCosts from in-memory liveDB');
+  assert.equal(out.mergeOk, true, 'tryThreeWayAutoMerge succeeds for disjoint externalCosts edits');
+  assert.deepEqual(Array.from(out.mergedExtIds), ['ext_d', 'ext_l', 'ext_legacy'], '3-way merge keeps all disjoint externalCosts');
+  assert.equal(out.weekSumFromMonth, 4000, 'Month-assigned external cost pro-rates cleanly across all weeks of that month');
+  assert.equal(out.monthFromWeek, 1500, 'Week-assigned external cost rolls into its owning month in Month mode');
+  assert.deepEqual({ ...out.userViewState }, {
+    activeTab: 'matrix', timeUnit: 'week', horizon: 2, axis: 'department', filterDept: 'd_eng', filterProj: 'all',
+  }, 'Per-user default login view opens 2-week Department Roadmap filtered to user department and clears stale filterProj');
+  assert.equal(out.adminKeptShift, '2027-05', 'Startup-to-Today does not clobber deliberate syncHorizonAfterDBLoad shift');
+  assert.equal(out.overrideSurvivedPassiveRender, true, 'Passive renderAll() does not destructively mutate capacityOverrides');
 });
 
 let passed = 0;

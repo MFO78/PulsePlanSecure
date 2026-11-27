@@ -9,7 +9,7 @@
     'Manufacturer', 'Part Number', 'Procurement/Manufacture Status',
     'Mass (kg)', 'Power Consumption (W)', 'Power Dissipation (W)', 'MTBF (h)',
     'LRU', 'SPARE Available', 'SPARE to be Delivered',
-    'Lead Time (wks)', 'Unit Cost', 'Component Alternative', 'Quantity',
+    'Lead Time (wks)', 'Component Alternative', 'Quantity', 'Unit Cost',
   ];
 
   const POSITIONAL_KEYS = [
@@ -19,7 +19,7 @@
     'manufacturer', 'partNumber', 'procurementStatus',
     'mass', 'powerConsumption', 'powerDissipation', 'mtbf',
     'lru', 'spareAvailable', 'spareToDeliver',
-    'leadTime', 'unitCost', 'componentAlt', 'qty',
+    'leadTime', 'componentAlt', 'qty', 'unitCost',
   ];
 
   const HEADER_ALIASES = {
@@ -106,7 +106,8 @@
         item.manufacturer || '', item.partNumber || '', item.procurementStatus || '',
         fmt(item.mass), fmt(item.powerConsumption), fmt(item.powerDissipation), fmt(item.mtbf),
         item.lru || '', item.spareAvailable || '', item.spareToDeliver || '',
-        fmt(item.leadTime), fmt(item.unitCost), item.componentAlt || '', item.qty != null ? String(item.qty) : '',
+        fmt(item.leadTime), item.componentAlt || '', item.qty != null ? String(item.qty) : '',
+        (typeof ppCanAccessFinance === 'function' && !ppCanAccessFinance()) ? '' : fmt(item.unitCost),
       ].map(csvCell).join(','));
     });
     return '\uFEFF' + lines.join('\r\n');

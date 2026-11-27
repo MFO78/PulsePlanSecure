@@ -1514,12 +1514,15 @@
           changeLog: db.changeLog || [],
           dumpHistory: db.dumpHistory || [],
           peopleDirectory: db.peopleDirectory || [],
+          externalCosts: db.externalCosts || [],
           accessControl: db.accessControl || { version: 1, adminName: 'Administrator', users: [] },
         }));
         // Always strip Finance Vault fields from Main DB sync snapshot so 3-way merge matches stripped disk file!
         if (snap.settings?.financeVault?.enabled) {
           (snap.departments || []).forEach(d => { if (d) d.dayRate = 0; });
           (snap.projects || []).forEach(p => { if (p) p.budgetCost = 0; });
+          snap.externalCosts = [];
+          if (snap.settings && 'externalCosts' in snap.settings) delete snap.settings.externalCosts;
         }
         return snap;
       } catch (e) {
@@ -1539,7 +1542,7 @@
 
     function areDBDataEqual(a, b) {
       if (!a || !b) return false;
-      const fields = ['settings', 'departments', 'projects', 'allocations', 'capacityOverrides', 'comments', 'milestones', 'snapshots', 'peopleDirectory', 'accessControl'];
+      const fields = ['settings', 'departments', 'projects', 'allocations', 'capacityOverrides', 'comments', 'milestones', 'snapshots', 'peopleDirectory', 'externalCosts', 'accessControl'];
       for (const f of fields) {
         if (!syncValuesEqual(a[f], b[f])) return false;
       }
@@ -1647,6 +1650,7 @@
       const mMs = mergeArrayByIdThreeWay(baseDB.milestones, localDB.milestones, diskDB.milestones, 'milestones');
       const mSnap = mergeArrayByIdThreeWay(baseDB.snapshots, localDB.snapshots, diskDB.snapshots, 'snapshots');
       const mPeople = mergeArrayByIdThreeWay(baseDB.peopleDirectory || [], localDB.peopleDirectory || [], diskDB.peopleDirectory || [], 'peopleDirectory');
+      const mExt = mergeArrayByIdThreeWay(baseDB.externalCosts || [], localDB.externalCosts || [], diskDB.externalCosts || [], 'externalCosts');
       const mUsers = mergeArrayByIdThreeWay(baseDB.accessControl?.users || [], localDB.accessControl?.users || [], diskDB.accessControl?.users || [], 'accessControl.users');
 
       const allConflicts = [
@@ -1659,6 +1663,7 @@
         ...mMs.conflicts,
         ...mSnap.conflicts,
         ...mPeople.conflicts,
+        ...mExt.conflicts,
         ...mUsers.conflicts,
       ];
       if (allConflicts.length > 0) {
@@ -1690,6 +1695,7 @@
         changeLog: mergeLogEntriesById(localDB.changeLog, diskDB.changeLog, 500),
         dumpHistory: mergeLogEntriesById(localDB.dumpHistory, diskDB.dumpHistory, 100),
         peopleDirectory: mPeople.merged,
+        externalCosts: mExt.merged,
         accessControl: {
           version: 1,
           adminName: mergedAdminName,
@@ -1697,8 +1703,8 @@
         },
       };
 
-      const localAppliedCount = mAlloc.localApplied + mCap.localApplied + mCmt.localApplied + mSet.localApplied + mDept.localApplied + mProj.localApplied + mMs.localApplied + mSnap.localApplied + mPeople.localApplied + mUsers.localApplied;
-      const diskAppliedCount = mAlloc.diskApplied + mCap.diskApplied + mCmt.diskApplied + mSet.diskApplied + mDept.diskApplied + mProj.diskApplied + mMs.diskApplied + mSnap.diskApplied + mPeople.diskApplied + mUsers.diskApplied;
+      const localAppliedCount = mAlloc.localApplied + mCap.localApplied + mCmt.localApplied + mSet.localApplied + mDept.localApplied + mProj.localApplied + mMs.localApplied + mSnap.localApplied + mPeople.localApplied + mExt.localApplied + mUsers.localApplied;
+      const diskAppliedCount = mAlloc.diskApplied + mCap.diskApplied + mCmt.diskApplied + mSet.diskApplied + mDept.diskApplied + mProj.diskApplied + mMs.diskApplied + mSnap.diskApplied + mPeople.diskApplied + mExt.diskApplied + mUsers.diskApplied;
       return { ok: true, mergedDB, localAppliedCount, diskAppliedCount, conflicts: [] };
     }
 

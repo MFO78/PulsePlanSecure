@@ -60,14 +60,48 @@
       _lastHealthChartStats = stats;
 
       const avgPct = totalCapFte > 0 ? Math.round((totalAllocFte / totalCapFte) * 100) : 0;
-      const slippedMs = db.milestones.filter(m => getMilestoneDriftDays(m) > 0 && m.status !== 'Completed').length;
-      const activeProjs = db.projects.filter(p => !p.archived && isProjectIncludedInPlan(p));
+      const visibleMilestones = (db.milestones || []).filter(m => {
+        if (ui.filterProj !== 'all' && m.projectId !== ui.filterProj) return false;
+        if (ui.filterDept !== 'all' && m.deptId && m.deptId !== ui.filterDept) return false;
+        return true;
+      });
+      const slippedMs = visibleMilestones.filter(m => getMilestoneDriftDays(m) > 0 && m.status !== 'Completed').length;
+      const activeProjs = db.projects.filter(p => {
+        if (!p || isNonFteProject(p)) return false;
+        if (ui.filterProj !== 'all') return p.id === ui.filterProj;
+        return !p.archived && isProjectIncludedInPlan(p);
+      });
+      const deptIdSet = ui.filterDept !== 'all' ? new Set(visibleDepts.map(d => d.id)) : null;
+      const getScopedProjDays = (projId) => {
+        if (!deptIdSet) return getProjectTotalPlannedDays(projId, db);
+        const dpw = Number(db?.settings?.daysPerWeek) || 5;
+        let days = 0;
+        Object.entries(db?.allocations || {}).forEach(([key, fte]) => {
+          const parts = key.split('::');
+          if (parts[1] === projId && deptIdSet.has(parts[0])) days += (Number(fte) || 0) * dpw;
+        });
+        return Math.round(days * 10) / 10;
+      };
+      const getScopedProjCost = (projId) => {
+        if (!deptIdSet) return getProjectTotalPlannedCost(projId, db);
+        const dpw = Number(db?.settings?.daysPerWeek) || 5;
+        const rateByDept = new Map(visibleDepts.map(d => [d.id, Number(d.dayRate) || 0]));
+        let cost = 0;
+        Object.entries(db?.allocations || {}).forEach(([key, fte]) => {
+          const parts = key.split('::');
+          if (parts[1] === projId && deptIdSet.has(parts[0])) {
+            const rate = rateByDept.get(parts[0]) || 0;
+            if (rate > 0) cost += (Number(fte) || 0) * dpw * rate;
+          }
+        });
+        return Math.round(cost);
+      };
       const budgetedProjs = activeProjs.filter(p => (Number(p.budgetDays) || 0) > 0);
-      const overBudgetCount = budgetedProjs.filter(p => getProjectTotalPlannedDays(p.id, db) > Number(p.budgetDays)).length;
+      const overBudgetCount = budgetedProjs.filter(p => getScopedProjDays(p.id) > Number(p.budgetDays)).length;
       const hasRates = hasAnyDayRates(db);
-      const totalPortfolioCost = hasRates ? activeProjs.reduce((acc, p) => acc + getProjectTotalPlannedCost(p.id, db), 0) : 0;
+      const totalPortfolioCost = hasRates ? activeProjs.reduce((acc, p) => acc + getScopedProjCost(p.id), 0) : 0;
       const costBudgetProjs = activeProjs.filter(p => (Number(p.budgetCost) || 0) > 0);
-      const overCostCount = hasRates ? costBudgetProjs.filter(p => getProjectTotalPlannedCost(p.id, db) > Number(p.budgetCost)).length : 0;
+      const overCostCount = hasRates ? costBudgetProjs.filter(p => getScopedProjCost(p.id) > Number(p.budgetCost)).length : 0;
 
       let kpi4Html = '';
       if (hasRates && totalPortfolioCost > 0) {
@@ -100,7 +134,7 @@
         </div>
         <div class="bg-white rounded-2xl border border-slate-200 p-3.5 md:p-4 shadow-xs min-w-0 break-words">
           <div class="text-[10px] md:text-[11px] font-bold uppercase tracking-wider text-slate-400 leading-tight">Milestones Health</div>
-          <div class="text-xl md:text-2xl font-extrabold mt-1 ${slippedMs > 0 ? 'text-amber-600' : 'text-emerald-600'}">${db.milestones.length - slippedMs} / ${db.milestones.length}</div>
+          <div class="text-xl md:text-2xl font-extrabold mt-1 ${slippedMs > 0 ? 'text-amber-600' : 'text-emerald-600'}">${visibleMilestones.length - slippedMs} / ${visibleMilestones.length}</div>
           <div class="text-[11px] text-slate-500 mt-1 leading-snug">${slippedMs} slipped vs. base</div>
         </div>
         <div class="bg-white rounded-2xl border border-slate-200 p-3.5 md:p-4 shadow-xs min-w-0 break-words">

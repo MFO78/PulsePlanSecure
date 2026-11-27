@@ -26,7 +26,7 @@
     'ppPbsFCode', 'ppPbsFAcronym', 'ppPbsFName', 'ppPbsFHeritage', 'ppPbsFParent',
     'ppPbsFMaturity', 'ppPbsFDept', 'ppPbsFOwner', 'ppPbsFMilestone', 'ppPbsFDescription', 'ppPbsFNotes',
     'ppPbsFMechDrawing', 'ppPbsFElecDrawing', 'ppPbsFRefDoc',
-    'ppPbsFManufacturer', 'ppPbsFPartNumber', 'ppPbsFProcStatus', 'ppPbsFLeadTime', 'ppPbsFComponentAlt',
+    'ppPbsFManufacturer', 'ppPbsFPartNumber', 'ppPbsFProcStatus', 'ppPbsFLeadTime', 'ppPbsFUnitCost', 'ppPbsFComponentAlt',
     'ppPbsFQty', 'ppPbsFMass', 'ppPbsFPowerCons', 'ppPbsFPowerDiss', 'ppPbsFMtbf', 'ppPbsFLru', 'ppPbsFSpareAvail', 'ppPbsFSpareDeliv',
   ];
 
@@ -410,6 +410,11 @@
     const powerDissipation = readNum('ppPbsFPowerDiss', 'Power Dissipation (W)', 'eng'); if (!powerDissipation.ok) return;
     const mtbf = readNum('ppPbsFMtbf', 'MTBF (h)', 'eng'); if (!mtbf.ok) return;
     const leadTime = readNum('ppPbsFLeadTime', 'Lead Time (wks)', 'proc'); if (!leadTime.ok) return;
+    const hasUnitCostInput = Boolean(q('#ppPbsFUnitCost'));
+    const unitCost = hasUnitCostInput
+      ? readNum('ppPbsFUnitCost', 'Unit Cost', 'proc')
+      : { ok: true, value: item ? (item.unitCost ?? null) : null };
+    if (!unitCost.ok) return;
 
     const db = C().getDb();
     const maturity = P.MATURITY_OPTIONS.includes(val('ppPbsFMaturity')) ? val('ppPbsFMaturity') : 'Draft';
@@ -436,6 +441,7 @@
       spareAvailable: D().normalizeYesNo(val('ppPbsFSpareAvail')),
       spareToDeliver: D().normalizeYesNo(val('ppPbsFSpareDeliv')),
       leadTime: leadTime.value,
+      unitCost: unitCost.value,
       componentAlt: val('ppPbsFComponentAlt').trim().slice(0, 200),
     };
     let id; let summary;
@@ -454,6 +460,9 @@
     ui.edit = null;
     syncPopulatedColGroups(false);
     commit(summary, attr('data-pbs-row', id));
+    if (typeof globalThis !== 'undefined' && globalThis.ppHooks && typeof globalThis.ppHooks.emit === 'function') {
+      globalThis.ppHooks.emit('afterPbsCommit', d);
+    }
   }
 
   async function deleteItem(id) {

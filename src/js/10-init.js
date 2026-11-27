@@ -582,6 +582,7 @@
           return;
         }
         if (e.key === 'Escape' && isModalOpen()) {
+          if (document.querySelector('dialog[open]')) return;
           const forcedPwForm = document.querySelector('#ppChangeMyPwForm[data-forced="1"]');
           if (forcedPwForm) return;
           closeModal();
@@ -589,10 +590,11 @@
         }
 
         // Keep Tab focus trapped cleanly inside open modal dialog (WCAG 2.4.3)
-        if (e.key === 'Tab' && isModalOpen()) {
+        if (e.key === 'Tab' && isModalOpen() && !document.querySelector('dialog[open]')) {
           const card = document.getElementById('modalCard');
           if (!card) return;
-          const focusables = [...card.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+          const focusables = [...card.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+            .filter(el => el.offsetParent !== null);
           if (focusables.length === 0) return;
           const first = focusables[0];
           const last = focusables[focusables.length - 1];

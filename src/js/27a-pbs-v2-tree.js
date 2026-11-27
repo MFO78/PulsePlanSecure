@@ -241,8 +241,8 @@
    * descendant roll-ups per item, spares gaps, parent/child overlap flags, and per-domain populated item counts. */
   function computeSwpRollups(doc) {
     const empty = {
-      totalMass: null, totalPowerConsumption: null, totalPowerDissipation: null,
-      massCount: 0, powerConsCount: 0, powerDissCount: 0,
+      totalMass: null, totalPowerConsumption: null, totalPowerDissipation: null, totalUnitCost: null,
+      massCount: 0, powerConsCount: 0, powerDissCount: 0, unitCostCount: 0,
       lruCount: 0, spareAvailCount: 0, spareDelivCount: 0,
       spareGapCount: 0, spareGapIds: new Set(),
       overlapCount: 0, overlapIds: new Set(), hasQty: false,
@@ -251,7 +251,7 @@
     };
     if (!doc || !Array.isArray(doc.items) || !doc.items.length) return empty;
 
-    let massCount = 0; let powerConsCount = 0; let powerDissCount = 0;
+    let massCount = 0; let powerConsCount = 0; let powerDissCount = 0; let unitCostCount = 0;
     let lruCount = 0; let spareAvailCount = 0; let spareDelivCount = 0;
     let docsItemsCount = 0; let procItemsCount = 0; let engItemsCount = 0; let anySpecsCount = 0;
     let hasQty = false;
@@ -265,6 +265,7 @@
       if (isNum(it.mass)) massCount++;
       if (isNum(it.powerConsumption)) powerConsCount++;
       if (isNum(it.powerDissipation)) powerDissCount++;
+      if (isNum(it.unitCost) && it.unitCost > 0) unitCostCount++;
       if (isNum(it.qty) && it.qty > 1) hasQty = true;
       if (it.lru === 'Yes') lruCount++;
       if (it.spareAvailable === 'Yes') spareAvailCount++;
@@ -272,7 +273,7 @@
       if (it.spareToDeliver === 'Yes' && it.spareAvailable === 'No') spareGapIds.add(it.id);
 
       const hasDocs = Boolean(it.description || it.mechDrawing || it.elecDrawing || it.refDoc);
-      const hasProc = Boolean(it.manufacturer || it.partNumber || it.procurementStatus || isNum(it.leadTime) || it.componentAlt);
+      const hasProc = Boolean(it.manufacturer || it.partNumber || it.procurementStatus || isNum(it.leadTime) || isNum(it.unitCost) || it.componentAlt);
       const hasEng = Boolean(it.heritage || (isNum(it.qty) && it.qty > 1) || isNum(it.mass) || isNum(it.powerConsumption) || isNum(it.powerDissipation) || isNum(it.mtbf) || it.lru || it.spareAvailable || it.spareToDeliver);
       if (hasDocs) docsItemsCount++;
       if (hasProc) procItemsCount++;
@@ -288,16 +289,18 @@
     const memo = new Map();
     function walkSubtree(item, seen) {
       if (memo.has(item.id)) return memo.get(item.id);
-      if (seen.has(item.id)) return { m: 0, mc: 0, pc: 0, pcc: 0, pd: 0, pdc: 0 };
+      if (seen.has(item.id)) return { m: 0, mc: 0, pc: 0, pcc: 0, pd: 0, pdc: 0, uc: 0, ucc: 0 };
       seen.add(item.id);
       let dm = 0; let dmc = 0;
       let dpc = 0; let dpcc = 0;
       let dpd = 0; let dpdc = 0;
+      let duc = 0; let ducc = 0;
       (childrenByParent.get(item.id) || []).forEach(child => {
         const sub = walkSubtree(child, seen);
         dm += sub.m; dmc += sub.mc;
         dpc += sub.pc; dpcc += sub.pcc;
         dpd += sub.pd; dpdc += sub.pdc;
+        duc += sub.uc; ducc += sub.ucc;
       });
       seen.delete(item.id);
 
@@ -305,15 +308,18 @@
       const hasOwnM = isNum(item.mass); const hasDescM = dmc > 0;
       const hasOwnPc = isNum(item.powerConsumption); const hasDescPc = dpcc > 0;
       const hasOwnPd = isNum(item.powerDissipation); const hasDescPd = dpdc > 0;
+      const hasOwnUc = isNum(item.unitCost); const hasDescUc = ducc > 0;
 
       const massOverlap = hasOwnM && hasDescM;
       const powerConsOverlap = hasOwnPc && hasDescPc;
       const powerDissOverlap = hasOwnPd && hasDescPd;
-      if (massOverlap || powerConsOverlap || powerDissOverlap) overlapIds.add(item.id);
+      const unitCostOverlap = hasOwnUc && hasDescUc;
+      if (massOverlap || powerConsOverlap || powerDissOverlap || unitCostOverlap) overlapIds.add(item.id);
 
       const effM = hasDescM ? dm * q : (hasOwnM ? item.mass * q : 0);
       const effPc = hasDescPc ? dpc * q : (hasOwnPc ? item.powerConsumption * q : 0);
       const effPd = hasDescPd ? dpd * q : (hasOwnPd ? item.powerDissipation * q : 0);
+      const effUc = hasDescUc ? duc * q : (hasOwnUc ? item.unitCost * q : 0);
 
       byId.set(item.id, {
         effQty: q,
@@ -332,12 +338,18 @@
         linePowerDiss: hasOwnPd ? round4(item.powerDissipation * q) : null,
         powerDissOverlap,
         powerDissOverBudget: powerDissOverlap && dpd > item.powerDissipation,
+        descUnitCost: hasDescUc ? round4(duc * q) : null,
+        descUnitCostUnit: hasDescUc ? round4(duc) : null,
+        lineUnitCost: hasOwnUc ? round4(item.unitCost * q) : null,
+        unitCostOverlap,
+        unitCostOverBudget: unitCostOverlap && duc > item.unitCost,
       });
 
       const res = {
         m: effM, mc: (hasDescM || hasOwnM) ? 1 : 0,
         pc: effPc, pcc: (hasDescPc || hasOwnPc) ? 1 : 0,
         pd: effPd, pdc: (hasDescPd || hasOwnPd) ? 1 : 0,
+        uc: effUc, ucc: (hasDescUc || hasOwnUc) ? 1 : 0,
       };
       memo.set(item.id, res);
       return res;
@@ -346,11 +358,13 @@
     let totalM = 0; let totalMc = 0;
     let totalPc = 0; let totalPcc = 0;
     let totalPd = 0; let totalPdc = 0;
+    let totalUc = 0; let totalUcc = 0;
     (childrenByParent.get(null) || []).forEach(root => {
       const sub = walkSubtree(root, new Set());
       totalM += sub.m; totalMc += sub.mc;
       totalPc += sub.pc; totalPcc += sub.pcc;
       totalPd += sub.pd; totalPdc += sub.pdc;
+      totalUc += sub.uc; totalUcc += sub.ucc;
     });
     doc.items.forEach(it => { if (!byId.has(it.id)) walkSubtree(it, new Set()); });
 
@@ -358,7 +372,8 @@
       totalMass: totalMc ? round4(totalM) : null,
       totalPowerConsumption: totalPcc ? round4(totalPc) : null,
       totalPowerDissipation: totalPdc ? round4(totalPd) : null,
-      massCount, powerConsCount, powerDissCount,
+      totalUnitCost: totalUcc ? round4(totalUc) : null,
+      massCount, powerConsCount, powerDissCount, unitCostCount,
       lruCount, spareAvailCount, spareDelivCount,
       spareGapCount: spareGapIds.size, spareGapIds,
       overlapCount: overlapIds.size, overlapIds, hasQty,

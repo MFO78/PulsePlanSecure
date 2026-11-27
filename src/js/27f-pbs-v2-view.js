@@ -271,6 +271,10 @@
     return esc(raw);
   }
 
+  function canSeeFinance() {
+    return typeof ppCanAccessFinance !== 'function' || ppCanAccessFinance();
+  }
+
   const OPTIONAL_COL_GROUPS = {
     docs: [
       { key: 'description', label: 'Description', cls: 'pp-pbs-desc-cell', has: it => Boolean(it.description) },
@@ -283,6 +287,7 @@
       { key: 'partNumber', label: 'Part No.', cls: 'pp-pbs-mono', has: it => Boolean(it.partNumber) },
       { key: 'procurementStatus', label: 'Proc. Status', cls: '', has: it => Boolean(it.procurementStatus) },
       { key: 'leadTime', label: 'Lead (wks)', cls: 'pp-pbs-num', right: true, has: it => isNum(it.leadTime) },
+      { key: 'unitCost', label: 'Unit Cost', cls: 'pp-pbs-num', right: true, financeOnly: true, has: it => canSeeFinance() && isNum(it.unitCost) },
       { key: 'componentAlt', label: 'Alternative', cls: '', has: it => Boolean(it.componentAlt) },
     ],
     swp: [
@@ -300,7 +305,7 @@
 
   function getPopulatedGroupFlags(doc) {
     const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
-    const check = (g) => OPTIONAL_COL_GROUPS[g].some(col => items.some(it => col.has(it)));
+    const check = (g) => OPTIONAL_COL_GROUPS[g].some(col => (!col.financeOnly || canSeeFinance()) && items.some(it => col.has(it)));
     return { docs: check('docs'), proc: check('proc'), swp: check('swp') };
   }
 
@@ -308,10 +313,11 @@
   function resolveVisibleOptionalCols(doc, colGroups) {
     const g = colGroups || { docs: false, proc: false, swp: false };
     const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
+    const allowFin = canSeeFinance();
     const out = [];
     ['docs', 'proc', 'swp'].forEach(groupKey => {
       if (!g[groupKey]) return;
-      const defs = OPTIONAL_COL_GROUPS[groupKey];
+      const defs = OPTIONAL_COL_GROUPS[groupKey].filter(col => !col.financeOnly || allowFin);
       const populated = defs.filter(col => items.some(it => col.has(it)));
       out.push(...(populated.length ? populated : defs));
     });
@@ -368,6 +374,11 @@
           const risk = summary && summary.leadRiskMap ? summary.leadRiskMap.get(item.id) : null;
           html = `${esc(fmtNum(item.leadTime))} wks${risk ? `<span class="pp-pbs-cell-sub pp-pbs-cell-err" title="Projected ETA ${esc(risk.etaIso)} is ${risk.slipWeeks}w past milestone (${esc(risk.milestoneDate)})">\u26a0 +${risk.slipWeeks}w slip</span>` : ''}`;
           empty = false;
+        }
+        break;
+      case 'unitCost':
+        if (canSeeFinance()) {
+          ({ html, empty } = formatMetricCell(item.unitCost, sub && sub.descUnitCost, sub && sub.descUnitCostUnit, Boolean(sub && sub.unitCostOverlap), Boolean(sub && sub.unitCostOverBudget), effQ, ''));
         }
         break;
       case 'componentAlt': if (item.componentAlt) { html = esc(item.componentAlt); empty = false; } break;
@@ -479,6 +490,7 @@
       (c.key === 'mass' && r.totalMass !== null)
       || (c.key === 'powerConsumption' && r.totalPowerConsumption !== null)
       || (c.key === 'powerDissipation' && r.totalPowerDissipation !== null)
+      || (c.key === 'unitCost' && canSeeFinance() && r.totalUnitCost !== null)
       || (c.key === 'lru' && r.lruCount > 0)
       || (c.key === 'spareAvailable' && r.spareAvailCount > 0)
       || (c.key === 'spareToDeliver' && r.spareDelivCount > 0)
@@ -489,6 +501,7 @@
       if (col.key === 'mass' && r.totalMass !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Mass (kg)">${esc(fmtNum(r.totalMass))}</td>`;
       if (col.key === 'powerConsumption' && r.totalPowerConsumption !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Power Cons. (W)">${esc(fmtNum(r.totalPowerConsumption))}</td>`;
       if (col.key === 'powerDissipation' && r.totalPowerDissipation !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Power Diss. (W)">${esc(fmtNum(r.totalPowerDissipation))}</td>`;
+      if (col.key === 'unitCost' && canSeeFinance() && r.totalUnitCost !== null) return `<td class="pp-pbs-cell-kv pp-pbs-num" data-label="Total Cost">${esc(fmtNum(r.totalUnitCost))}</td>`;
       if (col.key === 'lru' && r.lruCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Total LRU">${r.lruCount} Yes</td>`;
       if (col.key === 'spareAvailable' && r.spareAvailCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Spares Avail.">${r.spareAvailCount} Yes</td>`;
       if (col.key === 'spareToDeliver' && r.spareDelivCount > 0) return `<td class="pp-pbs-cell-kv pp-pbs-center" data-label="Spares Deliv.">${r.spareDelivCount} Yes</td>`;
@@ -527,6 +540,7 @@
     const procStatuses = (ctx.procStatuses || P.PROC_STATUS_PRESETS || []).map(s => `<option value="${esc(s)}"></option>`).join('');
     const numVal = (v) => (isNum(v) ? esc(fmtNum(v)) : '');
     const secBadge = (n) => (n > 0 ? `<span class="pp-pbs-pill pp-pbs-pill-swp">${n} set</span>` : '<span style="font-size:10px;font-weight:600;color:var(--text-muted,#64748b)">Optional</span>');
+    const curSym = (ctx.db && ctx.db.settings && (ctx.db.settings.currency || ctx.db.settings.currencySymbol)) || '€';
 
     return `<form id="ppPbsItemForm" class="pp-pbs-form" aria-label="${item ? 'Edit PBS item' : 'Add PBS item'}">
       ${field('Code *', `<input type="text" id="ppPbsFCode" class="pp-pbs-input" value="${esc(item ? item.code : e.suggestedCode)}" required />`)}
@@ -557,7 +571,8 @@
           ${field('Part Number', `<input type="text" id="ppPbsFPartNumber" class="pp-pbs-input" value="${esc(item ? item.partNumber : '')}" placeholder="e.g., LM2596S-5.0" />`)}
           ${field('Procurement / Manufacture Status', `<input type="text" id="ppPbsFProcStatus" list="ppPbsProcStatusList" class="pp-pbs-input" value="${esc(item ? item.procurementStatus : '')}" placeholder="Pick preset or type status..." autocomplete="off" /><datalist id="ppPbsProcStatusList">${procStatuses}</datalist>`)}
           ${field('Lead Time (wks)', `<input type="number" id="ppPbsFLeadTime" class="pp-pbs-input" min="0" step="any" value="${numVal(item && item.leadTime)}" placeholder="e.g., 12" />`)}
-          ${field('Component Alternative', `<input type="text" id="ppPbsFComponentAlt" class="pp-pbs-input" value="${esc(item ? item.componentAlt : '')}" placeholder="Second source / alternate part number..." />`, 'grid-column:span 2')}
+          ${canSeeFinance() ? field(`Unit Cost (${esc(curSym)}) &times; Qty`, `<input type="number" id="ppPbsFUnitCost" class="pp-pbs-input" min="0" step="any" inputmode="decimal" value="${numVal(item && item.unitCost)}" placeholder="0.00" />`) : ''}
+          ${field('Component Alternative', `<input type="text" id="ppPbsFComponentAlt" class="pp-pbs-input" value="${esc(item ? item.componentAlt : '')}" placeholder="Second source / alternate part number..." />`, canSeeFinance() ? '' : 'grid-column:span 2')}
         </div>
       </details>
 

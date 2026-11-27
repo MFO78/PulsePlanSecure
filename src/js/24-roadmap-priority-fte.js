@@ -66,28 +66,23 @@
     });
   }
 
-  function findAllocationFteInputs(root) {
-    const scope = root || document;
-    const candidates = [
-      scope.querySelector ? scope.querySelector('#allocFte') : document.getElementById('allocFte'),
-      scope.querySelector ? scope.querySelector('#allocationFte') : document.getElementById('allocationFte'),
-      scope.querySelector ? scope.querySelector('#fteInput') : document.getElementById('fteInput'),
-      scope.querySelector ? scope.querySelector('input[name="fte"]') : null,
-      scope.querySelector ? scope.querySelector('input[data-field="fte"]') : null,
-    ].filter(Boolean);
+  function getAllocationModalEls() {
+    const modalCard = document.getElementById('modalCard');
+    if (!modalCard) return null;
+    const deptEl = modalCard.querySelector('#mAllocDept');
+    const projEl = modalCard.querySelector('#mAllocProj');
+    const periodEl = modalCard.querySelector('#mAllocPeriod');
+    const valEl = modalCard.querySelector('#mAllocValue');
+    if (!deptEl || !projEl || !periodEl || !valEl) return null;
+    return { modalCard, deptEl, projEl, periodEl, valEl };
+  }
 
-    if (candidates.length === 0 && typeof scope.querySelectorAll === 'function') {
-      const labels = Array.from(scope.querySelectorAll('label'));
-      for (let i = 0; i < labels.length; i++) {
-        const txt = String(labels[i].textContent || '').toLowerCase();
-        if (txt.includes('fte')) {
-          const forId = labels[i].getAttribute('for');
-          const el = forId ? document.getElementById(forId) : (labels[i].parentElement ? labels[i].parentElement.querySelector('input[type="number"], input') : null);
-          if (el) candidates.push(el);
-        }
-      }
-    }
-    return Array.from(new Set(candidates));
+  function isSelectedProjAdmin(projId) {
+    const db = getDb();
+    const proj = (db && Array.isArray(db.projects)) ? db.projects.find(p => p && p.id === projId) : null;
+    if (!proj) return false;
+    if (typeof isNonFteProject === 'function') return Boolean(isNonFteProject(proj));
+    return Boolean(proj.nonFte || proj.category === 'admin');
   }
 
   function isNullishOrBlank(val) {
@@ -97,103 +92,106 @@
     return !Number.isFinite(Number(s));
   }
 
-  function isEmptyOrZero(val) {
-    if (isNullishOrBlank(val)) return true;
-    return Number(String(val).trim()) <= 0;
-  }
-
-  function isNewActivityModal(modalRoot, openArgs) {
-    if (openArgs && openArgs.length >= 3) {
-      const [deptId, projId, periodKey] = openArgs;
-      const db = getDb();
-      if (deptId && projId && periodKey && db && db.allocations) {
-        const directKey = `${deptId}::${projId}::${periodKey}`;
-        const existing = db.allocations[directKey];
-        if (existing == null || Number(existing) <= 0) return true;
-      }
+  function getDefaultOneFteDisplay(periodKey) {
+    const unit = (typeof ui !== 'undefined' && ui.manpowerUnit) || 'fte';
+    const timeUnit = (typeof ui !== 'undefined' && ui.timeUnit) || 'month';
+    if (unit === 'fte') return '1';
+    if (typeof fteToDisplayValue === 'function' && periodKey) {
+      const converted = Math.round(fteToDisplayValue(1, periodKey, timeUnit, unit) * 100) / 100;
+      if (Number.isFinite(converted) && converted > 0) return String(converted);
     }
-    if (!modalRoot) return false;
-    const heading = modalRoot.querySelector ? modalRoot.querySelector('h1, h2, h3, [data-modal-title]') : null;
-    const titleTxt = String(heading ? heading.textContent : '').toLowerCase();
-    if (/\b(add|new)\b/.test(titleTxt) && /\b(activity|allocation|task|assignment)\b/.test(titleTxt)) return true;
-    return false;
+    return '1';
   }
 
-  let lastDesiredFte = '1';
-
-  function restoreFteIfCleared(modalRoot) {
-    const inputs = findAllocationFteInputs(modalRoot || document);
-    inputs.forEach(inp => {
-      if (isNullishOrBlank(inp.value)) {
-        inp.value = lastDesiredFte || '1';
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
+  function cellHasExistingAllocation(deptId, projId, periodKey) {
+    if (!deptId || !projId || !periodKey) return false;
+    const db = getDb();
+    const timeUnit = (typeof ui !== 'undefined' && ui.timeUnit) || 'month';
+    if (typeof getAllocationForPeriod === 'function' && db && db.allocations) {
+      return Boolean(getAllocationForPeriod(deptId, projId, periodKey, timeUnit, db.allocations).hasData);
+    }
+    const existing = db && db.allocations ? db.allocations[`${deptId}::${projId}::${periodKey}`] : null;
+    return existing != null && Number(existing) > 0.0001;
   }
+
+  let lastDesiredVal = '1';
 
   function wireDelegatedFteGuard() {
     if (document.__ppDelegatedFteGuardWired || typeof document.addEventListener !== 'function') return;
     document.__ppDelegatedFteGuardWired = true;
 
     const handleFieldMutation = (ev) => {
-      const modalCard = document.getElementById('modalCard') || document.getElementById('modalOverlay');
-      if (!modalCard || !ev.target || !modalCard.contains(ev.target)) return;
-      const fteInputs = findAllocationFteInputs(modalCard);
-      if (!fteInputs.length) return;
+      const els = getAllocationModalEls();
+      if (!els || !ev.target || !els.modalCard.contains(ev.target)) return;
 
-      // If the user is directly editing the FTE input, record valid values and do not override them.
-      if (fteInputs.includes(ev.target)) {
-        const raw = String(ev.target.value ?? '').trim();
-        if (!isNullishOrBlank(raw) && Number(raw) > 0) lastDesiredFte = raw;
+      // Track user's explicit numeric entries in #mAllocValue without interfering
+      if (ev.target === els.valEl) {
+        const raw = String(els.valEl.value ?? '').trim();
+        if (!isNullishOrBlank(raw) && Number(raw) > 0) lastDesiredVal = raw;
         return;
       }
 
-      // Another field (select, date, period, unit toggle, etc.) changed: guard against FTE being wiped to null/blank.
-      setTimeout(() => restoreFteIfCleared(modalCard), 0);
-      setTimeout(() => restoreFteIfCleared(modalCard), 50);
+      // Only guard against onAllocModalContextChange() blanking out #mAllocValue when switching Dept/Proj/Period
+      const isContextSelect = ev.target === els.deptEl || ev.target === els.projEl || ev.target === els.periodEl;
+      if (!isContextSelect) return;
+
+      const preserveVal = (!isNullishOrBlank(els.valEl.value) && Number(els.valEl.value) > 0)
+        ? String(els.valEl.value).trim()
+        : lastDesiredVal;
+
+      setTimeout(() => {
+        const cur = getAllocationModalEls();
+        if (!cur) return;
+        if (isSelectedProjAdmin(cur.projEl.value)) return;
+        // If onAllocModalContextChange cleared #mAllocValue because the newly selected cell is empty, restore desired value
+        if (isNullishOrBlank(cur.valEl.value)) {
+          const fallback = (!isNullishOrBlank(preserveVal) && Number(preserveVal) > 0)
+            ? preserveVal
+            : getDefaultOneFteDisplay(cur.periodEl.value);
+          cur.valEl.value = fallback;
+          lastDesiredVal = fallback;
+          if (typeof refreshAllocModalPreview === 'function') refreshAllocModalPreview();
+        } else if (Number(cur.valEl.value) > 0) {
+          lastDesiredVal = String(cur.valEl.value).trim();
+        }
+      }, 0);
     };
 
     document.addEventListener('change', handleFieldMutation, true);
     document.addEventListener('input', handleFieldMutation, true);
   }
 
-  function applyDefaultFteIfNew(openArgs) {
+  function applyDefaultFteIfNew() {
     wireDelegatedFteGuard();
-    const modalCard = document.getElementById('modalCard') || document.getElementById('modalOverlay');
-    const candidates = findAllocationFteInputs(modalCard || document);
-    if (!candidates.length) return;
+    const els = getAllocationModalEls();
+    if (!els) return;
+    if (isSelectedProjAdmin(els.projEl.value)) return;
 
-    const modalRoot = candidates[0].closest ? (candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || modalCard || document) : (modalCard || document);
-    const existingVal = String(candidates[0].value ?? '').trim();
-    const isNew = isEmptyOrZero(existingVal) || isNewActivityModal(modalRoot, openArgs);
+    const existingVal = String(els.valEl.value ?? '').trim();
+    const hasExisting = cellHasExistingAllocation(els.deptEl.value, els.projEl.value, els.periodEl.value);
 
-    if (!isNew) {
-      if (!isNullishOrBlank(existingVal) && Number(existingVal) > 0) lastDesiredFte = existingVal;
+    // Never overwrite an existing allocation (works identically in Month and Week views)
+    if (hasExisting || (!isNullishOrBlank(existingVal) && Number(existingVal) > 0)) {
+      if (!isNullishOrBlank(existingVal) && Number(existingVal) > 0) {
+        lastDesiredVal = existingVal;
+      }
       return;
     }
 
-    lastDesiredFte = '1';
-    candidates.forEach(inp => {
-      if (isEmptyOrZero(inp.value) || inp.value !== '1') {
-        inp.value = '1';
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    });
+    const defVal = getDefaultOneFteDisplay(els.periodEl.value);
+    lastDesiredVal = defVal;
+    els.valEl.value = defVal;
+    if (typeof refreshAllocModalPreview === 'function') refreshAllocModalPreview();
   }
 
-  ['openAllocationModal', 'openCellModal', 'openAddActivityModal'].forEach(fnName => {
-    if (typeof globalThis[fnName] === 'function') {
-      const nativeFn = globalThis[fnName];
-      globalThis[fnName] = function (...args) {
-        const res = nativeFn.apply(this, args);
-        applyDefaultFteIfNew(args);
-        setTimeout(() => applyDefaultFteIfNew(args), 0);
-        return res;
-      };
-    }
-  });
+  if (typeof openAllocationModal === 'function') {
+    const nativeOpenAlloc = openAllocationModal;
+    openAllocationModal = function (...args) {
+      const res = nativeOpenAlloc.apply(this, args);
+      applyDefaultFteIfNew();
+      return res;
+    };
+  }
 
   if (typeof renderRoadmap === 'function') {
     const nativeRenderRoadmap = renderRoadmap;

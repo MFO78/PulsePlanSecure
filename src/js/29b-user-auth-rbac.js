@@ -332,6 +332,8 @@
     if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
     const clearIds = [
       'matrixHead', 'matrixBody', 'matrixFoot', 'matrixFloatingHeader', 'mobileMatrixCards',
+      'healthKpis', 'healthSvgChart', 'deptHealthList', 'healthCapacityHeatmap',
+      'snapshotCompareKpis', 'snapshotCompareContent', 'changeLogTable',
       'healthSummaryCards', 'healthDeptBars', 'healthProjectBars', 'healthAlertsList',
       'dataDepartmentsBody', 'dataProjectsBody', 'dataMilestonesBody',
       'changeLogContainer', 'snapshotsContainer', 'modalCard', 'toastContainer',
@@ -342,6 +344,9 @@
     });
     document.getElementById('ppAdminAccessCard')?.remove();
     document.getElementById('ppPeopleDirCard')?.remove();
+    document.getElementById('ppHealthBurnBudgetFrame')?.remove();
+    document.getElementById('ppNotesDiffCard')?.remove();
+    document.getElementById('ppHealthCtrlBar')?.remove();
     const extBanner = document.getElementById('externalUpdateBanner');
     if (extBanner) extBanner.classList.add('hidden');
   }
