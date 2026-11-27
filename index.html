@@ -8974,6 +8974,9 @@ border-color: #334155;
         const detailSwatchHtml = isAdminRow
           ? `<span class="w-2 rounded-full shrink-0 admin-hashed-swatch" style="--admin-accent:${row.color}" aria-hidden="true"></span>`
           : `<span class="w-1.5 rounded-full shrink-0" style="background:${row.color}" aria-hidden="true"></span>`;
+        const projTaskSummaryHtml = typeof ppRenderRowTaskSummaryHtml === 'function'
+          ? ppRenderRowTaskSummaryHtml(db, periods, null, row.id, visibleDepts.map(d => d.id), null)
+          : '';
         return `
           <th scope="row" ${clickAttr} class="${rowSpotCls} sticky left-0 z-10 bg-white group-hover/row:bg-slate-50 ${s.tdSticky} border-b border-slate-200 sticky-col-shadow align-top font-normal text-left ${clickAttr ? 'cursor-pointer' : ''}">
             <div class="flex items-stretch gap-2 min-w-0">
@@ -8995,6 +8998,7 @@ border-color: #334155;
                 </div>
                 ${ownerLineHtml}
                 ${budgetBarHtml}
+                ${projTaskSummaryHtml}
                 ${nextMsHtml}
               </div>
             </div>
@@ -9362,8 +9366,18 @@ border-color: #334155;
                  ${deptRateTxt ? `<span class="font-mono font-semibold text-emerald-700 shrink-0">${escapeHtml(deptRateTxt)}</span>` : ''}
                </div>`
             : '';
+          const visProjIdsForRow = visibleProjs.map(p => p.id);
+          const deptTaskStats = typeof ppComputeWeeklyTaskStats === 'function'
+            ? ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, [row.id], visProjIdsForRow)
+            : null;
+          const deptTaskSummaryHtml = typeof ppRenderRowTaskSummaryHtml === 'function'
+            ? ppRenderRowTaskSummaryHtml(db, periods, row.id, null, null, visProjIdsForRow)
+            : '';
+          const deptTaskTip = (deptTaskStats && deptTaskStats.activeTotal > 0)
+            ? ` • Tasks ${deptTaskStats.done}/${deptTaskStats.activeTotal} (${deptTaskStats.sayDoPct}%)${deptTaskStats.rolledOpen > 0 ? `, ↻${deptTaskStats.rolledOpen} rolled` : ''}`
+            : '';
           const deptRowHeaderHtml = isCompactRow
-            ? `<th scope="row" title="${escapeHtml(row.name)} (${avgPct}% avg • Peak ${peakPct > 990 ? '>100' : peakPct}%)"
+            ? `<th scope="row" title="${escapeHtml(row.name)} (${avgPct}% avg • Peak ${peakPct > 990 ? '>100' : peakPct}%${escapeHtml(deptTaskTip)})"
                  class="meeting-row-accent sticky left-0 z-10 bg-white group-hover/row:bg-slate-50 w-[62px] min-w-[62px] max-w-[62px] ${s.tdSticky} border-b border-slate-200 sticky-col-shadow align-middle font-normal text-center"
                  style="--row-accent:${row.color};">
                  <div class="flex flex-col items-center justify-center gap-2">
@@ -9409,6 +9423,7 @@ border-color: #334155;
                              <div class="h-full ${avgBarColor} rounded-full" style="width:${Math.min(100, avgPct)}%"></div>
                            </div>
                          </div>
+                         ${deptTaskSummaryHtml}
                          ${deptMgrLine}
                        </div>
                      </div>
@@ -16581,6 +16596,7 @@ border-color: #334155;
 
     function openCellDetailModal(rowId, periodKey) {
       const db = getActiveDB();
+      if (typeof ppAutoRolloverAllocationTasks === 'function') ppAutoRolloverAllocationTasks(db);
       const isDeptAxis = ui.axis === 'department';
       const primaryRow = isDeptAxis
         ? db.departments.find(d => d.id === rowId)
@@ -16610,17 +16626,42 @@ border-color: #334155;
 
       const activeItems = [];
       const unusedItems = [];
+      let cellTasksActive = 0, cellTasksDone = 0, cellTasksRolled = 0, cellTasksAging = 0;
       secondaryList.forEach(item => {
         const deptId = isDeptAxis ? rowId : item.id;
         const projId = isDeptAxis ? item.id : rowId;
         const pairProj = isDeptAxis ? item : primaryRow;
         const alloc = getAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, db.allocations);
         const cmt = getCellProjectComments(deptId, projId, periodKey, ui.timeUnit, db);
-        if (alloc.hasData || cmt.hasAny || (isNonFteProject(pairProj) && Boolean(cmt.monthNote))) activeItems.push({ item, deptId, projId, alloc, cmt });
-        else unusedItems.push(item);
+        const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(deptId, projId, periodKey, ui.timeUnit, db) : [];
+        cellTasks.forEach(t => {
+          if (t.dropped) return;
+          cellTasksActive++;
+          if (t.done) cellTasksDone++;
+          else if ((t.rollCount || 0) > 0) {
+            cellTasksRolled++;
+            if ((t.rollCount || 0) >= 2) cellTasksAging++;
+          }
+        });
+        if (alloc.hasData || cmt.hasAny || cellTasks.length > 0 || (isNonFteProject(pairProj) && Boolean(cmt.monthNote))) {
+          activeItems.push({ item, deptId, projId, alloc, cmt, cellTasks });
+        } else {
+          unusedItems.push(item);
+        }
       });
 
-      const buildCommentCardHtml = (item, deptId, projId, alloc, cmt) => {
+      const cellTaskBadgeHtml = cellTasksActive > 0
+        ? (() => {
+            const pct = Math.round((cellTasksDone / cellTasksActive) * 100);
+            const cls = pct >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : (pct >= 50 ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200');
+            const rollHtml = cellTasksRolled > 0
+              ? ` <span class="pp-task-roll ${cellTasksAging > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}">&#8635;${cellTasksRolled}</span>`
+              : '';
+            return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${cls}" title="Weekly tasks in this cell: ${cellTasksDone}/${cellTasksActive} completed (${pct}%)">&#9745; ${cellTasksDone}/${cellTasksActive} tasks (${pct}%)${rollHtml}</span>`;
+          })()
+        : '';
+
+      const buildCommentCardHtml = (item, deptId, projId, alloc, cmt, cellTasks) => {
         const pairProj = isDeptAxis ? item : primaryRow;
         const isAdminPair = isNonFteProject(pairProj);
         const valStr = alloc && alloc.hasData
@@ -16637,6 +16678,9 @@ border-color: #334155;
           : '';
         const monthNoteRefHtml = (cmt && cmt.monthNote)
           ? `<div class="mt-1 text-[11px] text-slate-500 italic">Month note (${escapeHtml(getWeekOwningMonth(periodKey))}): ${fmtNote(cmt.monthNote)}</div>`
+          : '';
+        const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+          ? ppRenderInlineCellTasksHtml(deptId, projId, periodKey, cellTasks || [], null, Boolean(ui.presentMode), false)
           : '';
         const rightControlsHtml = isAdminPair
           ? `<div class="flex items-center gap-1.5 shrink-0">
@@ -16660,7 +16704,7 @@ border-color: #334155;
           : `Add comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}... (start a line with "- " for bullets)`;
 
         return `
-          <div class="${isAdminPair ? 'admin-hashed-card' : 'accent-card border border-slate-200 bg-slate-50/70'} p-3 rounded-xl space-y-2" style="${isAdminPair ? `--admin-accent:${item.color}; --accent-w:4px;` : `--accent-color:${item.color}; --accent-w:4px; border-left: 4px solid ${item.color};`}">
+          <div class="group/pill ${isAdminPair ? 'admin-hashed-card' : 'accent-card border border-slate-200 bg-slate-50/70'} p-3 rounded-xl space-y-2" style="${isAdminPair ? `--admin-accent:${item.color}; --accent-w:4px;` : `--accent-color:${item.color}; --accent-w:4px; border-left: 4px solid ${item.color};`}">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="font-mono font-bold text-[11px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-700 shrink-0">${escapeHtml(item.code)}</span>
@@ -16676,11 +16720,12 @@ border-color: #334155;
               class="cell-comment-input w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30">${escapeHtml(cmt ? cmt.direct : '')}</textarea>
             ${weekNotesHtml}
             ${monthNoteRefHtml}
+            ${tasksHtml}
           </div>`;
       };
 
       const cardsHtml = activeItems.length > 0
-        ? activeItems.map(x => buildCommentCardHtml(x.item, x.deptId, x.projId, x.alloc, x.cmt)).join('')
+        ? activeItems.map(x => buildCommentCardHtml(x.item, x.deptId, x.projId, x.alloc, x.cmt, x.cellTasks)).join('')
         : `<div id="cellCommentsEmptyState" class="p-4 rounded-xl border border-dashed border-slate-300 text-center text-slate-500 text-xs">
              No projects allocated in this cell yet. Click <strong>+ Allocate</strong> below or pick a ${isDeptAxis ? 'project' : 'department'} to add comments.
            </div>`;
@@ -16698,7 +16743,7 @@ border-color: #334155;
         : '';
 
       showModal(`
-        <div class="p-5 space-y-4 text-xs">
+        <div id="cellDetailModalRoot" data-cell-row-id="${escapeHtml(rowId)}" data-cell-period-key="${escapeHtml(periodKey)}" class="p-5 space-y-4 text-xs">
           <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
           <div class="flex items-start justify-between gap-3">
             <div class="space-y-1">
@@ -16709,6 +16754,7 @@ border-color: #334155;
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-[11px] text-slate-500">${ui.timeUnit === 'week' ? 'ISO Week' : 'Month'} (${escapeHtml(hdr.sub)})</span>
                 ${summaryBadgeHtml}
+                ${cellTaskBadgeHtml}
               </div>
             </div>
             <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-xl font-bold leading-none shrink-0">&times;</button>
@@ -38185,6 +38231,61 @@ border-color: #334155;
     </div>`;
   }
 
+  /* Renders a compact per-row Tasks / Say-Do status block for Detailed Department & Project row headers in the Roadmap. */
+  function ppRenderRowTaskSummaryHtml(db, periods, deptId, projId, visibleDeptIds, visibleProjIds) {
+    injectTaskStyles();
+    if (!db || !Array.isArray(db.allocationTasks) || !db.allocationTasks.length) return '';
+    const dFilter = deptId ? [deptId] : visibleDeptIds;
+    const pFilter = projId ? [projId] : visibleProjIds;
+    const stats = ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, dFilter, pFilter);
+    if (!stats || stats.activeTotal === 0) return '';
+
+    const barCls = stats.sayDoPct >= 80 ? 'bg-emerald-500' : (stats.sayDoPct >= 50 ? 'bg-amber-500' : 'bg-indigo-500');
+    const txtCls = stats.sayDoPct >= 80 ? 'text-emerald-700 font-bold' : (stats.sayDoPct >= 50 ? 'text-amber-700 font-bold' : 'text-indigo-700 font-bold');
+    const rollPill = stats.rolledOpen > 0
+      ? `<span class="pp-task-roll ${stats.agingOpen > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}" title="${stats.rolledOpen} open task(s) rolled from prior week(s)${stats.agingOpen > 0 ? ` (${stats.agingOpen} aging ≥2×)` : ''}">&#8635;${stats.rolledOpen}</span>`
+      : '';
+    const tip = `Weekly Tasks in visible window: ${stats.done}/${stats.activeTotal} done (${stats.sayDoPct}%)${stats.open > 0 ? `, ${stats.open} open` : ''}${stats.rolledOpen > 0 ? `, ${stats.rolledOpen} rolled` : ''}`;
+
+    return `<div class="mt-1.5 pp-row-task-summary" title="${escapeHtml(tip)}">
+      <div class="flex items-center justify-between gap-1 text-[9px] leading-none mb-0.5">
+        <span class="text-slate-500 uppercase font-semibold">&#9745; Tasks</span>
+        <span class="inline-flex items-center gap-1 tabular-nums ${txtCls}">
+          <span>${stats.done}/${stats.activeTotal} (${stats.sayDoPct}%)</span>
+          ${rollPill}
+        </span>
+      </div>
+      <div class="w-full h-1 rounded-full bg-slate-200/80 overflow-hidden" aria-hidden="true">
+        <div class="h-full ${barCls} rounded-full" style="width:${Math.min(100, stats.sayDoPct)}%"></div>
+      </div>
+    </div>`;
+  }
+
+  /* Refreshes open Cell Detail Modal (preserving unsaved note drafts) after an inline task mutation. */
+  function refreshOpenCellDetailModalIfAny() {
+    const root = typeof document !== 'undefined' ? document.getElementById('cellDetailModalRoot') : null;
+    if (!root || !root.dataset || !root.dataset.cellRowId || !root.dataset.cellPeriodKey) return;
+    if (typeof openCellDetailModal !== 'function') return;
+    const rowId = root.dataset.cellRowId;
+    const periodKey = root.dataset.cellPeriodKey;
+    const drafts = new Map();
+    root.querySelectorAll('.cell-comment-input').forEach(ta => {
+      if (ta && ta.dataset && ta.dataset.commentDept && ta.dataset.commentProj) {
+        drafts.set(`${ta.dataset.commentDept}::${ta.dataset.commentProj}`, ta.value);
+      }
+    });
+    openCellDetailModal(rowId, periodKey);
+    const nextRoot = document.getElementById('cellDetailModalRoot');
+    if (nextRoot && drafts.size > 0) {
+      nextRoot.querySelectorAll('.cell-comment-input').forEach(ta => {
+        if (ta && ta.dataset && ta.dataset.commentDept && ta.dataset.commentProj) {
+          const key = `${ta.dataset.commentDept}::${ta.dataset.commentProj}`;
+          if (drafts.has(key)) ta.value = drafts.get(key);
+        }
+      });
+    }
+  }
+
   /* ---------- Direct Interactive Actions ---------- */
   function ppSetTaskFilter(mode) {
     if (typeof ui === 'undefined' || !ui) return;
@@ -38230,6 +38331,7 @@ border-color: #334155;
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -38263,6 +38365,7 @@ border-color: #334155;
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -38291,6 +38394,7 @@ border-color: #334155;
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -38305,6 +38409,7 @@ border-color: #334155;
     task.updatedAt = new Date().toISOString();
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -38322,15 +38427,18 @@ border-color: #334155;
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return true;
   }
 
-  /* Inline quick-add input directly inside the Roadmap cell card */
+  /* Inline quick-add input directly inside the Roadmap cell card or Cell Detail Modal */
   function ppOpenInlineTaskInput(deptId, projId, periodKey, ev) {
     if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
     if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
     const slotKey = `${deptId}::${projId}::${periodKey}`;
-    const slot = document.querySelector(`[data-pp-task-slot="${CSS.escape(slotKey)}"]`);
+    const triggerEl = (ev && (ev.currentTarget || ev.target)) || null;
+    const slot = (triggerEl && typeof triggerEl.closest === 'function' && triggerEl.closest('[data-pp-task-slot]'))
+      || document.querySelector(`[data-pp-task-slot="${CSS.escape(slotKey)}"]`);
     if (!slot) {
       if (typeof openAllocationModal === 'function') openAllocationModal(deptId, projId, periodKey);
       return;
@@ -38577,6 +38685,7 @@ border-color: #334155;
   globalThis.ppComputeWeeklyTaskStats = ppComputeWeeklyTaskStats;
   globalThis.ppRenderInlineCellTasksHtml = ppRenderInlineCellTasksHtml;
   globalThis.ppRenderWeeklyTaskSummaryBar = ppRenderWeeklyTaskSummaryBar;
+  globalThis.ppRenderRowTaskSummaryHtml = ppRenderRowTaskSummaryHtml;
   globalThis.ppSetTaskFilter = ppSetTaskFilter;
   globalThis.ppAddAllocationTask = ppAddAllocationTask;
   globalThis.ppToggleAllocationTask = ppToggleAllocationTask;

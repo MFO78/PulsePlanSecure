@@ -1686,6 +1686,9 @@
         const detailSwatchHtml = isAdminRow
           ? `<span class="w-2 rounded-full shrink-0 admin-hashed-swatch" style="--admin-accent:${row.color}" aria-hidden="true"></span>`
           : `<span class="w-1.5 rounded-full shrink-0" style="background:${row.color}" aria-hidden="true"></span>`;
+        const projTaskSummaryHtml = typeof ppRenderRowTaskSummaryHtml === 'function'
+          ? ppRenderRowTaskSummaryHtml(db, periods, null, row.id, visibleDepts.map(d => d.id), null)
+          : '';
         return `
           <th scope="row" ${clickAttr} class="${rowSpotCls} sticky left-0 z-10 bg-white group-hover/row:bg-slate-50 ${s.tdSticky} border-b border-slate-200 sticky-col-shadow align-top font-normal text-left ${clickAttr ? 'cursor-pointer' : ''}">
             <div class="flex items-stretch gap-2 min-w-0">
@@ -1707,6 +1710,7 @@
                 </div>
                 ${ownerLineHtml}
                 ${budgetBarHtml}
+                ${projTaskSummaryHtml}
                 ${nextMsHtml}
               </div>
             </div>
@@ -2074,8 +2078,18 @@
                  ${deptRateTxt ? `<span class="font-mono font-semibold text-emerald-700 shrink-0">${escapeHtml(deptRateTxt)}</span>` : ''}
                </div>`
             : '';
+          const visProjIdsForRow = visibleProjs.map(p => p.id);
+          const deptTaskStats = typeof ppComputeWeeklyTaskStats === 'function'
+            ? ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, [row.id], visProjIdsForRow)
+            : null;
+          const deptTaskSummaryHtml = typeof ppRenderRowTaskSummaryHtml === 'function'
+            ? ppRenderRowTaskSummaryHtml(db, periods, row.id, null, null, visProjIdsForRow)
+            : '';
+          const deptTaskTip = (deptTaskStats && deptTaskStats.activeTotal > 0)
+            ? ` • Tasks ${deptTaskStats.done}/${deptTaskStats.activeTotal} (${deptTaskStats.sayDoPct}%)${deptTaskStats.rolledOpen > 0 ? `, ↻${deptTaskStats.rolledOpen} rolled` : ''}`
+            : '';
           const deptRowHeaderHtml = isCompactRow
-            ? `<th scope="row" title="${escapeHtml(row.name)} (${avgPct}% avg • Peak ${peakPct > 990 ? '>100' : peakPct}%)"
+            ? `<th scope="row" title="${escapeHtml(row.name)} (${avgPct}% avg • Peak ${peakPct > 990 ? '>100' : peakPct}%${escapeHtml(deptTaskTip)})"
                  class="meeting-row-accent sticky left-0 z-10 bg-white group-hover/row:bg-slate-50 w-[62px] min-w-[62px] max-w-[62px] ${s.tdSticky} border-b border-slate-200 sticky-col-shadow align-middle font-normal text-center"
                  style="--row-accent:${row.color};">
                  <div class="flex flex-col items-center justify-center gap-2">
@@ -2121,6 +2135,7 @@
                              <div class="h-full ${avgBarColor} rounded-full" style="width:${Math.min(100, avgPct)}%"></div>
                            </div>
                          </div>
+                         ${deptTaskSummaryHtml}
                          ${deptMgrLine}
                        </div>
                      </div>

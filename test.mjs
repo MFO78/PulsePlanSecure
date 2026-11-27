@@ -4223,10 +4223,16 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
     delete db.allocations[d1 + '::' + p2 + '::' + curWk];
     delete db.comments[d1 + '::' + p2 + '::' + curWk];
     ui.startWeek = curWk;
+    ui.compactRowLabels = false;
     renderMatrix();
 
     const matrixHtml = (document.getElementById('matrixWrapper') && document.getElementById('matrixWrapper').innerHTML) || '';
     const sayDoHtml = (document.getElementById('weeklyTaskSummaryHost') && document.getElementById('weeklyTaskSummaryHost').innerHTML) || '';
+
+    // 5b. Open Department × Period Cell Detail Modal and verify task summary pill + 0-FTE task card + inline checkbox
+    openCellDetailModal(d1, curWk);
+    const cellModalHtml = (document.getElementById('modalCard') && document.getElementById('modalCard').innerHTML) || '';
+    closeModal();
 
     // 6. Toggle live rolled task inline -> done=true, frozen rollCount=2
     ppToggleAllocationTask('t_live_roll');
@@ -4279,6 +4285,9 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
       matrixHasRollBadge: matrixHtml.includes('&#8635;2'),
       matrixHasZeroFteCard: matrixHtml.includes('Live rolled blocker') && matrixHtml.includes('0 FTE'),
       matrixHasQuickAdd: matrixHtml.includes('ppOpenInlineTaskInput'),
+      matrixHasDetailedRowTaskSummary: matrixHtml.includes('pp-row-task-summary') && matrixHtml.includes('&#9745; Tasks'),
+      cellModalHasTaskBadge: cellModalHtml.includes('id="cellDetailModalRoot"') && cellModalHtml.includes('tasks ('),
+      cellModalHasZeroFteTask: cellModalHtml.includes('Live rolled blocker') && cellModalHtml.includes('ppToggleAllocationTask'),
       sayDoHasBar: sayDoHtml.includes('id="ppWeeklyTaskBar"') && sayDoHtml.includes('Weekly Tasks (Say-Do)'),
       toggledDone: Boolean(toggledTask && toggledTask.done),
       toggledRollCount: toggledTask ? toggledTask.rollCount : -1,
@@ -4317,6 +4326,9 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
   assert.equal(out.matrixHasRollBadge, true, 'Roadmap cell renders rollover counter badge (↻2)');
   assert.equal(out.matrixHasZeroFteCard, true, 'Rolled task on a 0-FTE cell still surfaces in Roadmap with 0 FTE alert');
   assert.equal(out.matrixHasQuickAdd, true, 'Roadmap cell includes inline + Task quick-add trigger');
+  assert.equal(out.matrixHasDetailedRowTaskSummary, true, 'Detailed Department row header reports per-row Tasks Say-Do status');
+  assert.equal(out.cellModalHasTaskBadge, true, 'Department × Period Cell Detail Modal header shows cell-level task status badge');
+  assert.equal(out.cellModalHasZeroFteTask, true, 'Cell Detail Modal includes 0-FTE carried-over tasks and renders interactive checkboxes');
   assert.equal(out.sayDoHasBar, true, 'Weekly Tasks Say-Do summary bar & meeting filters render above Roadmap');
   assert.equal(out.toggledDone, true, 'Inline checkbox marks task done');
   assert.equal(out.toggledRollCount, 2, 'Completed rolled task preserves its final rollCount (2)');

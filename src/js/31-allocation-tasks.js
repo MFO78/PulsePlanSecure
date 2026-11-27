@@ -437,6 +437,61 @@
     </div>`;
   }
 
+  /* Renders a compact per-row Tasks / Say-Do status block for Detailed Department & Project row headers in the Roadmap. */
+  function ppRenderRowTaskSummaryHtml(db, periods, deptId, projId, visibleDeptIds, visibleProjIds) {
+    injectTaskStyles();
+    if (!db || !Array.isArray(db.allocationTasks) || !db.allocationTasks.length) return '';
+    const dFilter = deptId ? [deptId] : visibleDeptIds;
+    const pFilter = projId ? [projId] : visibleProjIds;
+    const stats = ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, dFilter, pFilter);
+    if (!stats || stats.activeTotal === 0) return '';
+
+    const barCls = stats.sayDoPct >= 80 ? 'bg-emerald-500' : (stats.sayDoPct >= 50 ? 'bg-amber-500' : 'bg-indigo-500');
+    const txtCls = stats.sayDoPct >= 80 ? 'text-emerald-700 font-bold' : (stats.sayDoPct >= 50 ? 'text-amber-700 font-bold' : 'text-indigo-700 font-bold');
+    const rollPill = stats.rolledOpen > 0
+      ? `<span class="pp-task-roll ${stats.agingOpen > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}" title="${stats.rolledOpen} open task(s) rolled from prior week(s)${stats.agingOpen > 0 ? ` (${stats.agingOpen} aging ≥2×)` : ''}">&#8635;${stats.rolledOpen}</span>`
+      : '';
+    const tip = `Weekly Tasks in visible window: ${stats.done}/${stats.activeTotal} done (${stats.sayDoPct}%)${stats.open > 0 ? `, ${stats.open} open` : ''}${stats.rolledOpen > 0 ? `, ${stats.rolledOpen} rolled` : ''}`;
+
+    return `<div class="mt-1.5 pp-row-task-summary" title="${escapeHtml(tip)}">
+      <div class="flex items-center justify-between gap-1 text-[9px] leading-none mb-0.5">
+        <span class="text-slate-500 uppercase font-semibold">&#9745; Tasks</span>
+        <span class="inline-flex items-center gap-1 tabular-nums ${txtCls}">
+          <span>${stats.done}/${stats.activeTotal} (${stats.sayDoPct}%)</span>
+          ${rollPill}
+        </span>
+      </div>
+      <div class="w-full h-1 rounded-full bg-slate-200/80 overflow-hidden" aria-hidden="true">
+        <div class="h-full ${barCls} rounded-full" style="width:${Math.min(100, stats.sayDoPct)}%"></div>
+      </div>
+    </div>`;
+  }
+
+  /* Refreshes open Cell Detail Modal (preserving unsaved note drafts) after an inline task mutation. */
+  function refreshOpenCellDetailModalIfAny() {
+    const root = typeof document !== 'undefined' ? document.getElementById('cellDetailModalRoot') : null;
+    if (!root || !root.dataset || !root.dataset.cellRowId || !root.dataset.cellPeriodKey) return;
+    if (typeof openCellDetailModal !== 'function') return;
+    const rowId = root.dataset.cellRowId;
+    const periodKey = root.dataset.cellPeriodKey;
+    const drafts = new Map();
+    root.querySelectorAll('.cell-comment-input').forEach(ta => {
+      if (ta && ta.dataset && ta.dataset.commentDept && ta.dataset.commentProj) {
+        drafts.set(`${ta.dataset.commentDept}::${ta.dataset.commentProj}`, ta.value);
+      }
+    });
+    openCellDetailModal(rowId, periodKey);
+    const nextRoot = document.getElementById('cellDetailModalRoot');
+    if (nextRoot && drafts.size > 0) {
+      nextRoot.querySelectorAll('.cell-comment-input').forEach(ta => {
+        if (ta && ta.dataset && ta.dataset.commentDept && ta.dataset.commentProj) {
+          const key = `${ta.dataset.commentDept}::${ta.dataset.commentProj}`;
+          if (drafts.has(key)) ta.value = drafts.get(key);
+        }
+      });
+    }
+  }
+
   /* ---------- Direct Interactive Actions ---------- */
   function ppSetTaskFilter(mode) {
     if (typeof ui === 'undefined' || !ui) return;
@@ -482,6 +537,7 @@
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -515,6 +571,7 @@
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -543,6 +600,7 @@
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -557,6 +615,7 @@
     task.updatedAt = new Date().toISOString();
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return task;
   }
 
@@ -574,15 +633,18 @@
     }
     if (typeof touchDBAndSave === 'function') touchDBAndSave();
     if (typeof renderAll === 'function') renderAll();
+    refreshOpenCellDetailModalIfAny();
     return true;
   }
 
-  /* Inline quick-add input directly inside the Roadmap cell card */
+  /* Inline quick-add input directly inside the Roadmap cell card or Cell Detail Modal */
   function ppOpenInlineTaskInput(deptId, projId, periodKey, ev) {
     if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
     if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
     const slotKey = `${deptId}::${projId}::${periodKey}`;
-    const slot = document.querySelector(`[data-pp-task-slot="${CSS.escape(slotKey)}"]`);
+    const triggerEl = (ev && (ev.currentTarget || ev.target)) || null;
+    const slot = (triggerEl && typeof triggerEl.closest === 'function' && triggerEl.closest('[data-pp-task-slot]'))
+      || document.querySelector(`[data-pp-task-slot="${CSS.escape(slotKey)}"]`);
     if (!slot) {
       if (typeof openAllocationModal === 'function') openAllocationModal(deptId, projId, periodKey);
       return;
@@ -829,6 +891,7 @@
   globalThis.ppComputeWeeklyTaskStats = ppComputeWeeklyTaskStats;
   globalThis.ppRenderInlineCellTasksHtml = ppRenderInlineCellTasksHtml;
   globalThis.ppRenderWeeklyTaskSummaryBar = ppRenderWeeklyTaskSummaryBar;
+  globalThis.ppRenderRowTaskSummaryHtml = ppRenderRowTaskSummaryHtml;
   globalThis.ppSetTaskFilter = ppSetTaskFilter;
   globalThis.ppAddAllocationTask = ppAddAllocationTask;
   globalThis.ppToggleAllocationTask = ppToggleAllocationTask;

@@ -648,6 +648,7 @@
 
     function openCellDetailModal(rowId, periodKey) {
       const db = getActiveDB();
+      if (typeof ppAutoRolloverAllocationTasks === 'function') ppAutoRolloverAllocationTasks(db);
       const isDeptAxis = ui.axis === 'department';
       const primaryRow = isDeptAxis
         ? db.departments.find(d => d.id === rowId)
@@ -677,17 +678,42 @@
 
       const activeItems = [];
       const unusedItems = [];
+      let cellTasksActive = 0, cellTasksDone = 0, cellTasksRolled = 0, cellTasksAging = 0;
       secondaryList.forEach(item => {
         const deptId = isDeptAxis ? rowId : item.id;
         const projId = isDeptAxis ? item.id : rowId;
         const pairProj = isDeptAxis ? item : primaryRow;
         const alloc = getAllocationForPeriod(deptId, projId, periodKey, ui.timeUnit, db.allocations);
         const cmt = getCellProjectComments(deptId, projId, periodKey, ui.timeUnit, db);
-        if (alloc.hasData || cmt.hasAny || (isNonFteProject(pairProj) && Boolean(cmt.monthNote))) activeItems.push({ item, deptId, projId, alloc, cmt });
-        else unusedItems.push(item);
+        const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(deptId, projId, periodKey, ui.timeUnit, db) : [];
+        cellTasks.forEach(t => {
+          if (t.dropped) return;
+          cellTasksActive++;
+          if (t.done) cellTasksDone++;
+          else if ((t.rollCount || 0) > 0) {
+            cellTasksRolled++;
+            if ((t.rollCount || 0) >= 2) cellTasksAging++;
+          }
+        });
+        if (alloc.hasData || cmt.hasAny || cellTasks.length > 0 || (isNonFteProject(pairProj) && Boolean(cmt.monthNote))) {
+          activeItems.push({ item, deptId, projId, alloc, cmt, cellTasks });
+        } else {
+          unusedItems.push(item);
+        }
       });
 
-      const buildCommentCardHtml = (item, deptId, projId, alloc, cmt) => {
+      const cellTaskBadgeHtml = cellTasksActive > 0
+        ? (() => {
+            const pct = Math.round((cellTasksDone / cellTasksActive) * 100);
+            const cls = pct >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : (pct >= 50 ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200');
+            const rollHtml = cellTasksRolled > 0
+              ? ` <span class="pp-task-roll ${cellTasksAging > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}">&#8635;${cellTasksRolled}</span>`
+              : '';
+            return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${cls}" title="Weekly tasks in this cell: ${cellTasksDone}/${cellTasksActive} completed (${pct}%)">&#9745; ${cellTasksDone}/${cellTasksActive} tasks (${pct}%)${rollHtml}</span>`;
+          })()
+        : '';
+
+      const buildCommentCardHtml = (item, deptId, projId, alloc, cmt, cellTasks) => {
         const pairProj = isDeptAxis ? item : primaryRow;
         const isAdminPair = isNonFteProject(pairProj);
         const valStr = alloc && alloc.hasData
@@ -704,6 +730,9 @@
           : '';
         const monthNoteRefHtml = (cmt && cmt.monthNote)
           ? `<div class="mt-1 text-[11px] text-slate-500 italic">Month note (${escapeHtml(getWeekOwningMonth(periodKey))}): ${fmtNote(cmt.monthNote)}</div>`
+          : '';
+        const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+          ? ppRenderInlineCellTasksHtml(deptId, projId, periodKey, cellTasks || [], null, Boolean(ui.presentMode), false)
           : '';
         const rightControlsHtml = isAdminPair
           ? `<div class="flex items-center gap-1.5 shrink-0">
@@ -727,7 +756,7 @@
           : `Add comments for [${escapeHtml(item.code)}] in ${escapeHtml(hdr.title)}... (start a line with "- " for bullets)`;
 
         return `
-          <div class="${isAdminPair ? 'admin-hashed-card' : 'accent-card border border-slate-200 bg-slate-50/70'} p-3 rounded-xl space-y-2" style="${isAdminPair ? `--admin-accent:${item.color}; --accent-w:4px;` : `--accent-color:${item.color}; --accent-w:4px; border-left: 4px solid ${item.color};`}">
+          <div class="group/pill ${isAdminPair ? 'admin-hashed-card' : 'accent-card border border-slate-200 bg-slate-50/70'} p-3 rounded-xl space-y-2" style="${isAdminPair ? `--admin-accent:${item.color}; --accent-w:4px;` : `--accent-color:${item.color}; --accent-w:4px; border-left: 4px solid ${item.color};`}">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex items-center gap-1.5 min-w-0">
                 <span class="font-mono font-bold text-[11px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-700 shrink-0">${escapeHtml(item.code)}</span>
@@ -743,11 +772,12 @@
               class="cell-comment-input w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500/30">${escapeHtml(cmt ? cmt.direct : '')}</textarea>
             ${weekNotesHtml}
             ${monthNoteRefHtml}
+            ${tasksHtml}
           </div>`;
       };
 
       const cardsHtml = activeItems.length > 0
-        ? activeItems.map(x => buildCommentCardHtml(x.item, x.deptId, x.projId, x.alloc, x.cmt)).join('')
+        ? activeItems.map(x => buildCommentCardHtml(x.item, x.deptId, x.projId, x.alloc, x.cmt, x.cellTasks)).join('')
         : `<div id="cellCommentsEmptyState" class="p-4 rounded-xl border border-dashed border-slate-300 text-center text-slate-500 text-xs">
              No projects allocated in this cell yet. Click <strong>+ Allocate</strong> below or pick a ${isDeptAxis ? 'project' : 'department'} to add comments.
            </div>`;
@@ -765,7 +795,7 @@
         : '';
 
       showModal(`
-        <div class="p-5 space-y-4 text-xs">
+        <div id="cellDetailModalRoot" data-cell-row-id="${escapeHtml(rowId)}" data-cell-period-key="${escapeHtml(periodKey)}" class="p-5 space-y-4 text-xs">
           <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
           <div class="flex items-start justify-between gap-3">
             <div class="space-y-1">
@@ -776,6 +806,7 @@
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-[11px] text-slate-500">${ui.timeUnit === 'week' ? 'ISO Week' : 'Month'} (${escapeHtml(hdr.sub)})</span>
                 ${summaryBadgeHtml}
+                ${cellTaskBadgeHtml}
               </div>
             </div>
             <button type="button" aria-label="Close dialog" onclick="closeModal()" class="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 text-xl font-bold leading-none shrink-0">&times;</button>
