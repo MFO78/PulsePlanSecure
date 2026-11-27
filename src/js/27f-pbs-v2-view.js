@@ -16,15 +16,18 @@
     : { identity: 0, docs: 0, proc: 0, eng: 0, total: 0 });
 
   const CSS = `
-    #ppPbsDialog { width: min(1220px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; transition: width .16s ease, height .16s ease, max-height .16s ease; }
+    #ppPbsDialog { width: min(1220px, calc(100% - 24px)); max-width: calc(100% - 24px); max-height: 92vh; max-height: 92dvh; margin: auto; inset: 0; box-sizing: border-box; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; overflow: clip; }
     #ppPbsDialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
-    #ppPbsDialog.pp-pbs-expanded { width: 99vw; max-width: 99vw; height: 97vh; max-height: 97vh; border-radius: .65rem; }
-    .pp-pbs-wrap { display: flex; flex-direction: column; max-height: 92vh; }
-    #ppPbsDialog.pp-pbs-expanded .pp-pbs-wrap { height: 97vh; max-height: 97vh; }
-    .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-top: 4px solid var(--pbs-proj-color, #4f46e5); border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
-    .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; }
-    .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
-    .pp-pbs-colbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; padding: .42rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
+    #ppPbsDialog.pp-pbs-expanded { width: calc(100% - 16px); max-width: calc(100% - 16px); height: calc(100vh - 20px); height: calc(100dvh - 20px); max-height: calc(100vh - 20px); max-height: calc(100dvh - 20px); margin: auto; inset: 0; border-radius: .65rem; }
+    .pp-pbs-wrap { display: flex; flex-direction: column; width: 100%; max-width: 100%; max-height: calc(92vh - 2px); max-height: calc(92dvh - 2px); overflow: hidden; box-sizing: border-box; }
+    #ppPbsDialog.pp-pbs-expanded .pp-pbs-wrap { height: 100%; max-height: 100%; }
+    .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-top: 4px solid var(--pbs-proj-color, #4f46e5); border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); flex: 0 0 auto; }
+    .pp-pbs-head-title { min-width: 0; flex: 1 1 240px; }
+    .pp-pbs-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; flex: 0 0 auto; margin-left: auto; }
+    #ppPbsSyncStatus { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; flex: 0 0 auto; }
+    .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; flex: 0 0 auto; }
+    .pp-pbs-colbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .45rem; padding: .42rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; flex: 0 0 auto; }
     .pp-pbs-colchips { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
     .pp-pbs-colbar-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #64748b); margin-right: .15rem; }
     .pp-pbs-chip { display: inline-flex; align-items: center; gap: .28rem; padding: .22rem .55rem; border-radius: 9999px; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-muted, #475569); font-size: 11px; font-weight: 700; cursor: pointer; }
@@ -32,7 +35,7 @@
     .pp-pbs-chip.is-active { background: #eef2ff; border-color: #6366f1; color: #3730a3; }
     .pp-pbs-chip-cnt { font-size: 9.5px; font-weight: 800; padding: .02rem .32rem; border-radius: 9999px; background: rgba(79, 70, 229, .12); color: #4338ca; }
     .pp-pbs-colhint { font-size: 10.5px; color: var(--text-muted, #64748b); }
-    .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; }
+    .pp-pbs-body { padding: .85rem 1.15rem; overflow-y: auto; flex: 1 1 auto; min-height: 0; min-width: 0; }
     .pp-pbs-btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
     .pp-pbs-btn:hover:not(:disabled) { background: var(--surface-subtle, #f1f5f9); }
     .pp-pbs-btn:disabled { opacity: .42; cursor: not-allowed; }
@@ -130,6 +133,9 @@
     .pp-pbs-mat-Delivered { background: #059669; color: #ffffff; }
     .pp-pbs-proj-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: .3rem; }
     .pp-pbs-proj-btn:hover { background: #e0e7ff; }
+    .pp-pbs-syncbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .55rem 1rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11.5px; color: var(--text-primary, #334155); }
+    .pp-pbs-syncbar-dot { display: inline-block; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
+    html.dark .pp-pbs-syncbar, body.dark .pp-pbs-syncbar { background: #1e293b; border-bottom-color: #334155; color: #e2e8f0; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
     html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { background: #1e293b; border-bottom-color: #334155; }
     html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { border-color: #334155; }
@@ -766,10 +772,7 @@
       const on = Boolean(g[key]);
       return `<button type="button" class="pp-pbs-chip${on ? ' is-active' : ''}" data-pbs-col-group="${key}" aria-pressed="${on ? 'true' : 'false'}">${on ? '\u2713 ' : '+ '}${label}${count > 0 ? `<span class="pp-pbs-chip-cnt">${count}</span>` : ''}</button>`;
     };
-    const showViewPdf = Boolean(ctx.isFiltered || (anyPop && !allPopOn));
-    const viewPdfBtn = showViewPdf
-      ? '<button type="button" id="ppPbsExportPdfViewBtn" class="pp-pbs-btn pp-pbs-btn-xs" title="Export PDF with only the currently visible columns and active filters">PDF (Current View)</button>'
-      : '';
+    const viewPdfBtn = '<button type="button" id="ppPbsExportPdfViewBtn" class="pp-pbs-btn pp-pbs-btn-xs" title="Export PDF with only the currently visible columns and active filters">PDF (Current View)</button>';
     const hint = optCols.length
       ? `<span class="pp-pbs-colhint">${optCols.length} spec col${optCols.length === 1 ? '' : 's'} inline &middot; Code, Deliverable &amp; Actions pinned</span>`
       : '';
@@ -840,10 +843,10 @@
     const isExp = Boolean(ctx.isExpanded);
 
     return `<div class="pp-pbs-wrap"${projStyle}>
-      <header class="pp-pbs-head"><div>
+      <header class="pp-pbs-head"><div class="pp-pbs-head-title">
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
         <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: double-click or Enter to edit, Alt+Arrows to move/indent, Ctrl+Z to undo</span></div></div>
-        <div style="display:flex;align-items:center;gap:.45rem"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite">${esc(ctx.status.text)}</span>
+        <div class="pp-pbs-head-actions"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite" title="${esc(ctx.status.text)}">${esc(ctx.status.text)}</span>
         <button type="button" class="pp-pbs-btn pp-pbs-expand-win-btn" id="ppPbsExpandWinBtn" aria-pressed="${isExp ? 'true' : 'false'}" title="${isExp ? 'Restore default PBS window size' : 'Expand PBS window to full screen'}">${isExp ? '\u2921 Restore' : '\u2922 Expand'}</button>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}

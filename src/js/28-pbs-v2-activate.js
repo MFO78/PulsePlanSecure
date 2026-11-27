@@ -18,8 +18,56 @@
   const cssEsc = (v) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(String(v)) : String(v));
   const encFormat = () => ((typeof PP_ENC_FORMAT === 'string' && PP_ENC_FORMAT) ? PP_ENC_FORMAT : 'pulseplan-encrypted-v1');
 
-  /* ---------- Project-table buttons (Setup & Data -> Projects) ---------- */
+  /* ---------- Project-table PBS sync status bar & row buttons (Setup & Data -> Projects) ---------- */
+  function refreshProjectsSyncBar() {
+    const panel = document.getElementById('subtab-projects');
+    if (!panel || typeof C.getFolderSyncSummary !== 'function') return;
+    const info = C.getFolderSyncSummary();
+    let bar = document.getElementById('ppPbsProjectsSyncBar');
+    if (!info.supported) {
+      if (bar) bar.remove();
+      return;
+    }
+    P.view.injectStyles();
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'ppPbsProjectsSyncBar';
+      bar.className = 'pp-pbs-syncbar';
+      panel.insertBefore(bar, panel.firstChild);
+    }
+    const esc = P.view.esc;
+    let dotColor = '#94a3b8';
+    let textHtml = '<strong>PBS Folder Sync:</strong> Local browser cache';
+    let actionsHtml = '<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-bar-act="link">Link PBS Folder</button>';
+    if (info.connected) {
+      dotColor = '#10b981';
+      textHtml = `<strong>PBS Auto-Sync:</strong> <span>${esc(info.folderName || 'Shared Folder')}</span> <span style="opacity:.72">(syncing automatically)</span>`;
+      actionsHtml = '<button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-bar-act="sync">Sync Now</button> <button type="button" class="pp-pbs-btn pp-pbs-btn-xs" data-pbs-bar-act="link">Change Folder</button>';
+    } else if (info.rememberedName) {
+      dotColor = '#f59e0b';
+      textHtml = `<strong>PBS Folder remembered:</strong> <span>${esc(info.rememberedName)}</span> <span style="opacity:.78">&mdash; click to resume automatic sync</span>`;
+      actionsHtml = '<button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-primary" data-pbs-bar-act="reconnect">Reconnect PBS Folder</button>';
+    } else if (info.dbFolderName) {
+      dotColor = '#6366f1';
+      textHtml = `<strong>Team PBS Folder:</strong> <span>${esc(info.dbFolderName)}</span> <span style="opacity:.78">&mdash; link folder on this device to auto-sync</span>`;
+      actionsHtml = '<button type="button" class="pp-pbs-btn pp-pbs-btn-xs pp-pbs-btn-primary" data-pbs-bar-act="link">Link PBS Folder</button>';
+    }
+    bar.innerHTML = `<div style="display:flex;align-items:center;gap:.45rem;min-width:0;flex-wrap:wrap"><span class="pp-pbs-syncbar-dot" style="background:${dotColor}" aria-hidden="true"></span><span>${textHtml}</span></div><div style="display:flex;align-items:center;gap:.35rem;flex-shrink:0">${actionsHtml}</div>`;
+    if (!bar.__ppWired) {
+      bar.__ppWired = true;
+      bar.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('button[data-pbs-bar-act]') : null;
+        if (!btn) return;
+        const act = btn.getAttribute('data-pbs-bar-act');
+        if (act === 'reconnect') C.reconnectFolder().catch(() => {});
+        else if (act === 'link') C.linkFolder().catch(() => {});
+        else if (act === 'sync') C.pollFolderBackground({ force: true, notify: true }).catch(() => {});
+      });
+    }
+  }
+
   function refreshProjectsTableBadges() {
+    refreshProjectsSyncBar();
     const tbody = document.getElementById('dataProjectsBody');
     if (!tbody) return;
     tbody.querySelectorAll('tr').forEach(tr => {
@@ -118,6 +166,11 @@
     renderDataTab = function (...args) {
       const res = nativeRenderDataTab.apply(this, args);
       refreshProjectsTableBadges();
+      const locked = typeof ppIsSessionLocked === 'function' && ppIsSessionLocked();
+      const inDemo = typeof ui !== 'undefined' && ui && ui.demoMode;
+      if (!locked && !inDemo && typeof C.pollFolderBackground === 'function') {
+        C.pollFolderBackground({ force: false, minIntervalMs: 3000 }).catch(() => {});
+      }
       return res;
     };
   }
@@ -127,6 +180,7 @@
     updateSyncEncryptionBadges = function (...args) {
       const res = nativeUpdateEncBadges.apply(this, args);
       P.ui.render();
+      refreshProjectsSyncBar();
       return res;
     };
   }
@@ -134,7 +188,8 @@
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('focus', () => {
       if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
-      C.pollOnce();
+      if (typeof ui !== 'undefined' && ui && ui.demoMode) return;
+      C.pollFolderBackground({ force: false, minIntervalMs: 2500 }).catch(() => {});
     }, { passive: true });
   }
 
@@ -151,6 +206,7 @@
 
   /* ---------- Public API (same global names as the legacy module) + Lifecycle Hooks ---------- */
   P.ui.setBadgeRefresh(refreshProjectsTableBadges);
+  if (C.state && C.state.hooks) C.state.hooks.onBadges = refreshProjectsTableBadges;
   globalThis.openProjectPbsModal = openProjectPbsModal;
   if (typeof window !== 'undefined') {
     window.ppFlushPbsBeforeLock = () => C.flushBeforeLock();
@@ -161,6 +217,7 @@
     };
     window.ppReencryptAllPbsFilesInFolder = (oldPass, newPass) => C.reencryptAllPbsFilesInFolder(oldPass, newPass);
     window.ppTryAutoReconnectPbsFolder = (opts) => C.tryAutoReconnectFolder(opts);
+    window.ppPollPbsFolderNow = (opts) => C.pollFolderBackground(opts);
     window.ppOnProjectCodeRenamedForPbs = (pid, prevCode, nextCode) => C.onProjectCodeRenamed(pid, prevCode, nextCode);
   }
   globalThis.__ppPbsTestApi = {
@@ -185,4 +242,7 @@
   };
   P.activated = true;
   refreshProjectsTableBadges();
+  if (!(typeof ppIsSessionLocked === 'function' && ppIsSessionLocked())) {
+    C.tryAutoReconnectFolder({ allowPrompt: false }).catch(() => {});
+  }
 })();

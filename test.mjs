@@ -3352,6 +3352,137 @@ test('PBS fullscreen expand button, PDF custom field selector, v9.0-secure versi
   assert.equal(out.dirMentions, 1, 'What\'s New does not duplicate Directory entry');
 });
 
+test('PBS always shows PDF (Current View), protects expanded Restore/Close header, and auto-syncs PBS folder in background while closed', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const P = globalThis.__ppPbsV2;
+    if (!P || !P.core || !P.view || !P.tree || !P.data) throw new Error('Missing PBS v2 modules');
+
+    liveDB = createSampleDemoDB();
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    const proj = liveDB.projects[0];
+
+    // 1. PDF (Current View) must be visible even when unfiltered & zero optional columns populated, AND when all optional cols ON
+    const emptyDoc = P.data.createEmptyPbs(proj, 'Tester', proj.id);
+    const makeHtml = (doc, colGroups) => {
+      const summary = P.tree.computeMaturitySummary(doc, liveDB.milestones || [], '2026-11-26');
+      const rollups = P.tree.computeSwpRollups(doc);
+      const rows = P.tree.getFilteredTreeRows(doc, {}, new Set(), { summary, rollups });
+      return P.view.buildDialogHtml({
+        doc, db: liveDB, project: proj, summary, rollups, filteredRollups: null, isFiltered: false, matchedCount: doc.items.length,
+        rows, collapsedIds: new Set(), colGroups, filter: {}, edit: null, pasteOpen: false, isExpanded: true, pdfExport: { open: false },
+        canUndo: false, canRedo: false, undoLabel: '', redoLabel: '', conflict: null, notices: [],
+        owners: [], manufacturers: [], procStatuses: [], projectMilestones: [], cloneSources: [],
+        canDirSync: false, dirName: '', hasRemembered: false, status: { text: 'Synced', tone: 'ok' },
+      });
+    };
+    const htmlEmptyUnfiltered = makeHtml(emptyDoc, { docs: false, proc: false, swp: false });
+    const fullDoc = {
+      ...emptyDoc,
+      items: [{ id: 'a1', parentId: null, code: '1', name: 'Core', maturity: 'CDR', deptId: '', owner: '', milestoneId: '', notes: '', mass: 5 }],
+    };
+    const htmlAllPopOn = makeHtml(fullDoc, { docs: false, proc: false, swp: true });
+
+    // 2. CSS protects expanded Restore/Close buttons from scroll-trap & flex-shrink
+    const css = P.view.CSS;
+    const hasOverflowClip = css.includes('overflow: clip');
+    const hasWrap100 = css.includes('#ppPbsDialog.pp-pbs-expanded .pp-pbs-wrap { height: 100%; max-height: 100%; }');
+    const hasBodyMinH0 = css.includes('.pp-pbs-body') && css.includes('min-height: 0');
+    const hasHeadNoShrink = css.includes('.pp-pbs-head') && css.includes('flex: 0 0 auto');
+
+    // 3. Automatic PBS background sync WITHOUT opening any PBS dialog!
+    const C = P.core;
+    C.clearMemoryAndStopSync();
+    const fname = P.data.getPbsFilename(proj, proj.id);
+    let diskMod = 1700000001000;
+    let diskExists = true;
+    let diskDoc = {
+      schemaVersion: 1,
+      projectId: proj.id,
+      projectCode: proj.code,
+      meta: { revision: 1, lastModifiedAt: '2026-11-26T10:00:00Z', lastModifiedBy: 'Teammate' },
+      items: [
+        { id: 'bg1', parentId: null, code: '1', name: 'Propulsion', maturity: 'PDR', deptId: '', owner: '', milestoneId: '', notes: '' },
+        { id: 'bg2', parentId: 'bg1', code: '1.1', name: 'Thruster', maturity: 'Draft', deptId: '', owner: '', milestoneId: '', notes: '' },
+      ],
+    };
+    const mockDirHandle = {
+      name: 'Shared_PBS_Folder',
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getFileHandle: async (name) => {
+        if (name !== fname || !diskExists) {
+          const e = new Error('Not found'); e.name = 'NotFoundError'; throw e;
+        }
+        return {
+          name,
+          getFile: async () => ({
+            name,
+            lastModified: diskMod,
+            text: async () => JSON.stringify(diskDoc),
+          }),
+        };
+      },
+    };
+    const origShowDir = window.showDirectoryPicker;
+    window.showDirectoryPicker = async () => mockDirHandle;
+    C.state.rememberedDirHandle = mockDirHandle;
+    // Ensure dialog is CLOSED
+    C.state.hooks.isDialogOpen = () => false;
+
+    const reconnected = await C.tryAutoReconnectFolder({ allowPrompt: false });
+    const countAfterConnect = C.getItemCount(proj.id);
+    const pollingRunningWhileClosed = C.state.pollTimer !== null;
+    const summaryConnected = C.getFolderSyncSummary();
+
+    // Teammate adds 2 more items on disk -> pollOnce() runs while dialog is STILL closed
+    diskMod += 5000;
+    diskDoc.meta.revision = 2;
+    diskDoc.items.push(
+      { id: 'bg3', parentId: 'bg1', code: '1.2', name: 'Valve', maturity: 'CDR', deptId: '', owner: '', milestoneId: '', notes: '' },
+      { id: 'bg4', parentId: 'bg1', code: '1.3', name: 'Tank', maturity: 'CDR', deptId: '', owner: '', milestoneId: '', notes: '' }
+    );
+    await C.pollOnce();
+    const countAfterBgPoll = C.getItemCount(proj.id);
+
+    // Teammate deletes PBS file on disk -> pollOnce() clears stale badge cache
+    diskExists = false;
+    await C.pollOnce();
+    const countAfterDelete = C.getItemCount(proj.id);
+
+    // Cleanup timers & mocks
+    C.clearMemoryAndStopSync();
+    C.state.rememberedDirHandle = null;
+    window.showDirectoryPicker = origShowDir;
+
+    return {
+      hasViewPdfEmpty: htmlEmptyUnfiltered.includes('id="ppPbsExportPdfViewBtn"'),
+      hasViewPdfAllOn: htmlAllPopOn.includes('id="ppPbsExportPdfViewBtn"'),
+      hasHeadActionsClass: htmlAllPopOn.includes('class="pp-pbs-head-actions"'),
+      hasOverflowClip, hasWrap100, hasBodyMinH0, hasHeadNoShrink,
+      reconnected, countAfterConnect, pollingRunningWhileClosed,
+      summaryFolderName: summaryConnected.folderName,
+      summaryConnectedFlag: summaryConnected.connected,
+      countAfterBgPoll, countAfterDelete,
+    };
+  })()`, ctx);
+
+  assert.equal(out.hasViewPdfEmpty, true, 'PDF (Current View) button is visible even when unfiltered with zero optional columns');
+  assert.equal(out.hasViewPdfAllOn, true, 'PDF (Current View) button remains visible when all populated optional columns are enabled');
+  assert.equal(out.hasHeadActionsClass, true, 'PBS header renders protected .pp-pbs-head-actions wrapper for Restore & Close buttons');
+  assert.equal(out.hasOverflowClip, true, 'PBS dialog uses overflow: clip to prevent focus/scrollIntoView from scrolling header buttons off-screen');
+  assert.equal(out.hasWrap100, true, 'Expanded PBS .pp-pbs-wrap uses height: 100% so it never overflows dialog border box');
+  assert.equal(out.hasBodyMinH0, true, 'PBS body uses min-height: 0 so scrolling stays strictly inside .pp-pbs-body');
+  assert.equal(out.hasHeadNoShrink, true, 'PBS header uses flex: 0 0 auto so Restore & Close buttons never shrink away');
+  assert.equal(out.reconnected, true, 'tryAutoReconnectFolder reconnects remembered PBS folder without opening any PBS dialog');
+  assert.equal(out.countAfterConnect, 2, 'Background PBS sync populates item counts immediately upon folder reconnect while dialog is closed');
+  assert.equal(out.pollingRunningWhileClosed, true, 'PBS background polling stays active even when no PBS dialog is open');
+  assert.equal(out.summaryConnectedFlag, true, 'getFolderSyncSummary reports connected state');
+  assert.equal(out.summaryFolderName, 'Shared_PBS_Folder', 'getFolderSyncSummary reports linked folder name');
+  assert.equal(out.countAfterBgPoll, 4, 'Background pollOnce automatically syncs external PBS file additions while dialog is closed');
+  assert.equal(out.countAfterDelete, 0, 'Background pollOnce clears stale cache when a PBS file is deleted from the shared folder');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

@@ -1422,14 +1422,27 @@
           }
 
           // Automatically open the linked Finance Vault & reconnect PBS folder if remembered and authorized
-          if (!isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppTryAutoOpenFinanceVault === 'function') {
-            window.ppTryAutoOpenFinanceVault({
-              allowPermissionPrompt: !isAutoReconnect,
-              silent: isSilentAutoReload,
-            }).catch(() => {});
-          }
-          if (!isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppTryAutoReconnectPbsFolder === 'function') {
-            window.ppTryAutoReconnectPbsFolder({ allowPrompt: false }).catch(() => {});
+          if (!isSilentAutoReload && typeof window !== 'undefined') {
+            (async () => {
+              if (typeof window.ppTryAutoOpenFinanceVault === 'function') {
+                try {
+                  await window.ppTryAutoOpenFinanceVault({
+                    allowPermissionPrompt: !isAutoReconnect,
+                    silent: isSilentAutoReload,
+                  });
+                } catch (_e) {}
+              }
+              if (typeof window.ppTryAutoReconnectPbsFolder === 'function') {
+                try {
+                  await window.ppTryAutoReconnectPbsFolder({
+                    allowPrompt: !isAutoReconnect,
+                    force: true,
+                  });
+                } catch (_e) {}
+              }
+            })();
+          } else if (isSilentAutoReload && typeof window !== 'undefined' && typeof window.ppPollPbsFolderNow === 'function') {
+            window.ppPollPbsFolderNow({ force: false }).catch(() => {});
           }
         } catch (postErr) {
           ppDebug('ERROR', 'Post-load attach error', { name: postErr?.name, message: postErr?.message });

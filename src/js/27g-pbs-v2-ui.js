@@ -88,7 +88,10 @@
   }
 
   function applyExpandedClass() {
-    if (ui.dialog) ui.dialog.classList.toggle('pp-pbs-expanded', Boolean(ui.expanded));
+    if (!ui.dialog) return;
+    ui.dialog.classList.toggle('pp-pbs-expanded', Boolean(ui.expanded));
+    ui.dialog.scrollTop = 0;
+    ui.dialog.scrollLeft = 0;
   }
 
   function toggleExpandWindow() {
@@ -322,6 +325,8 @@
         }
       }
     } else restoreFocus(focus);
+    ui.dialog.scrollTop = 0;
+    ui.dialog.scrollLeft = 0;
   }
 
   function updateStatusPill(text, tone) {
@@ -329,6 +334,7 @@
     if (!el) return;
     const safeTone = ['ok', 'warn', 'error', 'idle'].includes(tone) ? tone : 'idle';
     el.textContent = text;
+    el.title = text;
     el.className = `pp-pbs-pill pp-pbs-status-${safeTone}`;
   }
 
@@ -968,21 +974,22 @@
   async function onClosed() {
     const core = C();
     const S = core.state;
-    core.stopPolling();
     const lockedOrSigningOut = (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked())
       || (typeof ppIsSigningOut === 'function' && ppIsSigningOut());
     if (lockedOrSigningOut) {
+      core.stopPolling();
       if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
       ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
       return;
     }
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
     if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
-    if (S.dirHandle && (S.syncStatusText === 'Saving...' || S.saveQueued) && !S.conflictRemoteText) {
+    if (S.dirHandle && (S.syncStatusText === 'Saving...' || S.saveQueued || S.dirtyProjectIds.has(S.activeProjectId)) && !S.conflictRemoteText) {
       S.saveQueued = false;
       await core.writeToFolder(false);
     }
     ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
+    if (S.dirHandle) core.startPolling();
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
 
@@ -1012,5 +1019,13 @@
     render();
   }
 
-  P.ui = { open, close: closeDialog, isOpen, render, setBadgeRefresh(fn) { ui.badgeRefresh = fn; } };
+  P.ui = {
+    open, close: closeDialog, isOpen, render,
+    setBadgeRefresh(fn) {
+      ui.badgeRefresh = fn;
+      if (C() && C().state && C().state.hooks) {
+        C().state.hooks.onBadges = () => { if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh(); };
+      }
+    },
+  };
 })();

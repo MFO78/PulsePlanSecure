@@ -15,6 +15,7 @@
     activeProjectId: '', activeDoc: null, activeFileModified: 0, activeWasEncrypted: false,
     lastWrittenId: '', saveTimer: null, pollTimer: null, isSaving: false, saveQueued: false,
     isFlushingForLock: false, dirtyProjectIds: new Set(),
+    folderFileMtimes: new Map(), isBackgroundScanning: false, lastBackgroundPollAt: 0,
     conflictRemoteText: null, conflictRemoteDoc: null, conflictRemoteModified: 0,
     cache: null, syncStatusText: 'Saved locally in browser', syncStatusTone: 'idle',
     hooks: { rerender() {}, onBadges() {}, onStatus() {}, isDialogOpen() { return false; } },
@@ -245,8 +246,10 @@
     }
     if (S.dirHandle) {
       await syncFromFolder({ silentMissing: true, silentErrors: true });
-      scanFolderForBadges();
+      await scanFolderForBadges({ force: false });
       startPolling();
+    } else {
+      S.hooks.onBadges();
     }
   }
 
@@ -260,39 +263,75 @@
       }
     }
     if (S.dirHandle) {
-      await scanFolderForBadges();
+      await scanFolderForBadges({ force: Boolean(opts && opts.force) });
+      startPolling();
+      S.hooks.onBadges();
       return true;
     }
+    S.hooks.onBadges();
     return false;
   }
 
-  async function scanFolderForBadges() {
+  async function scanFolderForBadges(opts = {}) {
     if (!S.dirHandle || isSessionLocked()) return 0;
+    if (S.isBackgroundScanning) return 0;
+    S.isBackgroundScanning = true;
+    S.lastBackgroundPollAt = Date.now();
+    const force = Boolean(opts && opts.force);
+    const skipActive = Boolean(opts && opts.skipActive);
     const projects = getDb().projects || [];
     const cache = getCache();
     let updated = 0;
-    for (const p of projects) {
-      if (!p || !p.id || isSessionLocked()) break;
-      if (p.id === S.activeProjectId && S.dirtyProjectIds.has(p.id)) continue;
-      try {
-        const fname = D().getPbsFilename(p, p.id);
-        const fh = await S.dirHandle.getFileHandle(fname, { create: false });
-        const file = await withPbsTimeout(fh.getFile(), IO_TIMEOUT_MS);
-        const raw = await readRawFileText(file);
-        const { doc } = await D().decodePbsFromText(raw, p, undefined, getUserName(), { silentPrompt: true });
-        if (!isSessionLocked()) {
-          cache[p.id] = doc;
-          updated++;
+    try {
+      for (const p of projects) {
+        if (!p || !p.id || isSessionLocked() || !S.dirHandle) break;
+        if (S.dirtyProjectIds.has(p.id)) continue;
+        if (skipActive && p.id === S.activeProjectId) continue;
+        if (p.id === S.activeProjectId && S.hooks.isDialogOpen() && (S.isSaving || S.saveTimer || S.saveQueued || S.conflictRemoteText)) continue;
+        try {
+          const fname = D().getPbsFilename(p, p.id);
+          const fh = await withPbsTimeout(S.dirHandle.getFileHandle(fname, { create: false }), IO_TIMEOUT_MS);
+          const file = await withPbsTimeout(fh.getFile(), IO_TIMEOUT_MS);
+          const fileMod = Number(file.lastModified || 0);
+          const knownMod = S.folderFileMtimes.get(p.id);
+          if (!force && cache[p.id] && knownMod && fileMod > 0 && Math.abs(fileMod - knownMod) <= 500) {
+            continue;
+          }
+          const raw = await readRawFileText(file);
+          const { doc } = await D().decodePbsFromText(raw, p, undefined, getUserName(), { silentPrompt: true });
+          if (!isSessionLocked()) {
+            cache[p.id] = doc;
+            S.folderFileMtimes.set(p.id, fileMod);
+            if (p.id === S.activeProjectId && !S.hooks.isDialogOpen()) {
+              S.activeDoc = doc;
+              S.activeFileModified = fileMod;
+            }
+            updated++;
+          }
+        } catch (err) {
+          if (err && err.name === 'NotFoundError') {
+            if (S.folderFileMtimes.has(p.id)) {
+              S.folderFileMtimes.delete(p.id);
+              if (cache[p.id]) {
+                delete cache[p.id];
+                updated++;
+              }
+            }
+          } else if (isPbsConnectionError(err)) {
+            handlePbsFolderDisconnected(err, { silent: !S.hooks.isDialogOpen() });
+            break;
+          }
+          // Undecryptable without key or transient per-file error — skip silently
         }
-      } catch (_e) {
-        // Missing file or undecryptable without key — skip silently
       }
+      if (updated > 0 && !isSessionLocked()) {
+        persistCache();
+        S.hooks.onBadges();
+      }
+      return updated;
+    } finally {
+      S.isBackgroundScanning = false;
     }
-    if (updated > 0 && !isSessionLocked()) {
-      persistCache();
-      S.hooks.onBadges();
-    }
-    return updated;
   }
 
   function replaceDoc(doc, wasEncrypted) {
@@ -304,7 +343,7 @@
     S.hooks.onBadges();
   }
 
-  function handlePbsFolderDisconnected(err) {
+  function handlePbsFolderDisconnected(err, opts = {}) {
     stopPolling();
     if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
     S.saveQueued = false;
@@ -313,15 +352,19 @@
     const isPerm = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
     if (isPerm && lostHandle) S.rememberedDirHandle = lostHandle;
     setSyncStatus('PBS folder disconnected \u2014 reconnect to sync', 'error');
-    toast('PBS shared folder connection lost. Reconnect the PBS folder to resume syncing.', 'warning');
+    if (!opts.silent) {
+      toast('PBS shared folder connection lost. Reconnect the PBS folder to resume syncing.', 'warning');
+    }
     S.hooks.rerender();
+    S.hooks.onBadges();
   }
 
   /* ---------- Folder link / read / write ---------- */
   async function afterFolderConnected() {
     toast(`Linked PBS folder: ${S.dirHandle.name}`, 'success');
     syncPbsMetaToMainDb(S.dirHandle);
-    if (S.activeProjectId) {
+    S.folderFileMtimes.clear();
+    if (S.activeProjectId && S.hooks.isDialogOpen()) {
       const localItems = (S.activeDoc && Array.isArray(S.activeDoc.items)) ? S.activeDoc.items : [];
       const hadLocalDirty = S.dirtyProjectIds.has(S.activeProjectId) || localItems.length > 0;
       const existingFh = await getFileHandle(false).catch(() => null);
@@ -340,7 +383,8 @@
             setSyncStatus('Folder file differs from local items \u2014 choose merge, load, or overwrite', 'warn');
             S.hooks.rerender();
             startPolling();
-            scanFolderForBadges();
+            await scanFolderForBadges({ force: true, skipActive: true });
+            S.hooks.onBadges();
             return;
           }
         } catch (_e) {
@@ -350,9 +394,10 @@
       const loaded = await syncFromFolder({ silentMissing: true });
       if (!loaded && S.activeDoc && S.activeDoc.items.length > 0) await writeToFolder(false);
       S.hooks.rerender();
-      startPolling();
     }
-    scanFolderForBadges();
+    await scanFolderForBadges({ force: true, skipActive: Boolean(S.activeProjectId && S.hooks.isDialogOpen()) });
+    startPolling();
+    S.hooks.onBadges();
   }
 
   async function linkFolder() {
@@ -412,7 +457,9 @@
       });
       if (isSessionLocked() || S.activeProjectId !== targetProjectId) return false;
       S.activeDoc = doc;
-      S.activeFileModified = Number(file.lastModified || 0);
+      const loadedMod = Number(file.lastModified || 0);
+      S.activeFileModified = loadedMod;
+      S.folderFileMtimes.set(targetProjectId, loadedMod);
       S.lastWrittenId = extractWriteId(rawText) || (doc.meta && doc.meta.lastWriteId) || '';
       S.activeWasEncrypted = wasEncrypted || Boolean(getSessionPassphrase());
       S.dirtyProjectIds.delete(targetProjectId);
@@ -506,6 +553,7 @@
       getCache()[targetProjectId] = docClone;
       persistCache();
       S.dirtyProjectIds.delete(targetProjectId);
+      S.folderFileMtimes.set(targetProjectId, postModified);
 
       if (S.activeProjectId === targetProjectId) {
         if (S.activeDoc) S.activeDoc.meta = { ...docClone.meta };
@@ -557,47 +605,77 @@
   }
 
   async function pollOnce() {
-    if (!S.hooks.isDialogOpen() || !S.dirHandle || !S.activeProjectId || isSessionLocked()) return;
+    if (!S.dirHandle || isSessionLocked()) return;
+    const dialogOpen = Boolean(S.hooks.isDialogOpen() && S.activeProjectId);
+    if (!dialogOpen) {
+      await scanFolderForBadges({ force: false });
+      return;
+    }
     if (S.isSaving || S.saveTimer || S.saveQueued || S.conflictRemoteText) return;
     try {
       const fh = await getFileHandle(false);
-      if (!fh) return;
-      const file = await withPbsTimeout(fh.getFile(), IO_TIMEOUT_MS);
-      const fileMod = Number(file.lastModified || 0);
-      const changed = (S.activeFileModified > 0 && fileMod > S.activeFileModified + 500)
-        || (S.activeFileModified === 0 && fileMod > 0);
-      if (!changed) return;
-
-      const rawText = await readRawFileText(file);
-      const diskWriteId = extractWriteId(rawText);
-      if (diskWriteId && S.lastWrittenId && diskWriteId === S.lastWrittenId) {
-        S.activeFileModified = Math.max(S.activeFileModified, fileMod);
-        return;
+      if (fh) {
+        const file = await withPbsTimeout(fh.getFile(), IO_TIMEOUT_MS);
+        const fileMod = Number(file.lastModified || 0);
+        const changed = (S.activeFileModified > 0 && fileMod > S.activeFileModified + 500)
+          || (S.activeFileModified === 0 && fileMod > 0);
+        if (changed) {
+          const rawText = await readRawFileText(file);
+          const diskWriteId = extractWriteId(rawText);
+          if (diskWriteId && S.lastWrittenId && diskWriteId === S.lastWrittenId) {
+            S.activeFileModified = Math.max(S.activeFileModified, fileMod);
+            S.folderFileMtimes.set(S.activeProjectId, S.activeFileModified);
+          } else if (S.dirtyProjectIds.has(S.activeProjectId)) {
+            // Local unsaved edits exist -> surface conflict rather than overwriting local edits!
+            S.conflictRemoteText = rawText;
+            S.conflictRemoteModified = fileMod;
+            S.conflictRemoteDoc = null;
+            try {
+              S.conflictRemoteDoc = (await D().decodePbsFromText(rawText, getProject(S.activeProjectId), undefined, getUserName(), { silentPrompt: true })).doc;
+            } catch (_e) {}
+            setSyncStatus('Conflict detected \u2014 auto-save paused', 'warn');
+            S.hooks.rerender();
+            return;
+          } else if (await syncFromFolder({ silentMissing: true, silentErrors: true })) {
+            toast('PBS updated from shared folder.', 'info');
+            S.hooks.rerender();
+          }
+        }
       }
-
-      if (S.dirtyProjectIds.has(S.activeProjectId)) {
-        // Local unsaved edits exist -> surface conflict rather than overwriting local edits!
-        S.conflictRemoteText = rawText;
-        S.conflictRemoteModified = fileMod;
-        S.conflictRemoteDoc = null;
-        try {
-          S.conflictRemoteDoc = (await D().decodePbsFromText(rawText, getProject(S.activeProjectId), undefined, getUserName(), { silentPrompt: true })).doc;
-        } catch (_e) {}
-        setSyncStatus('Conflict detected \u2014 auto-save paused', 'warn');
-        S.hooks.rerender();
-        return;
-      }
-
-      if (await syncFromFolder({ silentMissing: true, silentErrors: true })) {
-        toast('PBS updated from shared folder.', 'info');
-        S.hooks.rerender();
-      }
+      await scanFolderForBadges({ force: false, skipActive: true });
     } catch (err) {
       if (isPbsConnectionError(err) && err.name !== 'NotFoundError') {
         handlePbsFolderDisconnected(err);
       }
     }
   }
+
+  async function pollFolderBackground(opts = {}) {
+    if (isSessionLocked()) return false;
+    const force = Boolean(opts && opts.force);
+    const allowPrompt = Boolean(opts && opts.allowPrompt);
+    const minIntervalMs = Number(opts && opts.minIntervalMs) || 0;
+    if (!force && minIntervalMs > 0 && (Date.now() - S.lastBackgroundPollAt) < minIntervalMs && S.dirHandle) {
+      return true;
+    }
+    if (!S.dirHandle) {
+      return tryAutoReconnectFolder({ allowPrompt, force });
+    }
+    if (!S.pollTimer) startPolling();
+    if (force) {
+      if (S.hooks.isDialogOpen() && S.activeProjectId) {
+        await pollOnce();
+      }
+      const updated = await scanFolderForBadges({ force: true, skipActive: Boolean(S.hooks.isDialogOpen() && S.activeProjectId) });
+      if (opts && opts.notify) {
+        toast(updated > 0 ? `Synced ${updated} PBS file${updated === 1 ? '' : 's'} from "${S.dirHandle.name}".` : `All PBS files in "${S.dirHandle.name}" are up to date.`, 'success');
+      }
+      return true;
+    }
+    await pollOnce();
+    return true;
+  }
+
   function startPolling() { stopPolling(); if (S.dirHandle && !isSessionLocked()) S.pollTimer = setInterval(pollOnce, POLL_MS); }
   function stopPolling() { if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; } }
 
@@ -614,7 +692,7 @@
         S.isFlushingForLock = true;
         try { await writeToFolder(false); } finally { S.isFlushingForLock = false; }
       }
-    } else if ((S.saveQueued || S.syncStatusText === 'Saving...') && S.dirHandle && S.activeProjectId && S.activeDoc && !S.conflictRemoteText) {
+    } else if ((S.saveQueued || S.syncStatusText === 'Saving...' || S.dirtyProjectIds.has(S.activeProjectId)) && S.dirHandle && S.activeProjectId && S.activeDoc && !S.conflictRemoteText) {
       S.saveQueued = false;
       S.isFlushingForLock = true;
       try { await writeToFolder(false); } finally { S.isFlushingForLock = false; }
@@ -636,6 +714,8 @@
     S.conflictRemoteModified = 0;
     S.cache = {};
     S.dirtyProjectIds.clear();
+    S.folderFileMtimes.clear();
+    S.lastBackgroundPollAt = 0;
     try {
       const k = D().CACHE_KEY;
       if (typeof safeRemoveStorage === 'function') safeRemoveStorage(k);
@@ -726,6 +806,16 @@
   }
 
   /* ---------- Misc helpers for the UI ---------- */
+  function getFolderSyncSummary() {
+    const dbMeta = getLiveDbRef()?.settings?.pbsFolder || null;
+    return {
+      supported: supportsDirSync(),
+      connected: Boolean(S.dirHandle),
+      folderName: S.dirHandle ? String(S.dirHandle.name || '') : '',
+      rememberedName: (!S.dirHandle && S.rememberedDirHandle) ? String(S.rememberedDirHandle.name || '') : '',
+      dbFolderName: (dbMeta && dbMeta.enabled && dbMeta.folderName) ? String(dbMeta.folderName) : '',
+    };
+  }
   function getItemCount(projectId) {
     const doc = getCache()[projectId];
     return doc && Array.isArray(doc.items) ? doc.items.length : 0;
@@ -745,8 +835,8 @@
   P.core = {
     state: S, getDb, getProject, getUserName, toast, getCache, supportsDirSync, getSessionPassphrase,
     setSyncStatus, logChange, getOwnerSuggestions, getManufacturerSuggestions, getProcStatusSuggestions,
-    openSession, initFolder, tryAutoReconnectFolder, scanFolderForBadges, replaceDoc,
-    linkFolder, reconnectFolder, syncFromFolder, writeToFolder, scheduleSave, pollOnce, startPolling, stopPolling,
+    openSession, initFolder, tryAutoReconnectFolder, scanFolderForBadges, pollFolderBackground, getFolderSyncSummary,
+    replaceDoc, linkFolder, reconnectFolder, syncFromFolder, writeToFolder, scheduleSave, pollOnce, startPolling, stopPolling,
     flushBeforeLock, clearMemoryAndStopSync, reencryptAllPbsFilesInFolder, onProjectCodeRenamed,
     getItemCount, listCloneSources, downloadText, fileNameFor,
   };

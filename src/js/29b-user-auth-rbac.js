@@ -784,12 +784,14 @@
 
     // Auto-open the linked Finance Vault and PBS folder if remembered on this device
     if (typeof window !== 'undefined') {
-      if (typeof window.ppTryAutoOpenFinanceVault === 'function') {
-        window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: false }).catch(() => {});
-      }
-      if (typeof window.ppTryAutoReconnectPbsFolder === 'function') {
-        window.ppTryAutoReconnectPbsFolder({ allowPrompt: false }).catch(() => {});
-      }
+      (async () => {
+        if (typeof window.ppTryAutoOpenFinanceVault === 'function') {
+          try { await window.ppTryAutoOpenFinanceVault({ allowPermissionPrompt: true, silent: false }); } catch (_e) {}
+        }
+        if (typeof window.ppTryAutoReconnectPbsFolder === 'function') {
+          try { await window.ppTryAutoReconnectPbsFolder({ allowPrompt: true, force: true }); } catch (_e) {}
+        }
+      })();
     }
 
     const who = res.authRole === 'admin'

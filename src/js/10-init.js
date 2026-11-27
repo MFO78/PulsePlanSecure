@@ -837,13 +837,16 @@
       setupResponsiveViewportWatcher();
       setupMatrixFloatingHeaderSync();
 
-      // 6. Auto-check inactivity timeout + linked file + Finance Vault whenever the window/tab regains focus
+      // 6. Auto-check inactivity timeout + linked file + Finance Vault + PBS folder whenever the window/tab regains focus
       const handleAppResume = () => {
         if (typeof ppCheckWallClockInactivityLock === 'function' && ppCheckWallClockInactivityLock()) return;
         if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
         if (linkedFileHandle && !ui.demoMode) checkExternalFileUpdates();
         if (typeof window !== 'undefined' && typeof window.ppPollFinanceVaultNow === 'function' && !ui.demoMode) {
           window.ppPollFinanceVaultNow().catch(() => {});
+        }
+        if (typeof window !== 'undefined' && typeof window.ppPollPbsFolderNow === 'function' && !ui.demoMode) {
+          window.ppPollPbsFolderNow({ force: false, minIntervalMs: 2500 }).catch(() => {});
         }
       };
       window.addEventListener('focus', handleAppResume);
