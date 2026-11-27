@@ -2,7 +2,7 @@
  * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
  * 3. Log Notes in ChangeLog + Show/Hide Notes toggle in Evolution & Snapshot Comparison
- * 4. Bidirectional Weeks/Months, Horizon & Project controls in Health & Evolution tab (synced with Roadmap)
+ * 4. Bidirectional Weeks/Months, Horizon & Project controls in Health & Evolution tab (synced with Roadmap, desktop & mobile)
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
  * 6. EUPL-1.2 User Licence badge & dialog alignment
  */
@@ -37,14 +37,14 @@
       .pp-sort-th { cursor: pointer; user-select: none; white-space: nowrap; }
       .pp-sort-th:hover { color: #4f46e5; }
       .pp-sort-ind { margin-left: .25rem; font-size: 9px; opacity: .65; }
-      .pp-health-ctrl-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .85rem; margin-bottom: .85rem; border-radius: .85rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 12px; }
-      @media (max-width: 767px) { .pp-health-ctrl-bar { display: none !important; } }
-      .pp-health-btn-grp { display: inline-flex; border-radius: .6rem; overflow: hidden; border: 1px solid #cbd5e1; }
+      .pp-health-ctrl-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .85rem; margin-bottom: .85rem; border-radius: .85rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); font-size: 12px; }
+      .pp-health-btn-grp { display: inline-flex; border-radius: .6rem; overflow: hidden; border: 1px solid var(--border-subtle, #cbd5e1); }
       .pp-health-seg { padding: .3rem .65rem; font-size: 11.5px; font-weight: 700; cursor: pointer; background: transparent; color: var(--text-primary, #334155); border: none; }
       .pp-health-seg.active { background: #4f46e5; color: #ffffff; }
-      .pp-health-sel { padding: .3rem .55rem; border-radius: .55rem; border: 1px solid #cbd5e1; background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 11.5px; font-weight: 700; }
-      .pp-notes-diff-card { margin-top: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: .85rem; background: var(--surface-card, #ffffff); padding: .85rem; font-size: 12px; }
+      .pp-health-sel { padding: .3rem .55rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 11.5px; font-weight: 700; max-width: 100%; }
+      .pp-notes-diff-card { margin-top: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: .85rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); padding: .85rem; font-size: 12px; }
       .pp-notes-diff-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--border-subtle, #e2e8f0); }
+      @media (max-width: 639px) { .pp-notes-diff-row { grid-template-columns: 1fr; } }
     `;
     document.head.appendChild(style);
   }
@@ -244,9 +244,9 @@
       ${diffs.length ? diffs.map(k => `
         <div class="pp-notes-diff-row">
           <div><strong>${esc(formatKeyLabel(k))}</strong></div>
-          <div style="color:#64748b">${esc(baseComments[k] || '(none)')}</div>
-          <div style="color:#0f172a">${esc(curComments[k] || '(removed)')}</div>
-        </div>`).join('') : '<div style="color:#64748b">No note differences between baseline and target.</div>'}
+          <div style="color:var(--text-muted, #64748b)">${esc(baseComments[k] || '(none)')}</div>
+          <div style="color:var(--text-primary, #0f172a)">${esc(curComments[k] || '(removed)')}</div>
+        </div>`).join('') : '<div style="color:var(--text-muted, #64748b)">No note differences between baseline and target.</div>'}
     `;
     card.querySelector('#ppHideNotesDiffBtn')?.addEventListener('click', () => {
       if (typeof ui !== 'undefined') ui.showSnapshotNotes = false;
@@ -268,8 +268,12 @@
       bar.className = 'pp-health-ctrl-bar';
       healthTab.prepend(bar);
     }
-    const horizons = [1, 2, 3, 4, 6, 12, 18, 24];
-    const curHorizon = Number(ui.horizon) || 4;
+    const horizons = (typeof VALID_HORIZONS !== 'undefined' && Array.isArray(VALID_HORIZONS))
+      ? VALID_HORIZONS
+      : [1, 2, 3, 4, 6, 12, 18, 24];
+    const curHorizon = typeof getActiveHorizon === 'function'
+      ? Number(getActiveHorizon()) || 4
+      : (Number(ui.horizon) || 4);
     const sortedProjs = (typeof getSortedProjects === 'function' ? getSortedProjects(db) : (db.projects || []))
       .filter(p => !p.archived || ui.filterProj === p.id);
     const fmtProj = (p) => (typeof formatProjectOptionLabel === 'function'
@@ -277,7 +281,7 @@
       : (p.code ? `[${p.code}] ${p.name}` : p.name));
 
     bar.innerHTML = `
-      <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px">Synced with Roadmap:</strong>
         <div class="pp-health-btn-grp" role="group" aria-label="Time unit">
           <button type="button" class="pp-health-seg ${ui.timeUnit === 'month' ? 'active' : ''}" data-pp-tu="month">Months</button>
@@ -300,14 +304,25 @@
 
     bar.querySelectorAll('[data-pp-tu]').forEach(btn => {
       btn.addEventListener('click', () => {
-        ui.timeUnit = btn.getAttribute('data-pp-tu');
-        if (typeof renderAll === 'function') renderAll();
+        const nextTu = btn.getAttribute('data-pp-tu');
+        if (typeof setTimeUnit === 'function') setTimeUnit(nextTu);
+        else {
+          ui.timeUnit = nextTu;
+          if (typeof renderAll === 'function') renderAll();
+        }
       });
     });
 
     bar.querySelector('#ppHealthHorizonSel')?.addEventListener('change', (ev) => {
-      ui.horizon = parseInt(ev.target.value, 10) || 4;
-      if (typeof renderAll === 'function') renderAll();
+      const nextHor = parseInt(ev.target.value, 10) || 4;
+      if (typeof setHorizon === 'function') {
+        setHorizon(nextHor);
+      } else {
+        ui.horizon = nextHor;
+        if (ui.timeUnit === 'week' && 'weekHorizon' in ui) ui.weekHorizon = nextHor;
+        if (ui.timeUnit === 'month' && 'monthHorizon' in ui) ui.monthHorizon = nextHor;
+        if (typeof renderAll === 'function') renderAll();
+      }
     });
 
     bar.querySelector('#ppHealthProjectSel')?.addEventListener('change', (ev) => {

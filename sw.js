@@ -1,11 +1,12 @@
-const CACHE_NAME = 'pulseplan-v9.0.0-secure-icons';
+const CACHE_NAME = 'pulseplan-v9.0.1-secure-icons';
 const ASSETS = [
   './',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
   './icon-512.png',
-  './icon-maskable-512.png'
+  './icon-maskable-512.png',
+  './LICENSE.txt'
 ];
 const scopeUrl = new URL(self.registration.scope);
 const iconPaths = new Set(ASSETS.slice(1).map(asset => new URL(asset, scopeUrl).pathname));

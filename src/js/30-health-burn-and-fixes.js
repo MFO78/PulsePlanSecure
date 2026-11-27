@@ -1,8 +1,28 @@
 /* ============================================================================
- * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS + VARIABLE CAPACITY RESET FIX
+ * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS, CAPACITY RESET FIX,
+ *     LIFECYCLE HOOK BUS & ACCESSIBILITY / DARK-MODE ENHANCEMENTS
  * ============================================================================ */
 (function ppHealthBurnAndFixesModule() {
   if (typeof globalThis === 'undefined') return;
+
+  /* ---------- 0. Lightweight Lifecycle Hook Bus ---------- */
+  const _hookListeners = new Map();
+  const ppHooks = globalThis.ppHooks || {
+    on(eventName, fn) {
+      if (typeof fn !== 'function') return () => {};
+      if (!_hookListeners.has(eventName)) _hookListeners.set(eventName, new Set());
+      _hookListeners.get(eventName).add(fn);
+      return () => _hookListeners.get(eventName)?.delete(fn);
+    },
+    emit(eventName, ...args) {
+      const set = _hookListeners.get(eventName);
+      if (!set) return;
+      set.forEach(fn => {
+        try { fn(...args); } catch (_e) {}
+      });
+    },
+  };
+  globalThis.ppHooks = ppHooks;
 
   function getDb() {
     if (typeof getActiveDB === 'function') return getActiveDB();
@@ -50,7 +70,111 @@
     return !isNaN(def) && def > 0 ? def : 0;
   }
 
-  /* ---------- 1. Variable Capacity Reset Hygiene ---------- */
+  function injectBurnAndA11yStyles() {
+    if (typeof document === 'undefined' || !document.head) return;
+    if (document.getElementById('ppHealthBurnStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'ppHealthBurnStyles';
+    style.textContent = `
+      html.dark #ppHealthBurnBudgetFrame,
+      body.dark #ppHealthBurnBudgetFrame,
+      [data-theme="dark"] #ppHealthBurnBudgetFrame {
+        background-color: var(--surface-card, #0f172a);
+        border-color: var(--border-subtle, #334155);
+        color: var(--text-primary, #f1f5f9);
+      }
+      html.dark #ppHealthBurnBudgetFrame .bg-slate-50,
+      html.dark #ppHealthBurnBudgetFrame .bg-slate-50\\/70,
+      html.dark #ppHealthBurnBudgetFrame .bg-slate-50\\/60,
+      body.dark #ppHealthBurnBudgetFrame .bg-slate-50,
+      body.dark #ppHealthBurnBudgetFrame .bg-slate-50\\/70,
+      body.dark #ppHealthBurnBudgetFrame .bg-slate-50\\/60 {
+        background-color: var(--surface-subtle, #1e293b);
+      }
+      html.dark #ppHealthBurnBudgetFrame .text-slate-900,
+      html.dark #ppHealthBurnBudgetFrame .text-slate-800,
+      body.dark #ppHealthBurnBudgetFrame .text-slate-900,
+      body.dark #ppHealthBurnBudgetFrame .text-slate-800 {
+        color: var(--text-primary, #f1f5f9);
+      }
+      html.dark #ppHealthBurnBudgetFrame .text-slate-700,
+      html.dark #ppHealthBurnBudgetFrame .text-slate-600,
+      body.dark #ppHealthBurnBudgetFrame .text-slate-700,
+      body.dark #ppHealthBurnBudgetFrame .text-slate-600 {
+        color: var(--text-secondary, #cbd5e1);
+      }
+      html.dark #ppHealthBurnBudgetFrame .border-slate-200,
+      html.dark #ppHealthBurnBudgetFrame .border-slate-100,
+      body.dark #ppHealthBurnBudgetFrame .border-slate-200,
+      body.dark #ppHealthBurnBudgetFrame .border-slate-100 {
+        border-color: var(--border-subtle, #334155);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /* ---------- 1. HTML5 Landmarks, Tabpanel ARIA & Modal Focus Trap ---------- */
+  function enhanceA11yLandmarksAndTabs() {
+    if (typeof document === 'undefined' || !document.querySelector) return;
+
+    const nav = document.querySelector('header nav[role="tablist"]');
+    if (nav && !nav.__ppLandmarkFixed) {
+      nav.__ppLandmarkFixed = true;
+      nav.removeAttribute('role');
+      const inner = document.createElement('div');
+      inner.setAttribute('role', 'tablist');
+      inner.setAttribute('aria-label', 'Workspace tabs');
+      inner.className = 'flex items-center gap-1';
+      while (nav.firstChild) inner.appendChild(nav.firstChild);
+      nav.appendChild(inner);
+    }
+
+    const panelLabels = {
+      'tab-matrix': 'Roadmap Matrix',
+      'tab-health': 'Health and Evolution',
+      'tab-data': 'Setup and Data',
+      'tab-sync': 'Sync and Snapshots',
+    };
+    Object.entries(panelLabels).forEach(([id, label]) => {
+      const el = document.getElementById(id);
+      if (el && !el.getAttribute('aria-label')) {
+        el.setAttribute('aria-label', label);
+      }
+    });
+  }
+
+  function wireCustomModalFocusTrap() {
+    if (typeof document === 'undefined' || document.__ppModalTrapWired) return;
+    document.__ppModalTrapWired = true;
+    document.addEventListener('keydown', (ev) => {
+      const overlay = document.getElementById('modalOverlay');
+      const card = document.getElementById('modalCard');
+      if (!overlay || !card || overlay.classList.contains('hidden')) return;
+      if (ev.key === 'Escape') {
+        if (typeof closeModal === 'function') {
+          ev.preventDefault();
+          closeModal();
+        }
+        return;
+      }
+      if (ev.key !== 'Tab') return;
+      const focusables = Array.from(card.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(el => el.offsetParent !== null);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (ev.shiftKey && document.activeElement === first) {
+        ev.preventDefault();
+        last.focus();
+      } else if (!ev.shiftKey && document.activeElement === last) {
+        ev.preventDefault();
+        first.focus();
+      }
+    });
+  }
+
+  /* ---------- 2. Variable Capacity Reset Hygiene ---------- */
   function pruneNominalCapacityOverrides(db = getDb()) {
     if (!db || !db.capacityOverrides || typeof db.capacityOverrides !== 'object') return 0;
     const deptMap = new Map((db.departments || []).map(d => [d.id, d]));
@@ -80,9 +204,7 @@
     return removed;
   }
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.pruneNominalCapacityOverrides = pruneNominalCapacityOverrides;
-  }
+  globalThis.pruneNominalCapacityOverrides = pruneNominalCapacityOverrides;
 
   [
     'resetCapacityOverride',
@@ -107,6 +229,7 @@
     const origTouch = touchDBAndSave;
     touchDBAndSave = function (...args) {
       pruneNominalCapacityOverrides(getDb());
+      ppHooks.emit('beforeSave', getDb());
       return origTouch.apply(this, args);
     };
   }
@@ -133,7 +256,7 @@
     }, true);
   }
 
-  /* ---------- 2. Burn & Budget Analysis Computation ---------- */
+  /* ---------- 3. Burn & Budget Analysis Computation ---------- */
   function computeBurnBudgetAnalysis(db, periods, timeUnit, filterProj, filterDept, includeTentative) {
     const allDepts = (db.departments || []).filter(d => filterDept === 'all' || d.id === filterDept);
     const activeProjs = (db.projects || []).filter(p => {
@@ -245,6 +368,7 @@
     if (typeof document === 'undefined') return;
     const healthTab = document.getElementById('tab-health');
     if (!healthTab || typeof ui === 'undefined') return;
+    injectBurnAndA11yStyles();
 
     const db = getDb();
     const periods = typeof getVisiblePeriods === 'function' ? getVisiblePeriods() : [];
@@ -434,12 +558,21 @@
     `;
   }
 
+  ppHooks.on('afterRenderHealth', renderHealthBurnBudgetFrame);
+  ppHooks.on('afterRenderAll', () => {
+    enhanceA11yLandmarksAndTabs();
+    wireCustomModalFocusTrap();
+    if (typeof ui !== 'undefined' && ui.activeTab === 'health') {
+      renderHealthBurnBudgetFrame();
+    }
+  });
+
   if (typeof renderHealthDashboard === 'function') {
     const origRenderHealth = renderHealthDashboard;
     renderHealthDashboard = function (...args) {
       pruneNominalCapacityOverrides(getDb());
       const res = origRenderHealth.apply(this, args);
-      renderHealthBurnBudgetFrame();
+      ppHooks.emit('afterRenderHealth', getDb());
       return res;
     };
   }
@@ -449,17 +582,26 @@
     renderAll = function (...args) {
       pruneNominalCapacityOverrides(getDb());
       const res = origRenderAll.apply(this, args);
-      if (typeof ui !== 'undefined' && ui.activeTab === 'health') {
-        renderHealthBurnBudgetFrame();
-      }
+      ppHooks.emit('afterRenderAll', getDb());
       return res;
     };
   }
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.__ppHealthBurnTestApi = {
-      pruneNominalCapacityOverrides,
-      computeBurnBudgetAnalysis,
+  if (typeof document !== 'undefined') {
+    const bootA11y = () => {
+      enhanceA11yLandmarksAndTabs();
+      wireCustomModalFocusTrap();
     };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bootA11y);
+    } else {
+      bootA11y();
+    }
   }
+
+  globalThis.__ppHealthBurnTestApi = {
+    pruneNominalCapacityOverrides,
+    computeBurnBudgetAnalysis,
+    ppHooks,
+  };
 })();
