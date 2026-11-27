@@ -28,6 +28,10 @@
       .pp-task-txt { flex: 1 1 auto; min-width: 0; word-break: break-word; font-weight: 500; }
       .pp-task-txt.is-done { text-decoration: line-through; opacity: .62; }
       .pp-task-txt.is-dropped { text-decoration: line-through; font-style: italic; opacity: .52; }
+      .pp-task-row.is-missed-trace { opacity: .82; }
+      .pp-task-missed-icon { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-top: 1px; font-size: 11px; font-weight: 800; color: #e11d48; flex-shrink: 0; line-height: 1; }
+      .pp-task-txt.is-missed { font-style: italic; opacity: .78; }
+      .pp-task-missed-badge { display: inline-flex; align-items: center; gap: .1rem; padding: 0 .32rem; border-radius: 9999px; font-size: 9px; font-weight: 800; line-height: 1.35; flex-shrink: 0; white-space: nowrap; background: #fff1f2; color: #be123c; border: 1px dashed #fda4af; }
       .pp-task-wk-tag { font-family: ui-monospace, monospace; font-size: 9.5px; font-weight: 700; opacity: .75; margin-right: .22rem; }
       .pp-task-roll { display: inline-flex; align-items: center; gap: .1rem; padding: 0 .3rem; border-radius: 9999px; font-size: 9.5px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.35; flex-shrink: 0; white-space: nowrap; }
       .pp-task-roll-1 { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
@@ -49,6 +53,8 @@
       html.dark .pp-task-roll-1, body.dark .pp-task-roll-1 { background: rgba(217, 119, 6, .28); color: #fde68a; border-color: #d97706; }
       html.dark .pp-task-roll-2, body.dark .pp-task-roll-2 { background: rgba(225, 29, 72, .28); color: #fda4af; border-color: #e11d48; }
       html.dark .pp-task-roll-done, body.dark .pp-task-roll-done { background: #334155; color: #cbd5e1; border-color: #475569; }
+      html.dark .pp-task-missed-icon, body.dark .pp-task-missed-icon { color: #fb7185; }
+      html.dark .pp-task-missed-badge, body.dark .pp-task-missed-badge { background: rgba(190, 18, 60, .25); color: #fda4af; border-color: #f43f5e; }
       html.dark .pp-saydo-bar, body.dark .pp-saydo-bar { background: #0f172a; border-color: #334155; color: #e2e8f0; }
       html.dark .pp-saydo-filter, body.dark .pp-saydo-filter { background: #1e293b; color: #cbd5e1; border-color: #475569; }
       html.dark .pp-saydo-filter:hover, body.dark .pp-saydo-filter:hover { background: #334155; color: #ffffff; }
@@ -190,24 +196,49 @@
     return { rolledCount, tasks: db.allocationTasks };
   }
 
-  /* Returns tasks visible in a (deptId, projId, periodKey) cell, respecting Week or Month view and automatic rollover. */
+  /* Returns true if a task was open/planned in weekKey and rolled forward past it without being performed. */
+  function ppIsTaskMissedInWeek(eff, weekKey) {
+    if (!eff || !isValidWeekKey(weekKey)) return false;
+    const orig = isValidWeekKey(eff.originWeek) ? eff.originWeek : eff.currentWeek;
+    const cur = isValidWeekKey(eff.currentWeek) ? eff.currentWeek : orig;
+    if (!orig || !cur) return false;
+    return ppWeeksBetweenIsoWeeks(orig, weekKey) >= 0 && ppWeeksBetweenIsoWeeks(weekKey, cur) > 0;
+  }
+
+  /* Returns tasks visible in a (deptId, projId, periodKey) cell, including read-only missed traces for past weeks/months where a task rolled forward. */
   function ppGetCellTasks(deptId, projId, periodKey, timeUnit, db = (typeof getActiveDB === 'function' ? getActiveDB() : null), todayWeek) {
     if (!db || !Array.isArray(db.allocationTasks) || !db.allocationTasks.length) return [];
     const nowWk = safeTodayWeek(todayWeek);
-    const targetWeeks = (timeUnit === 'month' || /^\d{4}-\d{2}$/.test(String(periodKey || '')))
-      ? new Set(typeof getWeeksInMonth === 'function' ? getWeeksInMonth(periodKey) : [])
-      : new Set([String(periodKey || '')]);
+    const isMonth = (timeUnit === 'month' || /^\d{4}-\d{2}$/.test(String(periodKey || '')));
+    const targetWeeksArr = isMonth
+      ? (typeof getWeeksInMonth === 'function' ? getWeeksInMonth(periodKey) : [])
+      : [String(periodKey || '')];
+    const targetWeeks = new Set(targetWeeksArr);
 
     const list = [];
     db.allocationTasks.forEach(raw => {
       if (!raw || raw.deptId !== deptId || raw.projectId !== projId) return;
       const eff = ppGetEffectiveTaskState(raw, nowWk);
-      if (eff && targetWeeks.has(eff.currentWeek)) list.push(eff);
+      if (!eff) return;
+      if (targetWeeks.has(eff.currentWeek)) {
+        list.push({ ...eff, isMissedTrace: false });
+      } else {
+        // Leave a read-only trace in every past week (or earlier month) the task rolled through unperformed
+        const missedWk = targetWeeksArr.find(wk => ppIsTaskMissedInWeek(eff, wk));
+        if (missedWk) {
+          list.push({
+            ...eff,
+            isMissedTrace: true,
+            missedInWeek: missedWk,
+            rolledToWeek: eff.currentWeek,
+          });
+        }
+      }
     });
 
-    // Sort: open rolled-most first -> open fresh -> done -> dropped
+    // Sort: live open rolled-most first -> live open fresh -> live done -> live dropped -> missed traces
     list.sort((a, b) => {
-      const rank = (t) => (t.dropped ? 3 : (t.done ? 2 : 0));
+      const rank = (t) => (t.isMissedTrace ? 4 : (t.dropped ? 3 : (t.done ? 2 : 0)));
       const rDiff = rank(a) - rank(b);
       if (rDiff !== 0) return rDiff;
       if (b.rollCount !== a.rollCount) return b.rollCount - a.rollCount;
@@ -223,15 +254,16 @@
     if (!mode || mode === 'all') return true;
     const list = Array.isArray(cellTasks) ? cellTasks : [];
     if (mode === 'hasTasks') return list.length > 0;
-    if (mode === 'open') return list.some(t => !t.done && !t.dropped);
-    if (mode === 'rolled') return list.some(t => !t.done && !t.dropped && t.rollCount > 0);
+    if (mode === 'open') return list.some(t => t.isMissedTrace || (!t.done && !t.dropped));
+    if (mode === 'rolled') return list.some(t => t.isMissedTrace || (!t.done && !t.dropped && t.rollCount > 0));
     return true;
   }
 
-  /* Computes Say-Do completion and rollover statistics across visible periods, departments, and projects. */
+  /* Computes Say-Do completion and rollover statistics across visible periods, departments, and projects.
+   * Tasks rolled out of a past period count as missedOut for that period (deduplicated when their currentWeek is also inside the viewed window). */
   function ppComputeWeeklyTaskStats(db, periods, timeUnit, visibleDeptIds, visibleProjIds, todayWeek) {
     const empty = {
-      total: 0, activeTotal: 0, done: 0, open: 0, dropped: 0, rolledOpen: 0, agingOpen: 0,
+      total: 0, activeTotal: 0, done: 0, open: 0, missedOut: 0, dropped: 0, rolledOpen: 0, agingOpen: 0,
       sayDoPct: 0, currentWeek: safeTodayWeek(todayWeek),
       currentWeekTotal: 0, currentWeekDone: 0, currentWeekOpen: 0, currentWeekSayDoPct: 0,
       topAgingTasks: [], allVisibleTasks: [],
@@ -242,6 +274,7 @@
     const projSet = visibleProjIds ? new Set(visibleProjIds) : null;
 
     let periodWeekSet = null;
+    let periodWeekArr = null;
     if (Array.isArray(periods) && periods.length) {
       periodWeekSet = new Set();
       periods.forEach(pk => {
@@ -251,9 +284,10 @@
           periodWeekSet.add(pk);
         }
       });
+      periodWeekArr = Array.from(periodWeekSet);
     }
 
-    let total = 0; let done = 0; let open = 0; let dropped = 0; let rolledOpen = 0; let agingOpen = 0;
+    let total = 0; let done = 0; let open = 0; let missedOut = 0; let dropped = 0; let rolledOpen = 0; let agingOpen = 0;
     let cwDone = 0; let cwOpen = 0;
     const allVisibleTasks = [];
 
@@ -263,24 +297,30 @@
       if (projSet && !projSet.has(raw.projectId)) return;
       const eff = ppGetEffectiveTaskState(raw, nowWk);
       if (!eff) return;
-      if (periodWeekSet && !periodWeekSet.has(eff.currentWeek)) return;
 
-      total++;
-      allVisibleTasks.push(eff);
-      if (eff.dropped) {
-        dropped++;
-      } else if (eff.done) {
-        done++;
-        if (eff.currentWeek === nowWk) cwDone++;
-      } else {
-        open++;
-        if (eff.rollCount > 0) rolledOpen++;
-        if (eff.rollCount >= 2) agingOpen++;
-        if (eff.currentWeek === nowWk) cwOpen++;
+      const inWindowByCurrent = !periodWeekSet || periodWeekSet.has(eff.currentWeek);
+      if (inWindowByCurrent) {
+        total++;
+        allVisibleTasks.push(eff);
+        if (eff.dropped) {
+          dropped++;
+        } else if (eff.done) {
+          done++;
+          if (eff.currentWeek === nowWk) cwDone++;
+        } else {
+          open++;
+          if (eff.rollCount > 0) rolledOpen++;
+          if (eff.rollCount >= 2) agingOpen++;
+          if (eff.currentWeek === nowWk) cwOpen++;
+        }
+      } else if (periodWeekArr && periodWeekArr.some(wk => ppIsTaskMissedInWeek(eff, wk))) {
+        // Task was active in the viewed past window and left unperformed (rolled forward past it)
+        total++;
+        missedOut++;
       }
     });
 
-    const activeTotal = done + open;
+    const activeTotal = done + open + missedOut;
     const cwTotal = cwDone + cwOpen;
     const topAgingTasks = allVisibleTasks
       .filter(t => !t.done && !t.dropped && t.rollCount > 0)
@@ -292,6 +332,7 @@
       activeTotal,
       done,
       open,
+      missedOut,
       dropped,
       rolledOpen,
       agingOpen,
@@ -317,24 +358,27 @@
     return `<span class="pp-task-roll ${cls}" title="${escapeHtml(tip)}">&#8635;${r}</span>`;
   }
 
-  /* Renders interactive task checklist + inline quick-add right inside a Roadmap cell card (Desktop & Mobile). */
+  /* Renders interactive task checklist + read-only missed traces + inline quick-add right inside a Roadmap cell card (Desktop & Mobile). */
   function ppRenderInlineCellTasksHtml(deptId, projId, periodKey, cellTasks, filledTheme = null, isPresent = false, isOverview = false) {
     injectTaskStyles();
     const list = Array.isArray(cellTasks) ? cellTasks : [];
     const isMonth = typeof ui !== 'undefined' && ui && ui.timeUnit === 'month';
 
+    const active = list.filter(t => t.isMissedTrace || !t.dropped);
+    const doneCnt = active.filter(t => !t.isMissedTrace && t.done).length;
+    const missedCnt = list.filter(t => t.isMissedTrace).length;
+
     // In 12–24 period simplified overview mode, show a compact status chip only
     if (isOverview) {
       if (!list.length) return '';
-      const active = list.filter(t => !t.dropped);
-      const doneCnt = active.filter(t => t.done).length;
-      const maxRoll = active.filter(t => !t.done).reduce((m, t) => Math.max(m, t.rollCount || 0), 0);
+      const maxRoll = active.filter(t => !t.isMissedTrace && !t.done).reduce((m, t) => Math.max(m, t.rollCount || 0), 0);
       const chipStyle = filledTheme
         ? `background-color:${filledTheme.chipBg}; color:${filledTheme.text};`
         : '';
       return `<div class="mt-0.5 flex items-center gap-1 text-[9px] font-bold" onclick="event.stopPropagation()">
-        <span class="px-1 rounded ${filledTheme ? '' : 'bg-indigo-50 text-indigo-700'}" style="${chipStyle}" title="${doneCnt}/${active.length} weekly tasks completed">&#9745; ${doneCnt}/${active.length}</span>
+        <span class="px-1 rounded ${filledTheme ? '' : 'bg-indigo-50 text-indigo-700'}" style="${chipStyle}" title="${doneCnt}/${active.length} weekly tasks completed${missedCnt > 0 ? ` (${missedCnt} missed)` : ''}">&#9745; ${doneCnt}/${active.length}</span>
         ${maxRoll > 0 ? `<span class="pp-task-roll ${maxRoll >= 2 ? 'pp-task-roll-2' : 'pp-task-roll-1'}">&#8635;${maxRoll}</span>` : ''}
+        ${missedCnt > 0 ? `<span class="pp-task-missed-badge" title="${missedCnt} unperformed task(s) rolled forward">&#8618;${missedCnt}</span>` : ''}
       </div>`;
     }
 
@@ -344,6 +388,17 @@
     const containerKey = `${deptId}::${projId}::${periodKey}`;
 
     const rowsHtml = list.map(t => {
+      if (t.isMissedTrace) {
+        const destShort = String(t.rolledToWeek || t.currentWeek || '').split('-')[1] || t.currentWeek || '';
+        const statusLabel = t.done
+          ? `Not performed in ${t.missedInWeek || periodKey} — rolled to ${t.currentWeek} (completed there)`
+          : `Not performed in ${t.missedInWeek || periodKey} — rolled over to ${t.currentWeek} (↻${t.rollCount || 1})`;
+        return `<div class="pp-task-row is-missed-trace" title="${escapeHtml(statusLabel)}" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()">
+          <span class="pp-task-missed-icon" aria-hidden="true">&#8618;</span>
+          <span class="pp-task-txt is-missed">${escapeHtml(t.text)}</span>
+          <span class="pp-task-missed-badge" title="${escapeHtml(statusLabel)}">Missed &rarr; ${escapeHtml(destShort)}</span>
+        </div>`;
+      }
       const safeId = escapeHtml(t.id);
       const wkTag = isMonth && t.currentWeek ? `<span class="pp-task-wk-tag">${escapeHtml(t.currentWeek.split('-')[1] || t.currentWeek)}</span>` : '';
       const txtCls = t.dropped ? 'is-dropped' : (t.done ? 'is-done' : '');
@@ -368,11 +423,10 @@
            title="Add a weekly checkable task directly to this allocation">+ Task</button>`
       : '';
 
-    const active = list.filter(t => !t.dropped);
-    const doneCnt = active.filter(t => t.done).length;
+    const missedTagHtml = missedCnt > 0 ? ` <span class="opacity-75">&middot; ${missedCnt} missed</span>` : '';
     const headerHtml = list.length
       ? `<div class="flex items-center justify-between gap-1 mb-1 text-[10px] font-bold" style="opacity:.82">
-           <span>Tasks ${doneCnt}/${active.length}</span>
+           <span>Tasks ${doneCnt}/${active.length}${missedTagHtml}</span>
            ${quickAddBtn}
          </div>`
       : '';
@@ -424,6 +478,7 @@
         <div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${stats.sayDoPct}" style="width:74px;height:7px;border-radius:9999px;background:#e2e8f0;overflow:hidden"><div style="width:${stats.sayDoPct}%;height:100%;background:${barColor}"></div></div>
         ${cwNote}
         ${stats.open > 0 ? `<span class="pp-saydo-pill" style="background:#f1f5f9;color:#334155">${stats.open} open</span>` : ''}
+        ${stats.missedOut > 0 ? `<span class="pp-saydo-pill pp-task-missed-badge" title="Tasks planned in this visible window that were not performed and rolled forward">&#8618; ${stats.missedOut} missed</span>` : ''}
         ${stats.rolledOpen > 0 ? `<span class="pp-saydo-pill pp-task-roll-1" title="Unchecked tasks automatically rolled from previous weeks">&#8635; ${stats.rolledOpen} rolled</span>` : ''}
         ${stats.agingOpen > 0 ? `<span class="pp-saydo-pill pp-task-roll-2" title="Tasks rolled 2 or more consecutive weeks — review blockers">&#9888; ${stats.agingOpen} aging (&ge;2&times;)</span>` : ''}
       </div>
@@ -451,14 +506,17 @@
     const rollPill = stats.rolledOpen > 0
       ? `<span class="pp-task-roll ${stats.agingOpen > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}" title="${stats.rolledOpen} open task(s) rolled from prior week(s)${stats.agingOpen > 0 ? ` (${stats.agingOpen} aging ≥2×)` : ''}">&#8635;${stats.rolledOpen}</span>`
       : '';
-    const tip = `Weekly Tasks in visible window: ${stats.done}/${stats.activeTotal} done (${stats.sayDoPct}%)${stats.open > 0 ? `, ${stats.open} open` : ''}${stats.rolledOpen > 0 ? `, ${stats.rolledOpen} rolled` : ''}`;
+    const missedPill = stats.missedOut > 0
+      ? `<span class="pp-task-missed-badge" title="${stats.missedOut} unperformed task(s) rolled forward past this window">&#8618;${stats.missedOut}</span>`
+      : '';
+    const tip = `Weekly Tasks in visible window: ${stats.done}/${stats.activeTotal} done (${stats.sayDoPct}%)${stats.open > 0 ? `, ${stats.open} open` : ''}${stats.missedOut > 0 ? `, ${stats.missedOut} missed` : ''}${stats.rolledOpen > 0 ? `, ${stats.rolledOpen} rolled` : ''}`;
 
     return `<div class="mt-1.5 pp-row-task-summary" title="${escapeHtml(tip)}">
       <div class="flex items-center justify-between gap-1 text-[9px] leading-none mb-0.5">
         <span class="text-slate-500 uppercase font-semibold">&#9745; Tasks</span>
         <span class="inline-flex items-center gap-1 tabular-nums ${txtCls}">
           <span>${stats.done}/${stats.activeTotal} (${stats.sayDoPct}%)</span>
-          ${rollPill}
+          ${rollPill}${missedPill}
         </span>
       </div>
       <div class="w-full h-1 rounded-full bg-slate-200/80 overflow-hidden" aria-hidden="true">
@@ -700,12 +758,26 @@
     if (!deptId || !projId || !pk || !db) { wrap.innerHTML = ''; return; }
 
     const tasks = ppGetCellTasks(deptId, projId, pk, ui.timeUnit, db);
-    const active = tasks.filter(t => !t.dropped);
-    const doneCnt = active.filter(t => t.done).length;
+    const active = tasks.filter(t => t.isMissedTrace || !t.dropped);
+    const doneCnt = active.filter(t => !t.isMissedTrace && t.done).length;
     const targetWk = ppResolveTaskWeekForPeriod(pk, ui.timeUnit);
 
     const rowsHtml = tasks.length
       ? tasks.map(t => {
+          if (t.isMissedTrace) {
+            const destShort = String(t.rolledToWeek || t.currentWeek || '').split('-')[1] || t.currentWeek || '';
+            const traceSub = t.done
+              ? `Not performed in ${t.missedInWeek || targetWk} • Rolled to ${t.currentWeek} (completed)`
+              : `Not performed in ${t.missedInWeek || targetWk} • Rolled to ${t.currentWeek} (↻${t.rollCount || 1})`;
+            return `<div class="flex items-center gap-2 p-2 rounded-xl border border-dashed border-rose-200 bg-rose-50/40 dark:bg-rose-950/20 dark:border-rose-900/50 opacity-85">
+              <span class="pp-task-missed-icon" aria-hidden="true">&#8618;</span>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-medium italic text-slate-700 dark:text-slate-300 break-words">${escapeHtml(t.text)}</div>
+                <div class="text-[10px] text-slate-400 mt-0.5">${escapeHtml(traceSub)}</div>
+              </div>
+              <span class="pp-task-missed-badge">Missed &rarr; ${escapeHtml(destShort)}</span>
+            </div>`;
+          }
           const safeId = escapeHtml(t.id);
           const originNote = t.rollCount > 0 ? `Started ${t.originWeek} • Rolled ${t.rollCount}×` : `Origin ${t.originWeek}`;
           return `<div class="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700">
@@ -886,6 +958,7 @@
   globalThis.ppNormalizeAllocationTasksCollection = ppNormalizeAllocationTasksCollection;
   globalThis.ppGetEffectiveTaskState = ppGetEffectiveTaskState;
   globalThis.ppAutoRolloverAllocationTasks = ppAutoRolloverAllocationTasks;
+  globalThis.ppIsTaskMissedInWeek = ppIsTaskMissedInWeek;
   globalThis.ppGetCellTasks = ppGetCellTasks;
   globalThis.ppMatchesTaskFilter = ppMatchesTaskFilter;
   globalThis.ppComputeWeeklyTaskStats = ppComputeWeeklyTaskStats;

@@ -4196,8 +4196,14 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
     // 3. Rollover continues cleanly into 2026-W49 (+1 more -> rollCount 3)
     const effW49 = ppGetEffectiveTaskState(byId.t_roll2, '2026-W49');
 
-    // 4. Stats & Say-Do computation across W46..W48
+    // 4. Stats & Say-Do computation across W46..W48 (deduplicated) + single past week W46 (counts missedOut) + missed traces in W46 & W47
     const stats = ppComputeWeeklyTaskStats(db, ['2026-W46', '2026-W47', '2026-W48'], 'week', [d1], [p1, p2], '2026-W48');
+    const statsW46 = ppComputeWeeklyTaskStats(db, ['2026-W46'], 'week', [d1], [p1], '2026-W48');
+    const w46Tasks = ppGetCellTasks(d1, p1, '2026-W46', 'week', db, '2026-W48');
+    const w47Tasks = ppGetCellTasks(d1, p1, '2026-W47', 'week', db, '2026-W48');
+    const w46Trace = w46Tasks.find(t => t.id === 't_roll2');
+    const w47Trace = w47Tasks.find(t => t.id === 't_roll2');
+    const w46Html = ppRenderInlineCellTasksHtml(d1, p1, '2026-W46', w46Tasks, null, false, false);
 
     // 5. Inline Roadmap rendering (including a 0-FTE cell with NO comment and ONLY a rolled task!)
     liveDB = db;
@@ -4278,9 +4284,15 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
       effW49Roll: effW49.rollCount,
       statsDone: stats.done,
       statsOpen: stats.open,
+      statsMissedOutMulti: stats.missedOut,
       statsRolled: stats.rolledOpen,
       statsAging: stats.agingOpen,
       statsSayDo: stats.sayDoPct,
+      w46SayDo: statsW46.sayDoPct,
+      w46MissedOut: statsW46.missedOut,
+      w46HasTrace: Boolean(w46Trace && w46Trace.isMissedTrace && w46Trace.rolledToWeek === '2026-W48'),
+      w47HasTrace: Boolean(w47Trace && w47Trace.isMissedTrace && w47Trace.rolledToWeek === '2026-W48'),
+      w46HtmlHasMissedBadge: w46Html.includes('is-missed-trace') && w46Html.includes('Missed &rarr; W48'),
       matrixHasInlineCb: matrixHtml.includes('ppToggleAllocationTask(&#39;t_live_roll&#39;') || matrixHtml.includes("ppToggleAllocationTask('t_live_roll'"),
       matrixHasRollBadge: matrixHtml.includes('&#8635;2'),
       matrixHasZeroFteCard: matrixHtml.includes('Live rolled blocker') && matrixHtml.includes('0 FTE'),
@@ -4319,9 +4331,15 @@ test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render
   assert.equal(out.effW49Roll, 3, 'Subsequent week advances roll counter from 2 to 3');
   assert.equal(out.statsDone, 1, 'Say-Do stats count completed tasks');
   assert.equal(out.statsOpen, 2, 'Say-Do stats count open tasks (excluding dropped)');
+  assert.equal(out.statsMissedOutMulti, 0, 'Multi-week window deduplicates rolled tasks (no double counting)');
   assert.equal(out.statsRolled, 2, 'Say-Do stats count rolled open tasks');
   assert.equal(out.statsAging, 1, 'Say-Do stats count aging tasks (>=2x rolls)');
   assert.equal(out.statsSayDo, 33, 'Say-Do completion rate computes 1/3 = 33%');
+  assert.equal(out.w46MissedOut, 1, 'Single past week W46 counts rolled-out task as missed');
+  assert.equal(out.w46SayDo, 50, 'Single past week W46 Say-Do reflects 1 done / (1 done + 1 missed) = 50%');
+  assert.equal(out.w46HasTrace, true, 'Origin week W46 preserves read-only missed trace pointing to W48');
+  assert.equal(out.w47HasTrace, true, 'Intermediate rolled week W47 preserves read-only missed trace pointing to W48');
+  assert.equal(out.w46HtmlHasMissedBadge, true, 'Past week inline HTML renders Missed -> W48 trace badge');
   assert.equal(out.matrixHasInlineCb, true, 'Roadmap cell renders interactive checkbox directly inside cell');
   assert.equal(out.matrixHasRollBadge, true, 'Roadmap cell renders rollover counter badge (↻2)');
   assert.equal(out.matrixHasZeroFteCard, true, 'Rolled task on a 0-FTE cell still surfaces in Roadmap with 0 FTE alert');

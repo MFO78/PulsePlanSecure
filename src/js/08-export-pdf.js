@@ -1131,6 +1131,11 @@
           if (cellTasks.length > 0) {
             const shownTasks = cellTasks.slice(0, compactMode ? 2 : 4);
             shownTasks.forEach(t => {
+              if (t.isMissedTrace) {
+                const destShort = String(t.rolledToWeek || t.currentWeek || '').split('-')[1] || t.currentWeek || '';
+                noteParts.push(`[>] ${t.text} (Missed -> ${destShort})`);
+                return;
+              }
               const mark = t.dropped ? '[-]' : (t.done ? '[x]' : '[ ]');
               const rollTag = t.rollCount > 0 ? ` (R${t.rollCount})` : '';
               noteParts.push(`${mark} ${t.text}${rollTag}`);

@@ -678,7 +678,7 @@
 
       const activeItems = [];
       const unusedItems = [];
-      let cellTasksActive = 0, cellTasksDone = 0, cellTasksRolled = 0, cellTasksAging = 0;
+      let cellTasksActive = 0, cellTasksDone = 0, cellTasksRolled = 0, cellTasksAging = 0, cellTasksMissed = 0;
       secondaryList.forEach(item => {
         const deptId = isDeptAxis ? rowId : item.id;
         const projId = isDeptAxis ? item.id : rowId;
@@ -687,6 +687,11 @@
         const cmt = getCellProjectComments(deptId, projId, periodKey, ui.timeUnit, db);
         const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(deptId, projId, periodKey, ui.timeUnit, db) : [];
         cellTasks.forEach(t => {
+          if (t.isMissedTrace) {
+            cellTasksActive++;
+            cellTasksMissed++;
+            return;
+          }
           if (t.dropped) return;
           cellTasksActive++;
           if (t.done) cellTasksDone++;
@@ -709,7 +714,10 @@
             const rollHtml = cellTasksRolled > 0
               ? ` <span class="pp-task-roll ${cellTasksAging > 0 ? 'pp-task-roll-2' : 'pp-task-roll-1'}">&#8635;${cellTasksRolled}</span>`
               : '';
-            return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${cls}" title="Weekly tasks in this cell: ${cellTasksDone}/${cellTasksActive} completed (${pct}%)">&#9745; ${cellTasksDone}/${cellTasksActive} tasks (${pct}%)${rollHtml}</span>`;
+            const missedHtml = cellTasksMissed > 0
+              ? ` <span class="pp-task-missed-badge" title="${cellTasksMissed} unperformed task(s) rolled forward">&#8618;${cellTasksMissed} missed</span>`
+              : '';
+            return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border ${cls}" title="Weekly tasks in this cell: ${cellTasksDone}/${cellTasksActive} completed (${pct}%)${cellTasksMissed > 0 ? `, ${cellTasksMissed} missed` : ''}">&#9745; ${cellTasksDone}/${cellTasksActive} tasks (${pct}%)${rollHtml}${missedHtml}</span>`;
           })()
         : '';
 
