@@ -42,6 +42,22 @@
     };
   }
 
+  function ensureExternalCosts(db) {
+    if (!db || typeof db !== 'object') return [];
+    if (!db.settings || typeof db.settings !== 'object') db.settings = {};
+    if (Array.isArray(db.externalCosts) && db.externalCosts.length > 0) {
+      db.settings.externalCosts = db.externalCosts;
+      return db.externalCosts;
+    }
+    if (Array.isArray(db.settings.externalCosts)) {
+      db.externalCosts = db.settings.externalCosts;
+      return db.externalCosts;
+    }
+    if (!Array.isArray(db.externalCosts)) db.externalCosts = [];
+    db.settings.externalCosts = db.externalCosts;
+    return db.externalCosts;
+  }
+
   function esc(str) {
     if (typeof escapeHtml === 'function') return escapeHtml(String(str ?? ''));
     return String(str ?? '')
@@ -370,7 +386,8 @@
     const activeProjIds = new Set(activeProjs.map(p => p.id));
 
     const pbsMaterials = computePbsMaterialCost(Array.from(activeProjIds), pbsCacheOverride);
-    const externalCosts = (Array.isArray(db.externalCosts) ? db.externalCosts : []).filter(c => c && activeProjIds.has(c.projectId));
+    const allExternalCosts = ensureExternalCosts(db);
+    const externalCosts = allExternalCosts.filter(c => c && activeProjIds.has(c.projectId));
     const externalTotalCost = externalCosts.reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
 
     const hasRates = (typeof hasAnyDayRates === 'function' ? hasAnyDayRates(db) : false) ||
@@ -491,7 +508,7 @@
     injectBurnAndA11yStyles();
 
     const db = getDb();
-    if (!Array.isArray(db.externalCosts)) db.externalCosts = [];
+    ensureExternalCosts(db);
     const periods = typeof getVisiblePeriods === 'function' ? getVisiblePeriods() : [];
     const data = computeBurnBudgetAnalysis(
       db,
@@ -817,28 +834,32 @@
       const amount = Number(frame.querySelector('#ppExtCostAmount')?.value);
       const period = String(frame.querySelector('#ppExtCostPeriod')?.value || '').trim();
       if (!projId || !label || !Number.isFinite(amount) || amount <= 0) return;
-      if (!Array.isArray(db.externalCosts)) db.externalCosts = [];
-      db.externalCosts.push({
+      const list = ensureExternalCosts(db);
+      list.push({
         id: typeof uid === 'function' ? uid('ext') : `ext_${Date.now().toString(36)}`,
         projectId: projId,
         label,
         amount: Math.round(amount * 100) / 100,
         period,
       });
+      db.settings.externalCosts = list;
       if (typeof recordChange === 'function') recordChange('Finance', `Added external cost: ${label} (${fmtMoney(amount, db)})`);
-      else if (typeof touchDBAndSave === 'function') touchDBAndSave();
+      if (typeof touchDBAndSave === 'function') touchDBAndSave();
+      if (typeof showToast === 'function') showToast(`Saved external cost: ${label}`, 'success');
       renderHealthBurnBudgetFrame();
     });
 
     frame.querySelectorAll('[data-pp-del-ext]').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-pp-del-ext');
-        if (!Array.isArray(db.externalCosts)) return;
-        const idx = db.externalCosts.findIndex(c => c.id === id);
+        const list = ensureExternalCosts(db);
+        const idx = list.findIndex(c => c.id === id);
         if (idx >= 0) {
-          const [removed] = db.externalCosts.splice(idx, 1);
+          const [removed] = list.splice(idx, 1);
+          db.settings.externalCosts = list;
           if (typeof recordChange === 'function') recordChange('Finance', `Removed external cost: ${removed.label}`);
-          else if (typeof touchDBAndSave === 'function') touchDBAndSave();
+          if (typeof touchDBAndSave === 'function') touchDBAndSave();
+          if (typeof showToast === 'function') showToast(`Removed external cost: ${removed.label}`, 'info');
           renderHealthBurnBudgetFrame();
         }
       });
