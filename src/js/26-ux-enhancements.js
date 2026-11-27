@@ -2,7 +2,7 @@
  * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
  * 3. Log Notes in ChangeLog + Show/Hide Notes toggle in Evolution & Snapshot Comparison
- * 4. Bidirectional Weeks/Months, Horizon & Project controls in Health & Evolution tab (hidden on mobile)
+ * 4. Bidirectional Weeks/Months, Horizon, Project & Prev/Today/Next controls + Arrow shortcuts in Health & Evolution tab
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
  * 6. EUPL-1.2 User Licence badge & dialog alignment
  */
@@ -41,6 +41,7 @@
       @media (max-width: 767px) { .pp-health-ctrl-bar { display: none !important; } }
       .pp-health-btn-grp { display: inline-flex; border-radius: .6rem; overflow: hidden; border: 1px solid var(--border-subtle, #cbd5e1); }
       .pp-health-seg { padding: .3rem .65rem; font-size: 11.5px; font-weight: 700; cursor: pointer; background: transparent; color: var(--text-primary, #334155); border: none; }
+      .pp-health-seg:hover { background: var(--surface-subtle, #f1f5f9); }
       .pp-health-seg.active { background: #4f46e5; color: #ffffff; }
       .pp-health-sel { padding: .3rem .55rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 11.5px; font-weight: 700; max-width: 100%; }
       .pp-notes-diff-card { margin-top: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: .85rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); padding: .85rem; font-size: 12px; }
@@ -256,11 +257,60 @@
     container.appendChild(card);
   }
 
-  /* ---------- 4. Bidirectional Weeks/Months, Horizon & Project Bar in Health & Evolution ---------- */
+  /* ---------- 4. Bidirectional Weeks/Months, Horizon, Project & Prev/Today/Next Bar in Health & Evolution ---------- */
+  function navigateHealthTimeline(action) {
+    if (action === 'prev') {
+      if (typeof shiftTimeline === 'function') return shiftTimeline(-1);
+      if (typeof shiftPeriods === 'function') return shiftPeriods(-1);
+      if (typeof moveStartPeriod === 'function') return moveStartPeriod(-1);
+      document.querySelector('#btnPrevPeriod, #prevPeriodBtn, [data-nav="prev"], [aria-label*="Previous" i]')?.click();
+      return;
+    }
+    if (action === 'next') {
+      if (typeof shiftTimeline === 'function') return shiftTimeline(1);
+      if (typeof shiftPeriods === 'function') return shiftPeriods(1);
+      if (typeof moveStartPeriod === 'function') return moveStartPeriod(1);
+      document.querySelector('#btnNextPeriod, #nextPeriodBtn, [data-nav="next"], [aria-label*="Next" i]')?.click();
+      return;
+    }
+    if (action === 'today') {
+      if (typeof jumpToToday === 'function') return jumpToToday();
+      if (typeof goToToday === 'function') return goToToday();
+      if (typeof resetToToday === 'function') return resetToToday();
+      document.querySelector('#btnToday, #todayBtn, [data-nav="today"], [aria-label*="Today" i]')?.click();
+    }
+  }
+
+  function wireHealthArrowShortcuts() {
+    if (document.__ppHealthArrowShortcutsWired || typeof document.addEventListener !== 'function') return;
+    document.__ppHealthArrowShortcutsWired = true;
+    document.addEventListener('keydown', (ev) => {
+      if (typeof ui === 'undefined' || ui.activeTab !== 'health') return;
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      const t = ev.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      const overlay = document.getElementById('modalOverlay');
+      if (overlay && !overlay.classList.contains('hidden')) return;
+      if (document.querySelector('dialog[open]')) return;
+
+      if (ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        navigateHealthTimeline('prev');
+      } else if (ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        navigateHealthTimeline('next');
+      } else if (ev.key === 't' || ev.key === 'T') {
+        ev.preventDefault();
+        navigateHealthTimeline('today');
+      }
+    });
+  }
+
   function renderHealthControlBar() {
     const healthTab = document.getElementById('tab-health');
     if (!healthTab || typeof ui === 'undefined') return;
     injectStyles();
+    wireHealthArrowShortcuts();
     const db = getDb();
     let bar = document.getElementById('ppHealthCtrlBar');
     if (!bar) {
@@ -284,6 +334,11 @@
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px">Synced with Roadmap:</strong>
+        <div class="pp-health-btn-grp" role="group" aria-label="Timeframe navigation">
+          <button type="button" class="pp-health-seg" data-pp-nav="prev" aria-label="Previous period" title="Previous period (Left Arrow)">&larr;</button>
+          <button type="button" class="pp-health-seg" data-pp-nav="today" aria-label="Jump to today" title="Jump to today (T)">Today</button>
+          <button type="button" class="pp-health-seg" data-pp-nav="next" aria-label="Next period" title="Next period (Right Arrow)">&rarr;</button>
+        </div>
         <div class="pp-health-btn-grp" role="group" aria-label="Time unit">
           <button type="button" class="pp-health-seg ${ui.timeUnit === 'month' ? 'active' : ''}" data-pp-tu="month">Months</button>
           <button type="button" class="pp-health-seg ${ui.timeUnit === 'week' ? 'active' : ''}" data-pp-tu="week">Weeks</button>
@@ -302,6 +357,10 @@
           </select>
         </label>
       </div>`;
+
+    bar.querySelectorAll('[data-pp-nav]').forEach(btn => {
+      btn.addEventListener('click', () => navigateHealthTimeline(btn.getAttribute('data-pp-nav')));
+    });
 
     bar.querySelectorAll('[data-pp-tu]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -475,6 +534,7 @@
   if (typeof document.addEventListener === 'function') {
     document.addEventListener('DOMContentLoaded', () => {
       applyEuplLicenceBranding();
+      wireHealthArrowShortcuts();
       setTimeout(applyEuplLicenceBranding, 0);
       setTimeout(applyEuplLicenceBranding, 300);
     });
