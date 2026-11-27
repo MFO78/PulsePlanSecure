@@ -2,7 +2,7 @@
  * 1. Sortable Setup & Data tables (live column index, dates, currency/units, priority, select inputs)
  * 2. Exclude Admin (nonFte) projects from Project Portfolio & Effort Summary
  * 3. Log Notes in ChangeLog + Show/Hide Notes toggle in Evolution & Snapshot Comparison
- * 4. Bidirectional Weeks/Months, Horizon, Project & Prev/Today/Next controls + Arrow shortcuts in Health & Evolution tab
+ * 4. Bidirectional Weeks/Months, Horizon, Project, Period Span & Prev/Today/Next controls + Arrow shortcuts in Health & Evolution tab
  * 5. Password-gated Clear DB + "Clear Plan (Keep Setup & Data)" button in Sync & Snapshots
  * 6. EUPL-1.2 User Licence badge & dialog alignment
  */
@@ -44,6 +44,7 @@
       .pp-health-seg:hover { background: var(--surface-subtle, #f1f5f9); }
       .pp-health-seg.active { background: #4f46e5; color: #ffffff; }
       .pp-health-sel { padding: .3rem .55rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-subtle, #f8fafc); color: var(--text-primary, #0f172a); font-size: 11.5px; font-weight: 700; max-width: 100%; }
+      .pp-health-span-pill { padding: .28rem .6rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); color: var(--text-secondary, #475569); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
       .pp-notes-diff-card { margin-top: .75rem; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: .85rem; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); padding: .85rem; font-size: 12px; }
       .pp-notes-diff-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--border-subtle, #e2e8f0); }
       @media (max-width: 639px) { .pp-notes-diff-row { grid-template-columns: 1fr; } }
@@ -257,7 +258,7 @@
     container.appendChild(card);
   }
 
-  /* ---------- 4. Bidirectional Weeks/Months, Horizon, Project & Prev/Today/Next Bar in Health & Evolution ---------- */
+  /* ---------- 4. Bidirectional Weeks/Months, Horizon, Project, Period Span & Prev/Today/Next Bar in Health & Evolution ---------- */
   function navigateHealthTimeline(action) {
     if (action === 'prev') {
       if (typeof shiftTimeline === 'function') return shiftTimeline(-1);
@@ -306,6 +307,16 @@
     });
   }
 
+  function getVisiblePeriodSpanText() {
+    const periods = typeof getVisiblePeriods === 'function' ? getVisiblePeriods() : [];
+    if (!Array.isArray(periods) || periods.length === 0) return '';
+    const tu = (typeof ui !== 'undefined' && ui.timeUnit) || 'month';
+    const fmt = (pk) => (typeof formatPeriodHeader === 'function' ? formatPeriodHeader(pk, tu).title : pk);
+    const first = fmt(periods[0]);
+    const last = fmt(periods[periods.length - 1]);
+    return periods.length === 1 ? `Showing ${first}` : `Showing ${first} – ${last}`;
+  }
+
   function renderHealthControlBar() {
     const healthTab = document.getElementById('tab-health');
     if (!healthTab || typeof ui === 'undefined') return;
@@ -330,6 +341,7 @@
     const fmtProj = (p) => (typeof formatProjectOptionLabel === 'function'
       ? formatProjectOptionLabel(p)
       : (p.code ? `[${p.code}] ${p.name}` : p.name));
+    const spanText = getVisiblePeriodSpanText();
 
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;width:100%">
@@ -349,6 +361,7 @@
             ${horizons.map(h => `<option value="${h}" ${h === curHorizon ? 'selected' : ''}>${h} ${ui.timeUnit === 'week' ? 'weeks' : 'months'}</option>`).join('')}
           </select>
         </label>
+        ${spanText ? `<span id="ppHealthPeriodSpan" class="pp-health-span-pill" aria-live="polite">${esc(spanText)}</span>` : ''}
         <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:600">
           <span>Project:</span>
           <select id="ppHealthProjectSel" class="pp-health-sel" aria-label="Filter Health and Evolution by project">
