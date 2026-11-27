@@ -1,7 +1,8 @@
 /* ============================================================================
  * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS (LABOUR + PBS MATERIALS +
  *     EXTERNAL CONSULTANTS), PBS UNIT COST UI ENHANCER, CAPACITY RESET FIX,
- *     USER DEFAULT ROADMAP VIEW AFTER LOGIN, LIFECYCLE HOOK BUS & A11Y
+ *     ROADMAP DEFAULT TO TODAY + PER-USER DEFAULT DEPT ROADMAP VIEW,
+ *     NORMALIZATION PRESERVATION, LIFECYCLE HOOK BUS & A11Y
  * ============================================================================ */
 (function ppHealthBurnAndFixesModule() {
   if (typeof globalThis === 'undefined') return;
@@ -58,6 +59,56 @@
     return db.externalCosts;
   }
 
+  /* Preserve externalCosts & user.defaultDeptRoadmapView across normalizeAndMigrateDB() */
+  if (typeof normalizeAndMigrateDB === 'function') {
+    const origNormalize = normalizeAndMigrateDB;
+    normalizeAndMigrateDB = function (rawInput, ...rest) {
+      const result = origNormalize.call(this, rawInput, ...rest);
+      if (!result || typeof result !== 'object' || !rawInput || typeof rawInput !== 'object') return result;
+
+      const src = (rawInput.departments || rawInput.projects)
+        ? rawInput
+        : (rawInput.data && (rawInput.data.departments || rawInput.data.projects))
+          ? rawInput.data
+          : (rawInput.db && (rawInput.db.departments || rawInput.db.projects))
+            ? rawInput.db
+            : (rawInput.liveDB && (rawInput.liveDB.departments || rawInput.liveDB.projects))
+              ? rawInput.liveDB
+              : rawInput;
+
+      const rawExt = Array.isArray(src.externalCosts)
+        ? src.externalCosts
+        : (src.settings && Array.isArray(src.settings.externalCosts) ? src.settings.externalCosts : []);
+      const cleanExt = rawExt
+        .filter(c => c && typeof c === 'object' && c.projectId && c.label && Number.isFinite(Number(c.amount)) && Number(c.amount) > 0)
+        .map(c => ({
+          id: String(c.id || `ext_${Date.now().toString(36)}`),
+          projectId: String(c.projectId),
+          label: String(c.label).trim().slice(0, 120),
+          amount: Math.round(Number(c.amount) * 100) / 100,
+          period: String(c.period || '').trim(),
+        }));
+      result.externalCosts = cleanExt;
+      if (!result.settings || typeof result.settings !== 'object') result.settings = {};
+      result.settings.externalCosts = cleanExt;
+
+      const rawUsers = src.accessControl && Array.isArray(src.accessControl.users) ? src.accessControl.users : [];
+      const resUsers = result.accessControl && Array.isArray(result.accessControl.users) ? result.accessControl.users : [];
+      if (rawUsers.length && resUsers.length) {
+        const flagById = new Map();
+        rawUsers.forEach(ru => {
+          if (ru && ru.id) flagById.set(String(ru.id), Boolean(ru.defaultDeptRoadmapView));
+        });
+        resUsers.forEach(u => {
+          if (u && u.id && flagById.has(String(u.id))) {
+            u.defaultDeptRoadmapView = flagById.get(String(u.id));
+          }
+        });
+      }
+      return result;
+    };
+  }
+
   function esc(str) {
     if (typeof escapeHtml === 'function') return escapeHtml(String(str ?? ''));
     return String(str ?? '')
@@ -70,7 +121,7 @@
 
   function fmtMoney(val, db) {
     if (typeof formatCurrency === 'function') return formatCurrency(val, db);
-    const sym = (db && db.settings && db.settings.currencySymbol) || '€';
+    const sym = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
     return `${sym}${Math.round(Number(val) || 0).toLocaleString('en-GB')}`;
   }
 
@@ -141,7 +192,7 @@
     const initialVal = existingItem && existingItem.unitCost != null ? String(existingItem.unitCost) : '';
 
     const db = getDb();
-    const sym = (db && db.settings && db.settings.currencySymbol) || '€';
+    const sym = (db && db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€';
 
     const wrap = document.createElement('label');
     wrap.className = 'block';
@@ -175,19 +226,27 @@
     }
   }
 
-  function wirePbsDialogObserver() {
+  function wireDomObserver() {
     if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || document.__ppPbsUnitCostObserver) return;
     document.__ppPbsUnitCostObserver = new MutationObserver(() => {
       if (document.getElementById('ppPbsItemForm')) enhancePbsProcurementUnitCostForm();
-      if (document.getElementById('ppAdminAccessCard')) renderUserDefaultViewSetupPanel();
+      if (document.querySelector('[data-pp-user-row]')) injectUserDefaultViewCheckboxes();
     });
     if (document.body) {
       document.__ppPbsUnitCostObserver.observe(document.body, { childList: true, subtree: true });
     }
   }
 
-  /* ---------- User Setup: Default Login View (Roadmap · 2 Weeks · Department) ---------- */
-  let _lastAppliedLoginUserId = null;
+  /* ---------- Roadmap Default to Today (General) + Per-User Default Dept Roadmap View ---------- */
+  let _initialTodayApplied = false;
+  let _lastAppliedSessionKey = null;
+
+  function resetRoadmapToTodaySilently() {
+    if (typeof ui === 'undefined') return;
+    if (typeof getCurrentMonthKey === 'function') ui.startMonth = getCurrentMonthKey();
+    if (typeof getCurrentWeekKey === 'function') ui.startWeek = getCurrentWeekKey();
+    ui.mobileSelectedPeriod = ui.timeUnit === 'month' ? ui.startMonth : ui.startWeek;
+  }
 
   function userHasRoadmapAccess(u) {
     if (!u) return false;
@@ -197,135 +256,143 @@
     return tabs.matrix !== false;
   }
 
-  function applyDefaultUserLoginViewIfConfigured() {
-    if (typeof ppGetAuthSession !== 'function' || typeof ui === 'undefined') return;
+  /* Resolve the user's department from existing DB data (Departments.manager match, then roleTitle match) */
+  function resolveUserDepartment(user, db) {
+    if (!user || !db || !Array.isArray(db.departments)) return null;
+    const depts = db.departments.filter(Boolean);
+    if (!depts.length) return null;
+
+    const uName = String(user.name || '').trim().toLowerCase();
+    if (uName) {
+      const byExactMgr = depts.find(d => String(d.manager || '').trim().toLowerCase() === uName);
+      if (byExactMgr) return byExactMgr;
+      const byListedMgr = depts.find(d => {
+        const parts = String(d.manager || '').toLowerCase().split(/[,/&;]+/).map(s => s.trim()).filter(Boolean);
+        return parts.includes(uName);
+      });
+      if (byListedMgr) return byListedMgr;
+    }
+
+    const uRole = String(user.roleTitle || '').trim().toLowerCase();
+    if (uRole) {
+      const byName = depts.find(d => String(d.name || '').trim().toLowerCase() === uRole);
+      if (byName) return byName;
+      const byCode = depts.find(d => {
+        const c = String(d.code || '').trim().toLowerCase();
+        return c && (uRole === c || new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(uRole));
+      });
+      if (byCode) return byCode;
+      const byContains = depts.find(d => {
+        const dn = String(d.name || '').trim().toLowerCase();
+        return dn && uRole.includes(dn);
+      });
+      if (byContains) return byContains;
+    }
+    return null;
+  }
+
+  function applySessionStartupAndDefaultView() {
+    if (typeof ui === 'undefined') return;
+
+    // 1. Default Roadmap to Today on initial app startup (in general, regardless of checkbox)
+    if (!_initialTodayApplied) {
+      _initialTodayApplied = true;
+      resetRoadmapToTodaySilently();
+    }
+
+    if (typeof ppGetAuthSession !== 'function') return;
     const session = ppGetAuthSession();
-    if (!session || session.mode !== 'user' || !session.userId) {
-      _lastAppliedLoginUserId = null;
+    if (!session || session.mode === 'locked') {
+      _lastAppliedSessionKey = null;
       return;
     }
-    if (_lastAppliedLoginUserId === session.userId) return;
-    _lastAppliedLoginUserId = session.userId;
 
-    const db = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
-    const users = db && db.accessControl && Array.isArray(db.accessControl.users) ? db.accessControl.users : [];
-    const userRec = users.find(u => u && u.id === session.userId);
-    if (!userRec || !userRec.defaultDeptRoadmapView) return;
-    if (!userHasRoadmapAccess(userRec)) return;
+    const sessionKey = `${session.mode}:${session.userId || ''}`;
+    if (_lastAppliedSessionKey === sessionKey) return;
+    _lastAppliedSessionKey = sessionKey;
 
-    const deptId = String(userRec.departmentId || userRec.deptId || '').trim();
-    const validDept = deptId && (db.departments || []).some(d => d && d.id === deptId) ? deptId : 'all';
+    // 2. Always default Roadmap to Today upon sign-in (Admin or User)
+    resetRoadmapToTodaySilently();
 
-    ui.activeTab = 'matrix';
-    ui.timeUnit = 'week';
-    ui.horizon = 2;
-    if ('weekHorizon' in ui) ui.weekHorizon = 2;
-    ui.viewMode = 'dept';
-    ui.filterDept = validDept;
+    // 3. If named user has the Default Dept Roadmap View enabled & has Roadmap access, apply it
+    if (session.mode === 'user' && session.userId) {
+      const db = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
+      const users = db && db.accessControl && Array.isArray(db.accessControl.users) ? db.accessControl.users : [];
+      const userRec = users.find(u => u && u.id === session.userId);
+      if (userRec && userRec.defaultDeptRoadmapView && userHasRoadmapAccess(userRec)) {
+        const matchedDept = resolveUserDepartment(userRec, db);
+        ui.activeTab = 'matrix';
+        ui.timeUnit = 'week';
+        ui.horizon = 2;
+        ui.axis = 'department';
+        ui.filterDept = matchedDept ? matchedDept.id : 'all';
+        resetRoadmapToTodaySilently();
+      }
+    }
+
     if (typeof persistUIPrefs === 'function') persistUIPrefs();
     setTimeout(() => {
       if (typeof renderAll === 'function') renderAll();
     }, 0);
   }
 
-  function renderUserDefaultViewSetupPanel() {
+  /* Inject the per-user checkbox directly inside each .pp-user-card (both Setup & Data and Team Users modal) */
+  function injectUserDefaultViewCheckboxes() {
     if (typeof document === 'undefined') return;
-    const card = document.getElementById('ppAdminAccessCard');
-    if (!card) return;
     if (typeof ppHasAdminAccess === 'function' && !ppHasAdminAccess()) return;
-
     const db = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
     const users = db && db.accessControl && Array.isArray(db.accessControl.users) ? db.accessControl.users : [];
-    const depts = Array.isArray(db && db.departments) ? db.departments : [];
+    if (!users.length) return;
 
-    let panel = document.getElementById('ppUserDefaultViewPanel');
-    if (!panel) {
-      panel = document.createElement('section');
-      panel.id = 'ppUserDefaultViewPanel';
-      panel.setAttribute('aria-label', 'Default User Login View');
-      panel.className = 'mt-4 pt-4 border-t border-slate-200 space-y-2';
-      card.appendChild(panel);
-    }
-
-    if (users.length === 0) {
-      panel.innerHTML = '';
-      return;
-    }
-
-    const rowsHtml = users.map(u => {
+    document.querySelectorAll('article.pp-user-card[data-pp-user-row]').forEach(card => {
+      const uidVal = card.getAttribute('data-pp-user-row');
+      const u = users.find(x => x && x.id === uidVal);
+      if (!u) return;
       const hasRoadmap = userHasRoadmapAccess(u);
+      const isDisabled = u.enabled === false;
+      const canToggle = hasRoadmap && !isDisabled;
       const checked = hasRoadmap && Boolean(u.defaultDeptRoadmapView);
-      const deptVal = String(u.departmentId || u.deptId || '');
-      return `
-        <tr class="border-b border-slate-100">
-          <td class="px-2.5 py-2 font-semibold text-slate-800 whitespace-nowrap">${esc(u.name || u.id)}</td>
-          <td class="px-2.5 py-2">
-            <select data-pp-udv-dept="${esc(u.id)}" aria-label="Department for ${esc(u.name || u.id)}" class="px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs max-w-[200px]">
-              <option value="">-- Select Department --</option>
-              ${depts.map(d => `<option value="${esc(d.id)}" ${d.id === deptVal ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
-            </select>
-          </td>
-          <td class="px-2.5 py-2">
-            <label class="inline-flex items-center gap-2 text-xs ${hasRoadmap ? 'text-slate-700 cursor-pointer' : 'text-slate-400 cursor-not-allowed'}">
-              <input type="checkbox" data-pp-udv-cb="${esc(u.id)}" ${checked ? 'checked' : ''} ${hasRoadmap ? '' : 'disabled'} class="w-4 h-4 rounded accent-indigo-600" />
-              <span>Default to Roadmap · 2 Weeks · Department View</span>
-            </label>
-            ${!hasRoadmap ? '<div class="text-[10px] text-amber-600 mt-0.5">Enable Roadmap access to use this default view.</div>' : ''}
-          </td>
-        </tr>`;
-    }).join('');
+      const dept = resolveUserDepartment(u, db);
+      const deptHint = dept
+        ? `Department: ${dept.name}`
+        : 'No department matched (set user as Manager in Setup → Departments)';
 
-    const sig = JSON.stringify(users.map(u => [u.id, u.name, u.isAdmin, u.permissions?.tabs?.matrix, u.departmentId || u.deptId || '', Boolean(u.defaultDeptRoadmapView)])) + '|' + depts.map(d => d.id).join(',');
-    if (panel.getAttribute('data-pp-sig') === sig) return;
-    panel.setAttribute('data-pp-sig', sig);
+      const sig = `${hasRoadmap}|${isDisabled}|${checked}|${dept ? dept.id : ''}`;
+      let wrap = card.querySelector('.pp-user-default-view-row');
+      if (wrap && wrap.getAttribute('data-pp-sig') === sig) return;
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'pp-user-default-view-row pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2';
+        card.appendChild(wrap);
+      }
+      wrap.setAttribute('data-pp-sig', sig);
+      wrap.innerHTML = `
+        <label class="inline-flex items-center gap-2 text-[11.5px] font-semibold ${canToggle ? 'text-slate-700 cursor-pointer' : 'text-slate-400 cursor-not-allowed'}">
+          <input type="checkbox" data-pp-udv-cb="${esc(u.id)}" ${checked ? 'checked' : ''} ${canToggle ? '' : 'disabled'}
+            class="w-4 h-4 rounded accent-indigo-600" />
+          <span>Default after login: Roadmap &middot; 2 weeks &middot; Department view (Today)</span>
+        </label>
+        <span class="text-[10.5px] ${!hasRoadmap ? 'text-amber-600 font-semibold' : (dept ? 'text-indigo-600 font-semibold' : 'text-slate-400')}">
+          ${!hasRoadmap ? 'Requires Roadmap access' : esc(deptHint)}
+        </span>`;
 
-    panel.innerHTML = `
-      <div>
-        <h4 class="text-xs font-extrabold text-slate-800">Default Login View (Roadmap &middot; 2 Weeks &middot; User Department)</h4>
-        <p class="text-[11px] text-slate-500 mt-0.5">When enabled, the user lands on <strong>Roadmap &rarr; Weeks &rarr; 2 periods &rarr; Department view</strong> filtered to their assigned department after sign-in. Available only when the user has Roadmap access.</p>
-      </div>
-      <div class="overflow-x-auto rounded-xl border border-slate-200">
-        <table class="w-full border-collapse text-xs">
-          <thead>
-            <tr class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
-              <th scope="col" class="px-2.5 py-1.5 text-left">User</th>
-              <th scope="col" class="px-2.5 py-1.5 text-left">User Department</th>
-              <th scope="col" class="px-2.5 py-1.5 text-left">Post-Login Default View</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>`;
-
-    const persistUserChange = (u, msg) => {
-      if (typeof recordChange === 'function') recordChange('Users', msg);
-      if (typeof touchDBAndSave === 'function') touchDBAndSave();
-      if (typeof showToast === 'function') showToast(msg, 'success');
-    };
-
-    panel.querySelectorAll('[data-pp-udv-dept]').forEach(sel => {
-      sel.addEventListener('change', () => {
-        const uidVal = sel.getAttribute('data-pp-udv-dept');
-        const u = users.find(x => x && x.id === uidVal);
-        if (!u) return;
-        u.departmentId = sel.value || '';
-        const dName = depts.find(d => d.id === u.departmentId)?.name || 'None';
-        persistUserChange(u, `Updated department for ${u.name} to ${dName}`);
-      });
-    });
-
-    panel.querySelectorAll('[data-pp-udv-cb]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const uidVal = cb.getAttribute('data-pp-udv-cb');
-        const u = users.find(x => x && x.id === uidVal);
-        if (!u) return;
-        if (!userHasRoadmapAccess(u)) {
+      const cb = wrap.querySelector('[data-pp-udv-cb]');
+      cb?.addEventListener('change', async () => {
+        if (!userHasRoadmapAccess(u) || u.enabled === false) {
           cb.checked = false;
           u.defaultDeptRoadmapView = false;
           return;
         }
         u.defaultDeptRoadmapView = Boolean(cb.checked);
-        persistUserChange(u, `${u.defaultDeptRoadmapView ? 'Enabled' : 'Disabled'} default 2-week Department Roadmap login view for ${u.name}`);
+        u.updatedAt = new Date().toISOString();
+        const msg = `${u.defaultDeptRoadmapView ? 'Enabled' : 'Disabled'} default 2-week Department Roadmap view on login for "${u.name}"`;
+        if (typeof recordChange === 'function') recordChange('Access', msg);
+        if (typeof touchDBAndSave === 'function') touchDBAndSave();
+        if (typeof linkedFileHandle !== 'undefined' && linkedFileHandle && typeof writeDBToLinkedFile === 'function') {
+          try { await writeDBToLinkedFile(); } catch (_e) {}
+        }
+        if (typeof showToast === 'function') showToast(msg, 'success');
+        injectUserDefaultViewCheckboxes();
       });
     });
   }
@@ -935,7 +1002,7 @@
             <input id="ppExtCostLabel" type="text" required maxlength="120" placeholder="e.g. EMC Lab Testing SOW" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs" />
           </label>
           <label class="block text-[11px] font-semibold text-slate-600">
-            <span>Amount (${esc((db.settings && db.settings.currencySymbol) || '€')})</span>
+            <span>Amount (${esc((db.settings && (db.settings.currency || db.settings.currencySymbol)) || '€')})</span>
             <input id="ppExtCostAmount" type="number" required min="0.01" step="0.01" placeholder="5000" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs" />
           </label>
           <div class="flex gap-1.5 items-end">
@@ -1015,9 +1082,9 @@
   ppHooks.on('afterRenderAll', () => {
     enhanceA11yLandmarksAndTabs();
     wireCustomModalFocusTrap();
-    wirePbsDialogObserver();
-    applyDefaultUserLoginViewIfConfigured();
-    renderUserDefaultViewSetupPanel();
+    wireDomObserver();
+    applySessionStartupAndDefaultView();
+    injectUserDefaultViewCheckboxes();
     if (typeof ui !== 'undefined' && ui.activeTab === 'health') {
       renderHealthBurnBudgetFrame();
     }
@@ -1047,8 +1114,8 @@
     const bootA11y = () => {
       enhanceA11yLandmarksAndTabs();
       wireCustomModalFocusTrap();
-      wirePbsDialogObserver();
-      renderUserDefaultViewSetupPanel();
+      wireDomObserver();
+      injectUserDefaultViewCheckboxes();
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', bootA11y);
@@ -1062,6 +1129,7 @@
     computePbsMaterialCost,
     computeBurnBudgetAnalysis,
     userHasRoadmapAccess,
+    resolveUserDepartment,
     ppHooks,
   };
 })();

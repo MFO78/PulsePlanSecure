@@ -259,26 +259,19 @@
   }
 
   /* ---------- 4. Bidirectional Weeks/Months, Horizon, Project, Period Span & Prev/Today/Next Bar in Health & Evolution ---------- */
-  function navigateHealthTimeline(action) {
+  function navigateHealthTimeline(action, shiftByHorizon = false) {
     if (action === 'prev') {
-      if (typeof shiftTimeline === 'function') return shiftTimeline(-1);
-      if (typeof shiftPeriods === 'function') return shiftPeriods(-1);
-      if (typeof moveStartPeriod === 'function') return moveStartPeriod(-1);
-      document.querySelector('#btnPrevPeriod, #prevPeriodBtn, [data-nav="prev"], [aria-label*="Previous" i]')?.click();
+      if (shiftByHorizon && typeof shiftStartByInterval === 'function') return shiftStartByInterval(-1);
+      if (typeof shiftStartPeriod === 'function') return shiftStartPeriod(-1);
       return;
     }
     if (action === 'next') {
-      if (typeof shiftTimeline === 'function') return shiftTimeline(1);
-      if (typeof shiftPeriods === 'function') return shiftPeriods(1);
-      if (typeof moveStartPeriod === 'function') return moveStartPeriod(1);
-      document.querySelector('#btnNextPeriod, #nextPeriodBtn, [data-nav="next"], [aria-label*="Next" i]')?.click();
+      if (shiftByHorizon && typeof shiftStartByInterval === 'function') return shiftStartByInterval(1);
+      if (typeof shiftStartPeriod === 'function') return shiftStartPeriod(1);
       return;
     }
     if (action === 'today') {
       if (typeof jumpToToday === 'function') return jumpToToday();
-      if (typeof goToToday === 'function') return goToToday();
-      if (typeof resetToToday === 'function') return resetToToday();
-      document.querySelector('#btnToday, #todayBtn, [data-nav="today"], [aria-label*="Today" i]')?.click();
     }
   }
 
@@ -286,6 +279,7 @@
     if (document.__ppHealthArrowShortcutsWired || typeof document.addEventListener !== 'function') return;
     document.__ppHealthArrowShortcutsWired = true;
     document.addEventListener('keydown', (ev) => {
+      if (typeof ppIsSessionLocked === 'function' && ppIsSessionLocked()) return;
       if (typeof ui === 'undefined' || ui.activeTab !== 'health') return;
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       const t = ev.target;
@@ -296,10 +290,10 @@
 
       if (ev.key === 'ArrowLeft') {
         ev.preventDefault();
-        navigateHealthTimeline('prev');
+        navigateHealthTimeline('prev', ev.shiftKey);
       } else if (ev.key === 'ArrowRight') {
         ev.preventDefault();
-        navigateHealthTimeline('next');
+        navigateHealthTimeline('next', ev.shiftKey);
       } else if (ev.key === 't' || ev.key === 'T') {
         ev.preventDefault();
         navigateHealthTimeline('today');
@@ -372,7 +366,7 @@
       </div>`;
 
     bar.querySelectorAll('[data-pp-nav]').forEach(btn => {
-      btn.addEventListener('click', () => navigateHealthTimeline(btn.getAttribute('data-pp-nav')));
+      btn.addEventListener('click', (ev) => navigateHealthTimeline(btn.getAttribute('data-pp-nav'), ev.shiftKey));
     });
 
     bar.querySelectorAll('[data-pp-tu]').forEach(btn => {
@@ -392,8 +386,6 @@
         setHorizon(nextHor);
       } else {
         ui.horizon = nextHor;
-        if (ui.timeUnit === 'week' && 'weekHorizon' in ui) ui.weekHorizon = nextHor;
-        if (ui.timeUnit === 'month' && 'monthHorizon' in ui) ui.monthHorizon = nextHor;
         if (typeof renderAll === 'function') renderAll();
       }
     });
