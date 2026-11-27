@@ -3,21 +3,46 @@
      *     - Header Security Shield Status Badge (desktop/tablet to prevent mobile overlap)
      *     - Interactive Critical Path SVG Diagram
      *     - iCalendar (.ics) Milestone Export
-     *     - In-App Changelog ("What's New") in User Manual
+     *     - In-App Changelog ("What's New") & External Costs Guide in User Manual
      * ============================================================================ */
 
     if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
       MANUAL_SECTIONS.push({
+        id: 'external-costs',
+        title: 'External Consultants & PBS Material Costs',
+        badge: 'Finance',
+        keywords: 'external consultants sow fixed price invoice retainer non-labour budget burn analysis pbs procurement unit cost raw material component qty',
+        bodyHtml: `
+          <div class="space-y-3">
+            <div class="p-3 rounded-xl bg-teal-50/70 border border-teal-200 space-y-1.5">
+              <div class="font-bold text-teal-950">Capturing External / Consultant Expenditure (No &euro;/Day Rate)</div>
+              <p class="text-slate-700 leading-relaxed">External consultants, labs, and subcontractors are often billed by fixed-price SOW, milestone deliverable, or lump-sum invoice rather than internal FTE &times; &euro;/day. Recording them as a regular department would distort headcount and capacity charts.</p>
+              <ol class="list-decimal pl-5 space-y-1 text-slate-700 leading-relaxed">
+                <li>Open <strong>Health &amp; Evolution</strong> and scroll to <strong>Burn &amp; Budget Analysis</strong>.</li>
+                <li>Use the <strong>External / Consultant Costs</strong> form at the bottom of the card to select the <strong>Project</strong>, enter a <strong>Consultant / SOW Description</strong> and <strong>Amount</strong>, and optionally assign a specific <strong>Period</strong> (or leave as <em>Project-wide</em>).</li>
+                <li>Click <strong>Add</strong>. The cost is saved in the encrypted database and immediately included in <strong>Total Planned</strong>, <strong>Remaining / Over Budget</strong>, <strong>Spending Split by Department &amp; Non-Labour</strong>, and (when a period is set) <strong>Spending Split by Period</strong>.</li>
+                <li>Click <strong>Remove</strong> on any row to delete an entry; all additions and removals are recorded in the Change Log.</li>
+              </ol>
+            </div>
+            <div class="p-3 rounded-xl bg-amber-50/70 border border-amber-200 space-y-1.5">
+              <div class="font-bold text-amber-950">PBS Procurement Component &amp; Raw Material Unit Cost</div>
+              <p class="text-slate-700 leading-relaxed">To include hardware, components, or raw materials in project burn and budget tracking, open a project&rsquo;s <strong>PBS</strong> dialog, expand the <strong>Procurement</strong> section on any item, and enter its <strong>Unit Cost</strong>. PulsePlanSecure multiplies <code class="px-1 rounded bg-white font-mono">Unit Cost &times; Qty</code> (defaulting to <code class="px-1 rounded bg-white font-mono">&times; 1</code>) and rolls the total into <strong>Burn &amp; Budget Analysis</strong> under <strong>PBS Materials</strong>. The field is also supported in PBS CSV import/export and conflict diffs.</p>
+            </div>
+          </div>`,
+      });
+
+      MANUAL_SECTIONS.push({
         id: 'whatsnew',
         title: "What's New in PulsePlanSecure v9.0-secure",
         badge: "What's New",
-        keywords: 'changelog release notes whats new v9 v9.0 secure rbac users admin delegated login dropdown password change sign out lock wipe connection lost finance vault auto open sync pbs expand fullscreen pdf field selector delete confirmation bullets mobile sri encryption critical path leveling ics calendar ms project xml directory health evolution project filter burn budget spending periods departments snapshot notes show hide variable capacity reset',
+        keywords: 'changelog release notes whats new v9 v9.0 secure rbac users admin delegated login dropdown password change sign out lock wipe connection lost finance vault auto open sync pbs expand fullscreen pdf field selector delete confirmation bullets mobile sri encryption critical path leveling ics calendar ms project xml directory health evolution project filter burn budget spending periods departments snapshot notes show hide variable capacity reset external consultants sow non-labour procurement unit cost material default 1 fte',
         bodyHtml: `
           <div class="space-y-3">
             <div class="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1.5">
               <div class="font-bold text-indigo-950">v9.0-secure Highlights</div>
               <ul class="space-y-1.5 text-slate-700 leading-relaxed">
-                <li>&bull; <strong>Health &amp; Evolution Project Filter &amp; Burn / Budget Analysis:</strong> Filter <strong>Health &amp; Evolution</strong> by a specific project (synced bidirectionally with the Roadmap view by default) and inspect the new <strong>Burn &amp; Budget Analysis</strong> frame featuring summary KPIs (Budget, Window Burn, Remaining/Over Budget, Average Burn per Period) plus spending breakdowns split by <strong>period</strong> and by <strong>department</strong>.</li>
+                <li>&bull; <strong>External / Consultant Costs, PBS Procurement Unit Cost &amp; Default 1 FTE:</strong> Track fixed-fee SOWs and external consultant invoices directly inside <strong>Health &amp; Evolution &rarr; Burn &amp; Budget Analysis</strong> (per project, with optional period attribution) without distorting internal FTE capacity. Enter component or raw-material <strong>Unit Cost</strong> in the <strong>PBS &rarr; Procurement</strong> section (automatically multiplied by <em>Qty</em> and supported in CSV import/export) to roll <strong>PBS Materials</strong> into Burn &amp; Budget Analysis. Adding a new Roadmap activity now defaults to <strong>1 FTE</strong> and preserves your FTE value when other modal fields change.</li>
+                <li>&bull; <strong>Health &amp; Evolution Project Filter &amp; Burn / Budget Analysis:</strong> Filter <strong>Health &amp; Evolution</strong> by a specific project (synced bidirectionally with the Roadmap view by default) and inspect the new <strong>Burn &amp; Budget Analysis</strong> frame featuring summary KPIs (Budget, Window Burn, Remaining/Over Budget, Average Burn per Period) plus spending breakdowns split by <strong>period</strong> and by <strong>department &amp; non-labour</strong>.</li>
                 <li>&bull; <strong>Evolution &amp; Snapshot Comparison Notes Toggle &amp; Variable Capacity Reset Fix:</strong> Toggle <strong>Show Notes / Hide Notes</strong> in <strong>Evolution &amp; Snapshot Comparison</strong> (with a dedicated Hide button and active project/department filtering), and rely on cleaner <strong>Variable Capacity</strong> resets that automatically prune nominal-capacity overrides so the last item never remains stuck.</li>
                 <li>&bull; <strong>Multi-User Access Control, Dropdown Sign-In &amp; Delegated Admin Rights:</strong> Provision team accounts with per-tab visibility (<em>Roadmap</em>, <em>Team Health</em>, <em>Setup &amp; Data</em>, <em>Sync &amp; Snapshots</em>), optional <strong>Finance Access</strong>, and delegated <strong>Administrator</strong> privileges. Pick users from a dropdown on the login screen, let team members set personal passwords, and let the Main Administrator rotate the master password or edit, reset, and disable accounts with immediate live revocation and automatic sync to disk.</li>
                 <li>&bull; <strong>Full-Hide Sign-Out &amp; Connection-Loss Data Protection:</strong> Signing out clears all workspace data from memory and browser storage behind a full-screen lock gate while remembering your linked file for one-click reconnect. If a linked database connection is lost, local data is cleared automatically until the password is re-entered.</li>
