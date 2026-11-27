@@ -1,7 +1,7 @@
 /* ============================================================================
  * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS (LABOUR + PBS MATERIALS +
  *     EXTERNAL CONSULTANTS), PBS UNIT COST UI ENHANCER, CAPACITY RESET FIX,
- *     LIFECYCLE HOOK BUS & ACCESSIBILITY / DARK-MODE ENHANCEMENTS
+ *     USER DEFAULT ROADMAP VIEW AFTER LOGIN, LIFECYCLE HOOK BUS & A11Y
  * ============================================================================ */
 (function ppHealthBurnAndFixesModule() {
   if (typeof globalThis === 'undefined') return;
@@ -179,10 +179,155 @@
     if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || document.__ppPbsUnitCostObserver) return;
     document.__ppPbsUnitCostObserver = new MutationObserver(() => {
       if (document.getElementById('ppPbsItemForm')) enhancePbsProcurementUnitCostForm();
+      if (document.getElementById('ppAdminAccessCard')) renderUserDefaultViewSetupPanel();
     });
     if (document.body) {
       document.__ppPbsUnitCostObserver.observe(document.body, { childList: true, subtree: true });
     }
+  }
+
+  /* ---------- User Setup: Default Login View (Roadmap · 2 Weeks · Department) ---------- */
+  let _lastAppliedLoginUserId = null;
+
+  function userHasRoadmapAccess(u) {
+    if (!u) return false;
+    if (u.isAdmin) return true;
+    const tabs = u.permissions && u.permissions.tabs;
+    if (!tabs || typeof tabs !== 'object') return true;
+    return tabs.matrix !== false;
+  }
+
+  function applyDefaultUserLoginViewIfConfigured() {
+    if (typeof ppGetAuthSession !== 'function' || typeof ui === 'undefined') return;
+    const session = ppGetAuthSession();
+    if (!session || session.mode !== 'user' || !session.userId) {
+      _lastAppliedLoginUserId = null;
+      return;
+    }
+    if (_lastAppliedLoginUserId === session.userId) return;
+    _lastAppliedLoginUserId = session.userId;
+
+    const db = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
+    const users = db && db.accessControl && Array.isArray(db.accessControl.users) ? db.accessControl.users : [];
+    const userRec = users.find(u => u && u.id === session.userId);
+    if (!userRec || !userRec.defaultDeptRoadmapView) return;
+    if (!userHasRoadmapAccess(userRec)) return;
+
+    const deptId = String(userRec.departmentId || userRec.deptId || '').trim();
+    const validDept = deptId && (db.departments || []).some(d => d && d.id === deptId) ? deptId : 'all';
+
+    ui.activeTab = 'matrix';
+    ui.timeUnit = 'week';
+    ui.horizon = 2;
+    if ('weekHorizon' in ui) ui.weekHorizon = 2;
+    ui.viewMode = 'dept';
+    ui.filterDept = validDept;
+    if (typeof persistUIPrefs === 'function') persistUIPrefs();
+    setTimeout(() => {
+      if (typeof renderAll === 'function') renderAll();
+    }, 0);
+  }
+
+  function renderUserDefaultViewSetupPanel() {
+    if (typeof document === 'undefined') return;
+    const card = document.getElementById('ppAdminAccessCard');
+    if (!card) return;
+    if (typeof ppHasAdminAccess === 'function' && !ppHasAdminAccess()) return;
+
+    const db = (typeof liveDB !== 'undefined' && liveDB) ? liveDB : getDb();
+    const users = db && db.accessControl && Array.isArray(db.accessControl.users) ? db.accessControl.users : [];
+    const depts = Array.isArray(db && db.departments) ? db.departments : [];
+
+    let panel = document.getElementById('ppUserDefaultViewPanel');
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'ppUserDefaultViewPanel';
+      panel.setAttribute('aria-label', 'Default User Login View');
+      panel.className = 'mt-4 pt-4 border-t border-slate-200 space-y-2';
+      card.appendChild(panel);
+    }
+
+    if (users.length === 0) {
+      panel.innerHTML = '';
+      return;
+    }
+
+    const rowsHtml = users.map(u => {
+      const hasRoadmap = userHasRoadmapAccess(u);
+      const checked = hasRoadmap && Boolean(u.defaultDeptRoadmapView);
+      const deptVal = String(u.departmentId || u.deptId || '');
+      return `
+        <tr class="border-b border-slate-100">
+          <td class="px-2.5 py-2 font-semibold text-slate-800 whitespace-nowrap">${esc(u.name || u.id)}</td>
+          <td class="px-2.5 py-2">
+            <select data-pp-udv-dept="${esc(u.id)}" aria-label="Department for ${esc(u.name || u.id)}" class="px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs max-w-[200px]">
+              <option value="">-- Select Department --</option>
+              ${depts.map(d => `<option value="${esc(d.id)}" ${d.id === deptVal ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}
+            </select>
+          </td>
+          <td class="px-2.5 py-2">
+            <label class="inline-flex items-center gap-2 text-xs ${hasRoadmap ? 'text-slate-700 cursor-pointer' : 'text-slate-400 cursor-not-allowed'}">
+              <input type="checkbox" data-pp-udv-cb="${esc(u.id)}" ${checked ? 'checked' : ''} ${hasRoadmap ? '' : 'disabled'} class="w-4 h-4 rounded accent-indigo-600" />
+              <span>Default to Roadmap · 2 Weeks · Department View</span>
+            </label>
+            ${!hasRoadmap ? '<div class="text-[10px] text-amber-600 mt-0.5">Enable Roadmap access to use this default view.</div>' : ''}
+          </td>
+        </tr>`;
+    }).join('');
+
+    const sig = JSON.stringify(users.map(u => [u.id, u.name, u.isAdmin, u.permissions?.tabs?.matrix, u.departmentId || u.deptId || '', Boolean(u.defaultDeptRoadmapView)])) + '|' + depts.map(d => d.id).join(',');
+    if (panel.getAttribute('data-pp-sig') === sig) return;
+    panel.setAttribute('data-pp-sig', sig);
+
+    panel.innerHTML = `
+      <div>
+        <h4 class="text-xs font-extrabold text-slate-800">Default Login View (Roadmap &middot; 2 Weeks &middot; User Department)</h4>
+        <p class="text-[11px] text-slate-500 mt-0.5">When enabled, the user lands on <strong>Roadmap &rarr; Weeks &rarr; 2 periods &rarr; Department view</strong> filtered to their assigned department after sign-in. Available only when the user has Roadmap access.</p>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-200">
+        <table class="w-full border-collapse text-xs">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
+              <th scope="col" class="px-2.5 py-1.5 text-left">User</th>
+              <th scope="col" class="px-2.5 py-1.5 text-left">User Department</th>
+              <th scope="col" class="px-2.5 py-1.5 text-left">Post-Login Default View</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`;
+
+    const persistUserChange = (u, msg) => {
+      if (typeof recordChange === 'function') recordChange('Users', msg);
+      if (typeof touchDBAndSave === 'function') touchDBAndSave();
+      if (typeof showToast === 'function') showToast(msg, 'success');
+    };
+
+    panel.querySelectorAll('[data-pp-udv-dept]').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const uidVal = sel.getAttribute('data-pp-udv-dept');
+        const u = users.find(x => x && x.id === uidVal);
+        if (!u) return;
+        u.departmentId = sel.value || '';
+        const dName = depts.find(d => d.id === u.departmentId)?.name || 'None';
+        persistUserChange(u, `Updated department for ${u.name} to ${dName}`);
+      });
+    });
+
+    panel.querySelectorAll('[data-pp-udv-cb]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const uidVal = cb.getAttribute('data-pp-udv-cb');
+        const u = users.find(x => x && x.id === uidVal);
+        if (!u) return;
+        if (!userHasRoadmapAccess(u)) {
+          cb.checked = false;
+          u.defaultDeptRoadmapView = false;
+          return;
+        }
+        u.defaultDeptRoadmapView = Boolean(cb.checked);
+        persistUserChange(u, `${u.defaultDeptRoadmapView ? 'Enabled' : 'Disabled'} default 2-week Department Roadmap login view for ${u.name}`);
+      });
+    });
   }
 
   function injectBurnAndA11yStyles() {
@@ -871,6 +1016,8 @@
     enhanceA11yLandmarksAndTabs();
     wireCustomModalFocusTrap();
     wirePbsDialogObserver();
+    applyDefaultUserLoginViewIfConfigured();
+    renderUserDefaultViewSetupPanel();
     if (typeof ui !== 'undefined' && ui.activeTab === 'health') {
       renderHealthBurnBudgetFrame();
     }
@@ -901,6 +1048,7 @@
       enhanceA11yLandmarksAndTabs();
       wireCustomModalFocusTrap();
       wirePbsDialogObserver();
+      renderUserDefaultViewSetupPanel();
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', bootA11y);
@@ -913,6 +1061,7 @@
     pruneNominalCapacityOverrides,
     computePbsMaterialCost,
     computeBurnBudgetAnalysis,
+    userHasRoadmapAccess,
     ppHooks,
   };
 })();
