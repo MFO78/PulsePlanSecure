@@ -118,7 +118,7 @@
     if (typeof document === 'undefined' || !document.querySelector) return;
 
     const nav = document.querySelector('header nav[role="tablist"]');
-    if (nav && !nav.__ppLandmarkFixed) {
+    if (nav && !nav.__ppLandmarkFixed && typeof nav.removeAttribute === 'function') {
       nav.__ppLandmarkFixed = true;
       nav.removeAttribute('role');
       const inner = document.createElement('div');
@@ -137,7 +137,7 @@
     };
     Object.entries(panelLabels).forEach(([id, label]) => {
       const el = document.getElementById(id);
-      if (el && !el.getAttribute('aria-label')) {
+      if (el && typeof el.getAttribute === 'function' && !el.getAttribute('aria-label')) {
         el.setAttribute('aria-label', label);
       }
     });
@@ -388,7 +388,7 @@
       frame.setAttribute('aria-labelledby', 'ppBurnBudgetHeading');
       frame.className = 'bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-xs space-y-4 mt-4';
       const kpisEl = document.getElementById('healthKpis');
-      if (kpisEl && kpisEl.parentElement) {
+      if (kpisEl && kpisEl.parentElement && typeof kpisEl.insertAdjacentElement === 'function') {
         kpisEl.insertAdjacentElement('afterend', frame);
       } else {
         healthTab.appendChild(frame);
@@ -401,6 +401,11 @@
     const scopeLabel = selectedProj
       ? `[${selectedProj.code || ''}] ${selectedProj.name}`
       : `All Active Projects (${data.activeProjs.length})`;
+    const sortedProjs = (typeof getSortedProjects === 'function' ? getSortedProjects(db) : (db.projects || []))
+      .filter(p => !p.archived || ui.filterProj === p.id);
+    const fmtProj = (p) => (typeof formatProjectOptionLabel === 'function'
+      ? formatProjectOptionLabel(p)
+      : (p.code ? `[${p.code}] ${p.name}` : p.name));
 
     const useCost = data.hasRates && (data.windowCost > 0 || data.totalBudgetCost > 0 || data.effectiveTotalCost > 0);
     const budgetPrimary = useCost ? data.totalBudgetCost : data.totalBudgetDays;
@@ -472,7 +477,16 @@
           <h2 id="ppBurnBudgetHeading" class="text-sm md:text-base font-extrabold text-slate-900">Burn &amp; Budget Analysis</h2>
           <p class="text-[11px] text-slate-500 mt-0.5">Scope: <strong class="text-slate-700">${esc(scopeLabel)}</strong> &middot; ${periods.length} ${ui.timeUnit || 'month'}${periods.length === 1 ? '' : 's'}</p>
         </div>
-        ${hasBudget ? `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold ${overBudget ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}">${pctUsed}% of budget planned</span>` : ''}
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="md:hidden inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-700">
+            <span>Project:</span>
+            <select id="ppMobileHealthProjectSel" class="px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 text-[11px] font-bold" aria-label="Filter Health and Evolution by project">
+              <option value="all" ${(!ui.filterProj || ui.filterProj === 'all') ? 'selected' : ''}>All Projects (${sortedProjs.length})</option>
+              ${sortedProjs.map(p => `<option value="${esc(p.id)}" ${ui.filterProj === p.id ? 'selected' : ''}>${esc(fmtProj(p))}</option>`).join('')}
+            </select>
+          </label>
+          ${hasBudget ? `<span class="px-2.5 py-1 rounded-full text-[11px] font-bold ${overBudget ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}">${pctUsed}% of budget planned</span>` : ''}
+        </div>
       </div>
 
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -556,6 +570,11 @@
         </div>
       </div>
     `;
+
+    frame.querySelector('#ppMobileHealthProjectSel')?.addEventListener('change', (ev) => {
+      ui.filterProj = ev.target.value || 'all';
+      if (typeof renderAll === 'function') renderAll();
+    });
   }
 
   ppHooks.on('afterRenderHealth', renderHealthBurnBudgetFrame);
