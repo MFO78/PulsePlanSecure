@@ -258,9 +258,7 @@
         finance: true,
       };
       if (typeof ui !== 'undefined') {
-        if (!ui.userName || ui.userName === 'Project Mgr' || ac.users.some(u => u.name === ui.userName)) {
-          ui.userName = adminLabel;
-        }
+        ui.userName = adminLabel;
         if (typeof persistUIPrefs === 'function') persistUIPrefs();
       }
     } else {
@@ -299,8 +297,14 @@
       ppApplyAuthenticatedSession('user', fresh);
       return { revoked: false };
     } else if (ppAuthSession.mode === 'admin') {
-      ppAuthSession.userName = ac.adminName || 'Administrator';
+      const adminLabel = String(ac.adminName || 'Administrator').trim() || 'Administrator';
+      ppAuthSession.userName = adminLabel;
+      if (typeof ui !== 'undefined' && ui.userName !== adminLabel) {
+        ui.userName = adminLabel;
+        if (typeof persistUIPrefs === 'function') persistUIPrefs();
+      }
       ppSyncAuthChromeUI();
+      ppRefreshSyncHubUI();
       return { revoked: false };
     } else if (getMasterKeyActive()) {
       ppApplyAuthenticatedSession('admin', null, ac.adminName);
@@ -643,6 +647,8 @@
       if (typeof ui !== 'undefined') {
         ui.whatIfMode = false;
         ui.demoMode = false;
+        ui.userName = '';
+        if (typeof persistUIPrefs === 'function') persistUIPrefs();
       }
       if (typeof lastSyncedSnapshot !== 'undefined') lastSyncedSnapshot = null;
       if (typeof pendingAutoReload !== 'undefined') pendingAutoReload = false;
@@ -778,7 +784,7 @@
       if (typeof updateFileSyncUI === 'function') updateFileSyncUI();
     }
 
-    ppApplyAuthenticatedSession(res.authRole, res.userRecord, envelope.auth?.adminName);
+    ppApplyAuthenticatedSession(res.authRole, res.userRecord, normalized.accessControl?.adminName || envelope.auth?.adminName);
     if (typeof updateSyncEncryptionBadges === 'function') updateSyncEncryptionBadges();
     if (typeof renderAll === 'function') renderAll();
 
@@ -1230,7 +1236,7 @@
         const badgeText = acct.isMainAdmin ? 'Main Admin' : (acct.isAdmin ? 'Admin' : 'Member');
         const badgeCls = acct.isAdmin ? 'pp-role-admin' : 'pp-role-user';
         previewEl.innerHTML = `
-          <span class="pp-auth-avatar ${acct.isAdmin ? 'pp-auth-avatar-admin' : ''}">${acct.isMainAdmin ? 'AD' : esc(getInitials(acct.name))}</span>
+          <span class="pp-auth-avatar ${acct.isAdmin ? 'pp-auth-avatar-admin' : ''}">${esc(getInitials(acct.name))}</span>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5 flex-wrap">
               <span class="text-xs font-extrabold truncate" style="color:var(--text-heading,#0f172a)">${esc(acct.name)}</span>
@@ -2569,7 +2575,7 @@
         <div class="w-10 h-1.5 rounded-full bg-slate-300 mx-auto sm:hidden" aria-hidden="true"></div>
         <div class="flex items-start justify-between gap-3 pp-modal-header-row">
           <div class="flex items-center gap-3 min-w-0">
-            <span class="pp-auth-avatar ${isAdmin ? 'pp-auth-avatar-admin' : ''}">${isMainAdmin ? 'AD' : esc(getInitials(activeName))}</span>
+            <span class="pp-auth-avatar ${isAdmin ? 'pp-auth-avatar-admin' : ''}">${esc(getInitials(activeName))}</span>
             <div class="min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
                 <h3 id="modalTitle" class="text-base font-extrabold text-slate-900 truncate">${esc(activeName)}</h3>
@@ -2644,6 +2650,18 @@
     const isMainAdmin = !ppIsNamedUser();
     const isSignedInProtected = getMasterKeyActive() || ppAuthSession.mode === 'admin' || ppAuthSession.mode === 'user';
     const activeUsersCount = ac.users.filter(u => u && u.enabled !== false).length;
+
+    const activeDisplayName = ppAuthSession.mode === 'locked'
+      ? 'Locked'
+      : ((ppAuthSession.mode === 'admin' || ppAuthSession.mode === 'user')
+          ? String(ppAuthSession.userName || (ppAuthSession.mode === 'admin' ? (ac.adminName || 'Administrator') : 'Team Member')).trim()
+          : String((typeof ui !== 'undefined' && ui.userName) || 'Project Mgr').trim());
+    const avatarEl = document.getElementById('headerUserAvatar');
+    const nameEl = document.getElementById('headerUserName');
+    const menuUserLbl = document.getElementById('headerMenuUserLabel');
+    if (avatarEl) avatarEl.textContent = ppAuthSession.mode === 'locked' ? '--' : getInitials(activeDisplayName);
+    if (nameEl) nameEl.textContent = activeDisplayName;
+    if (menuUserLbl) menuUserLbl.textContent = activeDisplayName;
 
     const roleBadge = document.getElementById('headerMenuRoleBadge');
     if (roleBadge) {

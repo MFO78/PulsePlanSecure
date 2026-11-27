@@ -965,6 +965,17 @@
                 }
               });
             }
+            if (curDb && typeof curDb === 'object') {
+              if (!curDb.accessControl || typeof curDb.accessControl !== 'object') {
+                curDb.accessControl = { version: 1, adminName: 'Administrator', users: [] };
+              }
+              const existingAdminName = String(curDb.accessControl.adminName || '').trim();
+              const hasConfiguredUsers = Array.isArray(curDb.accessControl.users) && curDb.accessControl.users.length > 0;
+              const curUiName = (typeof ui !== 'undefined' && ui && typeof ui.userName === 'string') ? ui.userName.trim() : '';
+              if (!prevPass && !hasConfiguredUsers && (!existingAdminName || existingAdminName === 'Administrator') && curUiName && curUiName !== 'Project Mgr' && curUiName !== 'Administrator') {
+                curDb.accessControl.adminName = curUiName;
+              }
+            }
             if (typeof ppApplyAuthenticatedSession === 'function') {
               ppApplyAuthenticatedSession('admin', null, curDb?.accessControl?.adminName);
             }

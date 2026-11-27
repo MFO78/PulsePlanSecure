@@ -3483,6 +3483,82 @@ test('PBS always shows PDF (Current View), protects expanded Restore/Close heade
   assert.equal(out.countAfterDelete, 0, 'Background pollOnce clears stale cache when a PBS file is deleted from the shared folder');
 });
 
+test('Administrator login always shows exact Administrator acronym/name (never stale previous user or hardcoded AD)', async () => {
+  const out = await vm.runInContext(`(async () => {
+    const auth = globalThis.__ppAuthRbacTestApi;
+    if (!auth) throw new Error('Missing auth test API');
+
+    const avatarEl = { textContent: '' };
+    const nameEl = { textContent: '' };
+    const origGetById = document.getElementById;
+    document.getElementById = (id) => {
+      if (id === 'headerUserAvatar') return avatarEl;
+      if (id === 'headerUserName') return nameEl;
+      return origGetById(id);
+    };
+
+    try {
+      // Scenario 1: Previous user ("Elena Rostova" / ER) still in ui.userName while liveDB is empty (pre-load encrypted file open)
+      liveDB = createEmptyDB();
+      ui.userName = 'Elena Rostova';
+      ppSyncPassphrase = 'AdminSecret#2026!';
+      auth.ppApplyAuthenticatedSession('admin', null, 'Marco Rossi');
+      const s1User = ui.userName;
+      const s1Avatar = avatarEl.textContent;
+      const s1Name = nameEl.textContent;
+
+      // Scenario 2: Encrypted file had no outer envelope.auth (adminNameOverride=undefined) -> temporarily 'Administrator' -> then liveDB loads with custom adminName 'Marco Rossi'
+      liveDB = createEmptyDB();
+      ui.userName = 'Deleted Teammate';
+      auth.ppApplyAuthenticatedSession('admin', null, undefined);
+      const s2BeforeLoad = ui.userName;
+      const loadedDb = createSampleDemoDB();
+      loadedDb.accessControl = { version: 1, adminName: 'Marco Rossi', users: [] };
+      liveDB = loadedDb;
+      auth.ppSyncAuthAfterDbLoad(liveDB);
+      const s2AfterLoadUser = ui.userName;
+      const s2AfterLoadAvatar = avatarEl.textContent;
+
+      // Scenario 3: Sign out clears stale ui.userName and scrubs header avatar
+      await auth.ppSignOutAndLockSession('manual', { skipFlush: true, skipEnvelope: true });
+      const s3UserAfterLogout = ui.userName;
+      const s3AvatarAfterLogout = avatarEl.textContent;
+
+      // Scenario 4: Re-login as default 'Administrator' -> shows 'AD' cleanly
+      liveDB = createSampleDemoDB();
+      liveDB.accessControl = { version: 1, adminName: 'Administrator', users: [] };
+      ppSyncPassphrase = 'AdminSecret#2026!';
+      auth.ppApplyAuthenticatedSession('admin', null, 'Administrator');
+      const s4User = ui.userName;
+      const s4Avatar = avatarEl.textContent;
+
+      // Cleanup back to open
+      ppSyncPassphrase = '';
+      auth.ppApplyAuthenticatedSession('open');
+
+      return {
+        s1User, s1Avatar, s1Name,
+        s2BeforeLoad, s2AfterLoadUser, s2AfterLoadAvatar,
+        s3UserAfterLogout, s3AvatarAfterLogout,
+        s4User, s4Avatar,
+      };
+    } finally {
+      document.getElementById = origGetById;
+    }
+  })()`, ctx);
+
+  assert.equal(out.s1User, 'Marco Rossi', 'Admin login unconditionally overwrites stale previous user name even before liveDB loads');
+  assert.equal(out.s1Avatar, 'MR', 'Header avatar immediately updates to Administrator initials (MR) instead of stale ER');
+  assert.equal(out.s1Name, 'Marco Rossi', 'Header name label immediately updates to Administrator display name');
+  assert.equal(out.s2BeforeLoad, 'Administrator', 'Deleted/stale user name is cleared even when outer envelope has no adminName');
+  assert.equal(out.s2AfterLoadUser, 'Marco Rossi', 'ppSyncAuthAfterDbLoad syncs ui.userName to decrypted DB accessControl.adminName');
+  assert.equal(out.s2AfterLoadAvatar, 'MR', 'Header avatar updates from AD to MR once decrypted DB adminName loads');
+  assert.equal(out.s3UserAfterLogout, '', 'Sign-out clears stale ui.userName so it cannot bleed into next login');
+  assert.equal(out.s3AvatarAfterLogout, '--', 'Sign-out scrubs header avatar while locked');
+  assert.equal(out.s4User, 'Administrator', 'Default Administrator login sets ui.userName to Administrator');
+  assert.equal(out.s4Avatar, 'AD', 'Default Administrator acronym renders as AD');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {
