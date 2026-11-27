@@ -4150,6 +4150,184 @@ test('PBS Pareto diagrams compute non-double-counting SWaP-C rollups, respect Fi
   assert.equal(out.nonFinPdfHasCostCheckbox, false, 'PDF panel hides Cost Pareto checkbox for non-finance users');
 });
 
+test('Weekly Allocation Tasks auto-rollover unchecked items with counter, render inline in Roadmap & 0-FTE cells, compute Say-Do, export, and 3-way merge', () => {
+  const prevGetById = sandbox.document.getElementById;
+  const elMap = new Map();
+  sandbox.document.getElementById = (id) => {
+    if (!elMap.has(id)) {
+      const el = makeStubEl();
+      el.id = id;
+      el.clientWidth = 1200;
+      el.scrollLeft = 0;
+      el.dataset = {};
+      el.options = [];
+      el.insertAdjacentHTML = noop;
+      elMap.set(id, el);
+    }
+    return elMap.get(id);
+  };
+  let out;
+  try {
+  out = vm.runInContext(`(() => {
+    const db = createSampleDemoDB();
+    const d1 = db.departments[0].id;
+    const p1 = db.projects[0].id;
+    const p2 = (db.projects[1] && db.projects[1].id) || p1;
+
+    // Seed tasks spanning past, year-boundary, done, dropped, and future weeks
+    db.allocationTasks = [
+      { id: 't_roll2', deptId: d1, projectId: p1, originWeek: '2026-W46', currentWeek: '2026-W46', text: 'Complete thermal test', done: false, rollCount: 0, dropped: false },
+      { id: 't_done', deptId: d1, projectId: p1, originWeek: '2026-W46', currentWeek: '2026-W46', text: 'Submit PDR slides', done: true, doneWeek: '2026-W46', rollCount: 0, dropped: false },
+      { id: 't_drop', deptId: d1, projectId: p1, originWeek: '2026-W46', currentWeek: '2026-W46', text: 'Legacy adapter check', done: false, rollCount: 0, dropped: true },
+      { id: 't_future', deptId: d1, projectId: p1, originWeek: '2026-W51', currentWeek: '2026-W51', text: 'Prepare CDR pack', done: false, rollCount: 0, dropped: false },
+      { id: 't_zerofte', deptId: d1, projectId: p2, originWeek: '2026-W47', currentWeek: '2026-W47', text: 'Resolve 0-FTE carry-over', done: false, rollCount: 0, dropped: false },
+    ];
+
+    // 1. Automatic rollover to 2026-W48 (must be idempotent on repeated calls)
+    const r1 = ppAutoRolloverAllocationTasks(db, '2026-W48');
+    const r2 = ppAutoRolloverAllocationTasks(db, '2026-W48');
+    const byId = Object.fromEntries(db.allocationTasks.map(t => [t.id, t]));
+
+    // 2. Year-boundary rollover checks: 2025 has 52 ISO weeks (2025-W52 -> 2026-W02 = +2), 2026 has 53 ISO weeks (2026-W52 -> 2027-W02 = +3)
+    const yrDelta52 = ppWeeksBetweenIsoWeeks('2025-W52', '2026-W02');
+    const yrDelta53 = ppWeeksBetweenIsoWeeks('2026-W52', '2027-W02');
+    const yrEff = ppGetEffectiveTaskState({ id: 't_yr', deptId: d1, projectId: p1, originWeek: '2026-W52', currentWeek: '2026-W52', text: 'Year rollover', done: false, rollCount: 0, dropped: false }, '2027-W02');
+
+    // 3. Rollover continues cleanly into 2026-W49 (+1 more -> rollCount 3)
+    const effW49 = ppGetEffectiveTaskState(byId.t_roll2, '2026-W49');
+
+    // 4. Stats & Say-Do computation across W46..W48
+    const stats = ppComputeWeeklyTaskStats(db, ['2026-W46', '2026-W47', '2026-W48'], 'week', [d1], [p1, p2], '2026-W48');
+
+    // 5. Inline Roadmap rendering (including a 0-FTE cell with NO comment and ONLY a rolled task!)
+    liveDB = db;
+    ui.demoMode = false;
+    ui.whatIfMode = false;
+    ui.timeUnit = 'week';
+    ui.axis = 'department';
+    ui.startWeek = '2026-W48';
+    ui.horizon = 2;
+    ui.filterDept = 'all';
+    ui.filterProj = 'all';
+    ui.taskFilter = 'all';
+    // Clear allocations and comments for (d1, p2, 2026-W48) so ONLY the rolled task exists there!
+    delete db.allocations[d1 + '::' + p2 + '::2026-W48'];
+    delete db.comments[d1 + '::' + p2 + '::2026-W48'];
+    // Pin getCurrentWeekKey temporarily via current tasks already in 2026-W48 (or verify with real current week!)
+    const curWk = getCurrentWeekKey();
+    const prevWk = addWeeksToWeekKey(curWk, -2);
+    db.allocationTasks.push(
+      { id: 't_live_roll', deptId: d1, projectId: p2, originWeek: prevWk, currentWeek: prevWk, text: 'Live rolled blocker', done: false, rollCount: 0, dropped: false },
+      { id: 't_live_done', deptId: d1, projectId: p1, originWeek: curWk, currentWeek: curWk, text: 'Live completed task', done: true, doneWeek: curWk, rollCount: 0, dropped: false }
+    );
+    delete db.allocations[d1 + '::' + p2 + '::' + curWk];
+    delete db.comments[d1 + '::' + p2 + '::' + curWk];
+    ui.startWeek = curWk;
+    renderMatrix();
+
+    const matrixHtml = (document.getElementById('matrixWrapper') && document.getElementById('matrixWrapper').innerHTML) || '';
+    const sayDoHtml = (document.getElementById('weeklyTaskSummaryHost') && document.getElementById('weeklyTaskSummaryHost').innerHTML) || '';
+
+    // 6. Toggle live rolled task inline -> done=true, frozen rollCount=2
+    ppToggleAllocationTask('t_live_roll');
+    const toggledTask = db.allocationTasks.find(t => t.id === 't_live_roll');
+
+    // 7. Health widget + Executive Briefing + PDF Modal checkbox
+    const healthHtml = ppRenderHealthTasksWidget(db, [curWk], db.departments, db.projects);
+    const briefing = buildExecutiveBriefingText(db);
+    openExportPdfModal();
+    const pdfModalHtml = (document.getElementById('modalCard') && document.getElementById('modalCard').innerHTML) || '';
+    closeModal();
+
+    // 8. 3-way auto-merge disjoint allocationTasks
+    const base = cloneSyncSnapshot(db);
+    const local = cloneSyncSnapshot(db);
+    const disk = cloneSyncSnapshot(db);
+    local.allocationTasks.push({ id: 't_local', deptId: d1, projectId: p1, originWeek: curWk, currentWeek: curWk, text: 'Local task', done: false, rollCount: 0, dropped: false });
+    disk.allocationTasks.push({ id: 't_disk', deptId: d1, projectId: p1, originWeek: curWk, currentWeek: curWk, text: 'Disk task', done: false, rollCount: 0, dropped: false });
+    const merged = tryThreeWayAutoMerge(base, local, disk);
+
+    // 9. Undo snapshot round-trip + Orphan pruning
+    const snapJson = captureUndoSnapshot(db);
+    db.allocationTasks.push({ id: 't_orphan', deptId: 'd_gone', projectId: p1, originWeek: curWk, currentWeek: curWk, text: 'Orphan', done: false, rollCount: 0, dropped: false });
+    enforceRollingHistory(db, false);
+    const orphanPruned = !db.allocationTasks.some(t => t.id === 't_orphan');
+    db.allocationTasks = [];
+    applyUndoSnapshot(snapJson, db);
+    const undoRestoredCount = db.allocationTasks.length;
+
+    return {
+      r1Rolled: r1.rolledCount,
+      r2Rolled: r2.rolledCount,
+      roll2Week: byId.t_roll2.currentWeek,
+      roll2Count: byId.t_roll2.rollCount,
+      doneWeek: byId.t_done.currentWeek,
+      doneRolls: byId.t_done.rollCount,
+      dropWeek: byId.t_drop.currentWeek,
+      futureWeek: byId.t_future.currentWeek,
+      yrDelta52,
+      yrDelta53,
+      yrEffWeek: yrEff.currentWeek,
+      yrEffRoll: yrEff.rollCount,
+      effW49Roll: effW49.rollCount,
+      statsDone: stats.done,
+      statsOpen: stats.open,
+      statsRolled: stats.rolledOpen,
+      statsAging: stats.agingOpen,
+      statsSayDo: stats.sayDoPct,
+      matrixHasInlineCb: matrixHtml.includes('ppToggleAllocationTask(&#39;t_live_roll&#39;') || matrixHtml.includes("ppToggleAllocationTask('t_live_roll'"),
+      matrixHasRollBadge: matrixHtml.includes('&#8635;2'),
+      matrixHasZeroFteCard: matrixHtml.includes('Live rolled blocker') && matrixHtml.includes('0 FTE'),
+      matrixHasQuickAdd: matrixHtml.includes('ppOpenInlineTaskInput'),
+      sayDoHasBar: sayDoHtml.includes('id="ppWeeklyTaskBar"') && sayDoHtml.includes('Weekly Tasks (Say-Do)'),
+      toggledDone: Boolean(toggledTask && toggledTask.done),
+      toggledRollCount: toggledTask ? toggledTask.rollCount : -1,
+      healthHasCard: healthHtml.includes('id="ppHealthTasksCard"'),
+      briefingHasTasks: briefing.includes('WEEKLY TASKS (SAY-DO)'),
+      pdfModalHasTasksOpt: pdfModalHtml.includes('id="pdfIncTasks"'),
+      mergeOk: merged.ok,
+      mergedHasBoth: merged.ok && merged.mergedDB.allocationTasks.some(t => t.id === 't_local') && merged.mergedDB.allocationTasks.some(t => t.id === 't_disk'),
+      orphanPruned,
+      undoRestoredCount,
+    };
+  })()`, ctx);
+  } finally {
+    sandbox.document.getElementById = prevGetById;
+  }
+
+  assert.equal(out.r1Rolled, 2, 'First automatic rollover advances the 2 unchecked past tasks');
+  assert.equal(out.r2Rolled, 0, 'Repeated rollover in the same week is idempotent (0 extra rolls)');
+  assert.equal(out.roll2Week, '2026-W48', 'Unchecked W46 task auto-rolls into W48');
+  assert.equal(out.roll2Count, 2, 'Roll counter increments accurately by 2 weeks');
+  assert.equal(out.doneWeek, '2026-W46', 'Completed task stays frozen on its week');
+  assert.equal(out.doneRolls, 0, 'Completed task roll counter does not increase');
+  assert.equal(out.dropWeek, '2026-W46', 'Dropped task stops rolling over');
+  assert.equal(out.futureWeek, '2026-W51', 'Future task remains scheduled in its future week');
+  assert.equal(out.yrDelta52, 2, 'ISO week diff handles 52-week year boundary accurately (2025-W52 -> 2026-W02 = 2)');
+  assert.equal(out.yrDelta53, 3, 'ISO week diff handles 53-week ISO year boundary accurately (2026-W52 -> 2027-W02 = 3)');
+  assert.equal(out.yrEffWeek, '2027-W02', 'Task rolls across ISO year boundary cleanly');
+  assert.equal(out.yrEffRoll, 3, '53-week ISO year boundary rollover increments counter by 3');
+  assert.equal(out.effW49Roll, 3, 'Subsequent week advances roll counter from 2 to 3');
+  assert.equal(out.statsDone, 1, 'Say-Do stats count completed tasks');
+  assert.equal(out.statsOpen, 2, 'Say-Do stats count open tasks (excluding dropped)');
+  assert.equal(out.statsRolled, 2, 'Say-Do stats count rolled open tasks');
+  assert.equal(out.statsAging, 1, 'Say-Do stats count aging tasks (>=2x rolls)');
+  assert.equal(out.statsSayDo, 33, 'Say-Do completion rate computes 1/3 = 33%');
+  assert.equal(out.matrixHasInlineCb, true, 'Roadmap cell renders interactive checkbox directly inside cell');
+  assert.equal(out.matrixHasRollBadge, true, 'Roadmap cell renders rollover counter badge (↻2)');
+  assert.equal(out.matrixHasZeroFteCard, true, 'Rolled task on a 0-FTE cell still surfaces in Roadmap with 0 FTE alert');
+  assert.equal(out.matrixHasQuickAdd, true, 'Roadmap cell includes inline + Task quick-add trigger');
+  assert.equal(out.sayDoHasBar, true, 'Weekly Tasks Say-Do summary bar & meeting filters render above Roadmap');
+  assert.equal(out.toggledDone, true, 'Inline checkbox marks task done');
+  assert.equal(out.toggledRollCount, 2, 'Completed rolled task preserves its final rollCount (2)');
+  assert.equal(out.healthHasCard, true, 'Health dashboard renders Weekly Task Execution card');
+  assert.equal(out.briefingHasTasks, true, 'Executive Briefing includes Weekly Tasks (Say-Do) section');
+  assert.equal(out.pdfModalHasTasksOpt, true, 'Roadmap PDF export modal includes Weekly Tasks & Rollover Log option');
+  assert.equal(out.mergeOk && out.mergedHasBoth, true, '3-way auto-merge merges disjoint allocationTasks edits by ID');
+  assert.equal(out.orphanPruned, true, 'enforceRollingHistory prunes tasks referencing deleted departments/projects');
+  assert.ok(out.undoRestoredCount >= 5, 'Undo snapshot captures and restores allocationTasks');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

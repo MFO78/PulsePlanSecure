@@ -80,6 +80,9 @@
           movedComments++;
         });
       }
+      if (typeof ppShiftProjectAllocationTasks === 'function') {
+        ppShiftProjectAllocationTasks(projId, weekDelta, db);
+      }
 
       let movedMilestones = 0;
       if (shiftMilestones && Array.isArray(db.milestones)) {
@@ -1478,6 +1481,19 @@
         lines.push('');
         lines.push('KEY NOTES:');
         lines.push(...notes);
+      }
+
+      if (typeof ppComputeWeeklyTaskStats === 'function') {
+        const tStats = ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, visibleDepts.map(d => d.id), visibleProjs.map(p => p.id));
+        if (tStats.total > 0) {
+          lines.push('');
+          lines.push(`WEEKLY TASKS (SAY-DO): ${tStats.done}/${tStats.activeTotal} done (${tStats.sayDoPct}%) | ${tStats.open} open | ${tStats.rolledOpen} rolled${tStats.agingOpen > 0 ? ` (${tStats.agingOpen} aging >=2x)` : ''}`);
+          tStats.topAgingTasks.slice(0, 6).forEach(t => {
+            const d = visibleDepts.find(x => x.id === t.deptId);
+            const p = visibleProjs.find(x => x.id === t.projectId);
+            lines.push(`- [R${t.rollCount}] ${t.currentWeek} | ${d ? d.code : t.deptId} -> [${p ? p.code : t.projectId}]: ${t.text}`);
+          });
+        }
       }
 
       return lines.join('\n');

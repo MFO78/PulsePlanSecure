@@ -1019,6 +1019,8 @@
               class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs leading-relaxed">${escapeHtml(existingComment)}</textarea>
           </div>
 
+          <div id="mAllocTasksWrap"></div>
+
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label for="mAllocRepeat" class="block font-semibold text-slate-700 mb-1">Repeat across ${ui.timeUnit}s</label>
@@ -1049,6 +1051,7 @@
 
       rebuildAllocEndPeriodOptions();
       refreshAllocModalPreview();
+      if (typeof ppRenderAllocModalTasks === 'function') ppRenderAllocModalTasks();
     }
 
     function rebuildAllocEndPeriodOptions() {
@@ -1109,6 +1112,7 @@
       }
       rebuildAllocEndPeriodOptions();
       refreshAllocModalPreview();
+      if (typeof ppRenderAllocModalTasks === 'function') ppRenderAllocModalTasks();
     }
 
     function refreshAllocModalPreview() {
@@ -1182,28 +1186,33 @@
       const commentTxt = document.getElementById('mAllocComment')?.value || '';
       const repeat = Math.max(1, Math.min(24, parseInt(document.getElementById('mAllocRepeat').value, 10) || 1));
 
+      if (typeof ppFlushPendingModalTask === 'function') {
+        ppFlushPendingModalTask(deptId, projId, startPk);
+      }
+
       const proj = db.projects.find(p => p.id === projId);
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
       const pCode = proj?.code || projId;
 
       if (isNonFteProject(proj)) {
         const cleanNote = commentTxt.trim();
-        if (!cleanNote) {
-          showToast('Enter departmental issues or requested meetings, or click Remove Note.', 'warning');
+        const hasTasksForAdmin = typeof ppGetCellTasks === 'function' && ppGetCellTasks(deptId, projId, startPk, ui.timeUnit, db).length > 0;
+        if (!cleanNote && !hasTasksForAdmin) {
+          showToast('Enter departmental issues, requested meetings, or a weekly task, or click Remove Note.', 'warning');
           return;
         }
         pushUndoState(`Update Admin note [${dCode} -> ${pCode}]`);
         let curPk = startPk;
         for (let i = 0; i < repeat; i++) {
           setAllocationForPeriod(deptId, projId, curPk, ui.timeUnit, 0, db);
-          setCellProjectComment(deptId, projId, curPk, cleanNote, db);
+          if (cleanNote || i === 0) setCellProjectComment(deptId, projId, curPk, cleanNote, db);
           curPk = ui.timeUnit === 'month' ? addMonthsToMonthKey(curPk, 1) : addWeeksToWeekKey(curPk, 1);
         }
-        recordChange('Comment', `Updated Admin (Non-FTE) note [${dCode} -> ${pCode}] in ${startPk}${repeat > 1 ? ` (+${repeat - 1} more)` : ''}`);
+        recordChange('Comment', `Updated Admin (Non-FTE) entry [${dCode} -> ${pCode}] in ${startPk}${repeat > 1 ? ` (+${repeat - 1} more)` : ''}`);
         triggerHaptic(10);
         closeModal();
         renderAll();
-        showToast('Admin note saved', 'success', { undoable: true });
+        showToast('Admin entry saved', 'success', { undoable: true });
         return;
       }
 
@@ -1671,6 +1680,7 @@
         Object.keys(db.allocations || {}).forEach(k => { if (k.startsWith(`${id}::`)) delete db.allocations[k]; });
         Object.keys(db.capacityOverrides || {}).forEach(k => { if (k.startsWith(`${id}::`)) delete db.capacityOverrides[k]; });
         Object.keys(db.comments || {}).forEach(k => { if (k.startsWith(`${id}::`)) delete db.comments[k]; });
+        if (Array.isArray(db.allocationTasks)) db.allocationTasks = db.allocationTasks.filter(t => t && t.deptId !== id);
         if (ui.filterDept === id) ui.filterDept = 'all';
         recordChange('Department', `Deleted department [${d.code}] ${d.name}`);
         renderAll();
@@ -1858,6 +1868,7 @@
         db.milestones = db.milestones.filter(m => m.projectId !== id);
         if (Array.isArray(db.externalCosts)) db.externalCosts = db.externalCosts.filter(c => c && c.projectId !== id);
         if (db.settings && Array.isArray(db.settings.externalCosts)) db.settings.externalCosts = db.settings.externalCosts.filter(c => c && c.projectId !== id);
+        if (Array.isArray(db.allocationTasks)) db.allocationTasks = db.allocationTasks.filter(t => t && t.projectId !== id);
         Object.keys(db.allocations || {}).forEach(k => { if (k.split('::')[1] === id) delete db.allocations[k]; });
         Object.keys(db.comments || {}).forEach(k => { if (k.split('::')[1] === id) delete db.comments[k]; });
         if (ui.filterProj === id) ui.filterProj = 'all';
@@ -2043,6 +2054,7 @@
           capacityOverrides: JSON.parse(JSON.stringify(db.capacityOverrides)),
           comments: JSON.parse(JSON.stringify(db.comments || {})),
           milestones: JSON.parse(JSON.stringify(db.milestones)),
+          allocationTasks: JSON.parse(JSON.stringify(db.allocationTasks || [])),
         }
       };
       db.snapshots.unshift(snap);
@@ -2058,12 +2070,15 @@
       const db = getActiveDB();
       const snap = db.snapshots.find(s => s.id === id);
       if (!snap) return;
-      openConfirmModal('Restore Snapshot', `Restore allocations, variable capacities, comments, and milestones from "${snap.name}"? Current unsaved changes will be replaced.`, 'Restore', () => {
+      openConfirmModal('Restore Snapshot', `Restore allocations, variable capacities, comments, weekly tasks, and milestones from "${snap.name}"? Current unsaved changes will be replaced.`, 'Restore', () => {
         pushUndoState(`Restore snapshot "${snap.name}"`);
         db.allocations = JSON.parse(JSON.stringify(snap.data.allocations || {}));
         db.capacityOverrides = JSON.parse(JSON.stringify(snap.data.capacityOverrides || {}));
         db.comments = JSON.parse(JSON.stringify(snap.data.comments || {}));
         db.milestones = JSON.parse(JSON.stringify(snap.data.milestones || []));
+        if (Array.isArray(snap.data.allocationTasks)) {
+          db.allocationTasks = JSON.parse(JSON.stringify(snap.data.allocationTasks));
+        }
         recordChange('Snapshot', `Restored roadmap state from snapshot "${snap.name}"`);
         renderAll();
         showToast(`Restored "${snap.name}"`, 'success', { undoable: true });

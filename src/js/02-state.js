@@ -29,6 +29,7 @@
       filterOverOnly: false,
       filterAtRiskOnly: false,
       filterHasNotesOnly: false,
+      taskFilter: 'all',              // 'all' | 'hasTasks' | 'open' | 'rolled'
       overrideDeptFilter: 'all',      // Setup tab Variable Overrides filter
       // Mobile Hybrid State (Pattern 1 + Pattern 2)
       mobileLayoutMode: 'cards',      // 'cards' (Period-Focus Deck) | 'grid' (2D Table)
@@ -52,6 +53,7 @@
         includeProjectPortfolio: true,
         includeMilestones: true,
         includeCommentsAppendix: true,
+        includeTasksAppendix: true,
         includeSnapshotDiff: true,
         includeChangeLog: true,
         changeLogLimit: 15,
@@ -163,6 +165,7 @@
         dumpHistory: [],       // [{ id, timestamp, user, format, filename, revision, sizeBytes, summary }]
         peopleDirectory: [],   // [{ id, name, role }]
         externalCosts: [],     // [{ id, projectId, label, amount, period }]
+        allocationTasks: [],   // [{ id, deptId, projectId, originWeek, currentWeek, text, done, doneAt, doneWeek, rollCount, dropped }]
         accessControl: {       // Multi-user RBAC & wrapped-key login metadata
           version: 1,
           adminName: 'Administrator',
@@ -669,11 +672,19 @@
       db.allocations = normalizeAllocationsCollection(src.allocations || src.manpower || src.plan, db.comments);
       db.capacityOverrides = normalizeCapacityCollection(src.capacityOverrides || src.capacities || src.variableCapacity || src.deptCapacities);
       db.milestones = normalizeMilestonesList(src.milestones);
+      const rawTasks = src.allocationTasks || src.tasks || [];
+      db.allocationTasks = (typeof ppNormalizeAllocationTasksCollection === 'function')
+        ? ppNormalizeAllocationTasksCollection(rawTasks, deptIds, projIds)
+        : (Array.isArray(rawTasks) ? rawTasks.filter(Boolean) : []);
+      if (typeof ppAutoRolloverAllocationTasks === 'function') {
+        ppAutoRolloverAllocationTasks(db);
+      }
 
       const rawSnaps = Array.isArray(src.snapshots) ? src.snapshots : [];
       db.snapshots = rawSnaps.filter(Boolean).map((s, idx) => {
         const sData = s.data || s.state || s;
         const snapComments = normalizeCommentsCollection(sData.comments || sData.cellComments);
+        const rawSnapTasks = sData.allocationTasks || sData.tasks || [];
         return {
           id: String(s.id || uid('snap')),
           name: String(s.name || s.label || s.title || `Snapshot ${idx + 1}`).trim(),
@@ -686,6 +697,9 @@
             capacityOverrides: normalizeCapacityCollection(sData.capacityOverrides || sData.capacities),
             comments: snapComments,
             milestones: normalizeMilestonesList(sData.milestones),
+            allocationTasks: (typeof ppNormalizeAllocationTasksCollection === 'function')
+              ? ppNormalizeAllocationTasksCollection(rawSnapTasks, deptIds, projIds)
+              : (Array.isArray(rawSnapTasks) ? rawSnapTasks.filter(Boolean) : []),
           }
         };
       });
@@ -857,6 +871,11 @@
       const orphanExtCount = extArr.length - keptExt.length;
       if (orphanExtCount > 0) orphansRemoved += orphanExtCount;
 
+      const taskArr = Array.isArray(db.allocationTasks) ? db.allocationTasks : [];
+      const keptTasks = taskArr.filter(t => t && deptIds.has(t.deptId) && projIds.has(t.projectId));
+      const orphanTaskCount = taskArr.length - keptTasks.length;
+      if (orphanTaskCount > 0) orphansRemoved += orphanTaskCount;
+
       const retiredArchive = (retiredLog.length || retiredSnaps.length || retiredDumps.length)
         ? {
             archivedAt: new Date().toISOString(),
@@ -875,6 +894,7 @@
         capKeysToRemove.forEach(k => delete db.capacityOverrides[k]);
         commentKeysToRemove.forEach(k => delete db.comments[k]);
         if (orphanExtCount > 0) db.externalCosts = keptExt;
+        if (orphanTaskCount > 0) db.allocationTasks = keptTasks;
 
         const validSnapIds = new Set((db.snapshots || []).map(s => s.id));
         if (ui.compareSnapshotId && !validSnapIds.has(ui.compareSnapshotId)) ui.compareSnapshotId = '';
@@ -1445,6 +1465,7 @@
         comments: db.comments || {},
         milestones: db.milestones || [],
         externalCosts: db.externalCosts || [],
+        allocationTasks: db.allocationTasks || [],
       });
     }
 
@@ -1457,6 +1478,7 @@
       db.comments = parsed.comments || {};
       db.milestones = parsed.milestones || [];
       db.externalCosts = Array.isArray(parsed.externalCosts) ? parsed.externalCosts : [];
+      db.allocationTasks = Array.isArray(parsed.allocationTasks) ? parsed.allocationTasks : [];
     }
 
     function pushUndoState(label = 'Change') {

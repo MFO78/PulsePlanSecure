@@ -497,6 +497,9 @@
           if (Array.isArray(db.milestones)) {
             db.milestones = db.milestones.filter(m => !ids.has(String(m.projectId)));
           }
+          if (Array.isArray(db.allocationTasks)) {
+            db.allocationTasks = db.allocationTasks.filter(t => t && !ids.has(String(t.projectId)));
+          }
           if (typeof ui !== 'undefined' && ids.has(String(ui.filterProj))) ui.filterProj = 'all';
           if (typeof ui !== 'undefined' && ids.has(String(ui.spotlightProjId))) ui.spotlightProjId = '';
         } else if (dbCollectionKey === 'departments') {
@@ -508,6 +511,9 @@
           }
           if (db.capacityOverrides && typeof db.capacityOverrides === 'object') {
             Object.keys(db.capacityOverrides).forEach(k => { if (ids.has(String(k.split('::')[0]))) delete db.capacityOverrides[k]; });
+          }
+          if (Array.isArray(db.allocationTasks)) {
+            db.allocationTasks = db.allocationTasks.filter(t => t && !ids.has(String(t.deptId)));
           }
           if (typeof ui !== 'undefined' && ids.has(String(ui.filterDept))) ui.filterDept = 'all';
         }

@@ -434,6 +434,7 @@
       ui.filterOverOnly = false;
       ui.filterAtRiskOnly = false;
       ui.filterHasNotesOnly = false;
+      ui.taskFilter = 'all';
       ui.filterDept = 'all';
       ui.filterProj = 'all';
       ui.spotlightProjId = '';

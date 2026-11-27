@@ -345,8 +345,11 @@
     document.getElementById('ppAdminAccessCard')?.remove();
     document.getElementById('ppPeopleDirCard')?.remove();
     document.getElementById('ppHealthBurnBudgetFrame')?.remove();
+    document.getElementById('ppHealthTasksCard')?.remove();
     document.getElementById('ppNotesDiffCard')?.remove();
     document.getElementById('ppHealthCtrlBar')?.remove();
+    const taskBarEl = document.getElementById('weeklyTaskSummaryHost');
+    if (taskBarEl) taskBarEl.innerHTML = '';
     const extBanner = document.getElementById('externalUpdateBanner');
     if (extBanner) extBanner.classList.add('hidden');
   }

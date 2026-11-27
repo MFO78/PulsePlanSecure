@@ -459,6 +459,7 @@
         db.snapshots = [];
         db.changeLog = [];
         db.externalCosts = [];
+        db.allocationTasks = [];
         if (db.settings && 'externalCosts' in db.settings) delete db.settings.externalCosts;
         if (typeof recordChange === 'function') recordChange('Plan', 'Cleared roadmap plan, notes, milestones & snapshots (kept Setup & Data)');
         else if (typeof touchDBAndSave === 'function') touchDBAndSave();

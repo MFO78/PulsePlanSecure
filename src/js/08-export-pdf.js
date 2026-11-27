@@ -427,6 +427,10 @@
                 <span class="font-semibold text-slate-800">Full Comments Appendix</span>
               </label>
               <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                <input id="pdfIncTasks" type="checkbox" ${opts.includeTasksAppendix !== false ? 'checked' : ''} class="rounded text-indigo-600" />
+                <span class="font-semibold text-slate-800">Weekly Tasks &amp; Rollover Log</span>
+              </label>
+              <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
                 <input id="pdfIncSnapDiff" type="checkbox" ${opts.includeSnapshotDiff && db.snapshots.length > 0 ? 'checked' : ''} ${db.snapshots.length === 0 ? 'disabled' : ''} class="rounded text-indigo-600" />
                 <span class="font-semibold text-slate-800">Snapshot Comparison Diff</span>
               </label>
@@ -476,6 +480,7 @@
         includeProjectPortfolio: Boolean(document.getElementById('pdfIncPortfolio')?.checked),
         includeMilestones: Boolean(document.getElementById('pdfIncMilestones')?.checked),
         includeCommentsAppendix: Boolean(document.getElementById('pdfIncComments')?.checked),
+        includeTasksAppendix: Boolean(document.getElementById('pdfIncTasks')?.checked),
         includeSnapshotDiff: Boolean(document.getElementById('pdfIncSnapDiff')?.checked),
         includeChangeLog: Boolean(document.getElementById('pdfIncChangeLog')?.checked),
         changeLogLimit: Math.max(5, Math.min(100, parseInt(document.getElementById('mPdfLogLimit')?.value, 10) || 15)),
@@ -1071,7 +1076,8 @@
         const projId = axis === 'department' ? item.id : row.id;
         const a = getAllocationForPeriod(deptId, projId, pk, ui.timeUnit, db.allocations);
         const cmt = getCellProjectComments(deptId, projId, pk, ui.timeUnit, db);
-        if (!a.hasData && !cmt.hasAny) return;
+        const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(deptId, projId, pk, ui.timeUnit, db) : [];
+        if (!a.hasData && !cmt.hasAny && !cellTasks.length) return;
 
         const capFte = axis === 'department'
           ? deptCapForDeptAxis
@@ -1091,7 +1097,7 @@
 
         const isFilled = colorMode !== 'accent';
         const theme = isFilled ? pdfGetFilledCardRgbTheme(fillHex) : null;
-        const valText = a.hasData ? pdfSafeText(formatValue(fteToDisplayValue(a.avgFte, pk, ui.timeUnit))) : 'Note';
+        const valText = a.hasData ? pdfSafeText(formatValue(fteToDisplayValue(a.avgFte, pk, ui.timeUnit))) : (cellTasks.length && !cmt.hasAny ? 'Tasks' : 'Note');
         const titleRaw = `[${item.code}] ${item.name}`;
 
         doc.setFont('helvetica', 'bold');
@@ -1110,22 +1116,34 @@
         const titleLines = pdfWrapLines(doc, titleRaw, titleMaxW, compactMode ? 1 : 2);
 
         let commentLines = [];
-        if (showComments && cmt.hasAny) {
+        const hasNoteBox = (showComments && cmt.hasAny) || cellTasks.length > 0;
+        if (hasNoteBox) {
           const noteParts = [];
-          const hasBullets = /^\s*(?:•|-\s+)/m.test(String(cmt.direct || ''));
-          if (cmt.direct) {
+          const hasBullets = /^\s*(?:•|-\s+)/m.test(String(cmt.direct || '')) || cellTasks.length > 0;
+          if (showComments && cmt.direct) {
             noteParts.push(hasBullets ? cmt.direct.trim() : cmt.direct.replace(/\n+/g, ' / '));
           }
-          if (cmt.weekEntries.length > 0) {
+          if (showComments && cmt.weekEntries.length > 0) {
             cmt.weekEntries.slice(0, compactMode ? 1 : 2).forEach(we => {
               noteParts.push(`${we.weekShort}: ${we.text.replace(/\n+/g, ' / ')}`);
             });
+          }
+          if (cellTasks.length > 0) {
+            const shownTasks = cellTasks.slice(0, compactMode ? 2 : 4);
+            shownTasks.forEach(t => {
+              const mark = t.dropped ? '[-]' : (t.done ? '[x]' : '[ ]');
+              const rollTag = t.rollCount > 0 ? ` (R${t.rollCount})` : '';
+              noteParts.push(`${mark} ${t.text}${rollTag}`);
+            });
+            if (cellTasks.length > shownTasks.length) {
+              noteParts.push(`+${cellTasks.length - shownTasks.length} more task(s)`);
+            }
           }
           const combinedNote = noteParts.join(hasBullets ? '\n' : ' | ');
           const commentInnerW = Math.max(8, innerW - (isFilled ? 3.2 : 4.4) - 1.8);
           doc.setFont('helvetica', 'normal');
           doc.setFontSize(5.2);
-          commentLines = pdfWrapLines(doc, combinedNote, commentInnerW, compactMode ? (hasBullets ? 2 : 1) : (hasBullets ? 4 : 2));
+          commentLines = pdfWrapLines(doc, combinedNote, commentInnerW, compactMode ? (hasBullets ? 3 : 1) : (hasBullets ? 6 : 2));
         }
 
         const topRowH = Math.max(3.4, titleLines.length * 2.45);
@@ -1826,6 +1844,71 @@
               styles: { fontSize: 7.1, cellPadding: 2, overflow: 'linebreak', textColor: [30, 41, 59] },
               headStyles: { fillColor: [51, 65, 85], textColor: [255, 255, 255], fontStyle: 'bold' },
               columnStyles: { 0: { cellWidth: 30, fontStyle: 'bold' }, 1: { cellWidth: 44 }, 2: { cellWidth: 52 }, 3: { cellWidth: 147 } },
+            });
+            currentY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 7 : currentY + 35;
+          }
+        }
+
+        if (opts.includeTasksAppendix !== false && typeof ppComputeWeeklyTaskStats === 'function') {
+          const tStats = ppComputeWeeklyTaskStats(db, periods, ui.timeUnit, visibleDepts.map(d => d.id), visibleProjs.map(p => p.id));
+          if (tStats.total > 0) {
+            const deptMap = new Map(visibleDepts.map(d => [d.id, d]));
+            const projMap = new Map(visibleProjs.map(p => [p.id, p]));
+            const taskRows = tStats.allVisibleTasks
+              .slice()
+              .sort((a, b) => String(a.currentWeek).localeCompare(String(b.currentWeek)) || (b.rollCount - a.rollCount) || String(a.text).localeCompare(String(b.text)))
+              .map(t => {
+                const d = deptMap.get(t.deptId);
+                const p = projMap.get(t.projectId);
+                const status = t.dropped ? 'Dropped' : (t.done ? 'Done' : 'Open');
+                return [
+                  pdfSafeText(t.currentWeek),
+                  pdfSafeText(d ? `[${d.code}] ${d.name}` : t.deptId),
+                  pdfSafeText(p ? `[${p.code}] ${p.name}` : t.projectId),
+                  pdfSafeText(t.text),
+                  status,
+                  pdfSafeText(t.originWeek),
+                  t.rollCount > 0 ? `${t.rollCount}x` : '0',
+                ];
+              });
+
+            currentY = drawSectionHeading(
+              'Weekly Allocation Tasks & Carry-Over Log',
+              `Say-Do Completion: ${tStats.done}/${tStats.activeTotal} (${tStats.sayDoPct}%)  |  Open: ${tStats.open}  |  Rolled Over: ${tStats.rolledOpen}  |  Aging (>=2x): ${tStats.agingOpen}`,
+              currentY
+            );
+            doc.autoTable({
+              startY: currentY,
+              head: [['Week', 'Department', 'Project', 'Weekly Task', 'Status', 'Origin', 'Rolls']],
+              body: taskRows,
+              margin: safeMargin,
+              tableWidth: tableW,
+              theme: 'striped',
+              styles: { fontSize: 7.0, cellPadding: 2, overflow: 'linebreak', textColor: [30, 41, 59] },
+              headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
+              columnStyles: {
+                0: { cellWidth: 22, fontStyle: 'bold' },
+                1: { cellWidth: 40 },
+                2: { cellWidth: 46 },
+                3: { cellWidth: 111 },
+                4: { cellWidth: 18, halign: 'center', fontStyle: 'bold' },
+                5: { cellWidth: 22, halign: 'center' },
+                6: { cellWidth: 14, halign: 'right', fontStyle: 'bold' },
+              },
+              didParseCell: (data) => {
+                if (data.section !== 'body') return;
+                if (data.column.index === 4) {
+                  const st = String(data.cell.raw || '');
+                  if (st === 'Done') data.cell.styles.textColor = [5, 150, 105];
+                  else if (st === 'Dropped') data.cell.styles.textColor = [100, 116, 139];
+                  else data.cell.styles.textColor = [79, 70, 229];
+                }
+                if (data.column.index === 6) {
+                  const n = parseInt(String(data.cell.raw || '0'), 10) || 0;
+                  if (n >= 2) data.cell.styles.textColor = [225, 29, 72];
+                  else if (n === 1) data.cell.styles.textColor = [180, 83, 9];
+                }
+              },
             });
             currentY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 7 : currentY + 35;
           }

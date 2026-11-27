@@ -198,6 +198,7 @@
 
     function renderMobileMatrixCards() {
       const db = getActiveDB();
+      if (typeof ppAutoRolloverAllocationTasks === 'function') ppAutoRolloverAllocationTasks(db);
       const deck = document.getElementById('mobileMatrixDeck');
       if (!deck) return;
 
@@ -539,14 +540,18 @@
           const itemsHtml = visibleProjs.map(p => {
             const a = getAllocationForPeriod(row.id, p.id, selectedPk, ui.timeUnit, db.allocations);
             const cmtObj = getCellProjectComments(row.id, p.id, selectedPk, ui.timeUnit, db);
-            if (!a.hasData && !cmtObj.hasAny) return '';
-            if (searchQ && !(`${row.name} ${row.code} ${p.name} ${p.code} ${p.owner || ''} ${p.techLead || ''} ${cmtObj.direct || ''}`).toLowerCase().includes(searchQ)) return '';
+            const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(row.id, p.id, selectedPk, ui.timeUnit, db) : [];
+            if (!a.hasData && !cmtObj.hasAny && !cellTasks.length) return '';
+            if (typeof ppMatchesTaskFilter === 'function' && !ppMatchesTaskFilter(cellTasks)) return '';
+            const taskHay = cellTasks.map(t => t.text).join(' ');
+            if (searchQ && !(`${row.name} ${row.code} ${p.name} ${p.code} ${p.owner || ''} ${p.techLead || ''} ${cmtObj.direct || ''} ${taskHay}`).toLowerCase().includes(searchQ)) return '';
 
             const spotCls = spotlightId ? (spotlightId === p.id ? 'spotlight-active' : 'spotlight-dimmed') : '';
             const tentCls = p.tentative ? (useColorFill ? 'tentative-card-filled' : 'tentative-card') : '';
             const isAdminProj = isNonFteProject(p);
-            if (isAdminProj && !a.hasData && cmtObj.hasAny) {
+            if (isAdminProj && !a.hasData && (cmtObj.hasAny || cellTasks.length > 0)) {
               const adminCmtHtml = renderMobileCommentBlock(cmtObj, null);
+              const adminTasksHtml = typeof ppRenderInlineCellTasksHtml === 'function' ? ppRenderInlineCellTasksHtml(row.id, p.id, selectedPk, cellTasks, null, ui.presentationMode, false) : '';
               return `
                 <div class="admin-hashed-card rounded-xl p-3 shadow-2xs space-y-2 min-w-0 ${spotCls}"
                   style="--admin-accent:${p.color}; --accent-w:5px;">
@@ -562,14 +567,15 @@
                     <button type="button" aria-label="More actions for ${escapeHtml(p.name)}" onclick="openMobileCardActionSheet('${row.id}', '${p.id}', '${selectedPk}')"
                       class="h-8 px-2.5 rounded-lg bg-slate-100 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1">Actions &#8943;</button>
                   </div>
-                  ${adminCmtHtml}
+                  ${adminCmtHtml}${adminTasksHtml}
                 </div>`;
             }
             const resolvedStyle = resolveCardStyle(a.hasData ? a.avgFte : 0, capFte, p.color);
             const { fillHex, tier3, showIdentityDot } = resolvedStyle;
             const filledTheme = useColorFill ? getFilledCardTheme(fillHex) : null;
             const cmtHtml = renderMobileCommentBlock(cmtObj, filledTheme);
-            const valStr = a.hasData ? formatValue(fteToDisplayValue(a.avgFte, selectedPk, ui.timeUnit)) : (isAdminProj ? 'Admin' : 'Note');
+            const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function' ? ppRenderInlineCellTasksHtml(row.id, p.id, selectedPk, cellTasks, filledTheme, ui.presentationMode, false) : '';
+            const valStr = a.hasData ? formatValue(fteToDisplayValue(a.avgFte, selectedPk, ui.timeUnit)) : (isAdminProj ? 'Admin' : (cellTasks.length ? '0 FTE' : 'Note'));
             const tierBadge = tier3
               ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-extrabold shrink-0" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};" aria-label="${escapeHtml(tier3.ariaLabel)}">${tier3.symbol}</span>`
               : '';
@@ -583,7 +589,7 @@
               : (p.tentative
                   ? '<span class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[9px] font-extrabold uppercase shrink-0">Pipeline</span>'
                   : '');
-            const noteOnlyLabel = isAdminProj ? 'Admin &middot; Non-FTE' : 'Note Only';
+            const noteOnlyLabel = isAdminProj ? 'Admin &middot; Non-FTE' : (cellTasks.length && !cmtObj.hasAny ? 'Tasks &middot; 0 FTE' : 'Note Only');
 
             if (useColorFill) {
               return `
@@ -614,7 +620,7 @@
                     <button type="button" aria-label="More actions for ${escapeHtml(p.name)}" onclick="openMobileCardActionSheet('${row.id}', '${p.id}', '${selectedPk}')"
                       class="h-8 px-2.5 rounded-lg font-extrabold text-xs flex items-center justify-center gap-1" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};">Actions &#8943;</button>
                   </div>
-                  ${cmtHtml}
+                  ${cmtHtml}${tasksHtml}
                 </div>`;
             }
 
@@ -642,7 +648,7 @@
                   <button type="button" aria-label="More actions for ${escapeHtml(p.name)}" onclick="openMobileCardActionSheet('${row.id}', '${p.id}', '${selectedPk}')"
                     class="h-8 px-2.5 rounded-lg bg-slate-100 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1">Actions &#8943;</button>
                 </div>
-                ${cmtHtml}
+                ${cmtHtml}${tasksHtml}
               </div>`;
           }).join('');
 
@@ -706,11 +712,15 @@
           const itemsHtml = visibleDepts.map(d => {
             const a = getAllocationForPeriod(d.id, row.id, selectedPk, ui.timeUnit, db.allocations);
             const cmtObj = getCellProjectComments(d.id, row.id, selectedPk, ui.timeUnit, db);
-            if (!a.hasData && !cmtObj.hasAny) return '';
-            if (searchQ && !(`${d.name} ${d.code} ${row.name} ${row.code} ${cmtObj.direct || ''}`).toLowerCase().includes(searchQ)) return '';
+            const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(d.id, row.id, selectedPk, ui.timeUnit, db) : [];
+            if (!a.hasData && !cmtObj.hasAny && !cellTasks.length) return '';
+            if (typeof ppMatchesTaskFilter === 'function' && !ppMatchesTaskFilter(cellTasks)) return '';
+            const taskHay = cellTasks.map(t => t.text).join(' ');
+            if (searchQ && !(`${d.name} ${d.code} ${row.name} ${row.code} ${cmtObj.direct || ''} ${taskHay}`).toLowerCase().includes(searchQ)) return '';
 
-            if (isAdminRow && !a.hasData && cmtObj.hasAny) {
+            if (isAdminRow && !a.hasData && (cmtObj.hasAny || cellTasks.length > 0)) {
               const adminCmtHtml = renderMobileCommentBlock(cmtObj, null);
+              const adminTasksHtml = typeof ppRenderInlineCellTasksHtml === 'function' ? ppRenderInlineCellTasksHtml(d.id, row.id, selectedPk, cellTasks, null, ui.presentationMode, false) : '';
               return `
                 <div class="admin-hashed-card rounded-xl p-3 shadow-2xs space-y-2 min-w-0"
                   style="--admin-accent:${d.color}; --accent-w:5px;">
@@ -723,7 +733,7 @@
                     <button type="button" aria-label="More actions for ${escapeHtml(d.name)}" onclick="openMobileCardActionSheet('${d.id}', '${row.id}', '${selectedPk}')"
                       class="h-8 px-2.5 rounded-lg bg-slate-100 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1">Actions &#8943;</button>
                   </div>
-                  ${adminCmtHtml}
+                  ${adminCmtHtml}${adminTasksHtml}
                 </div>`;
             }
 
@@ -731,8 +741,9 @@
             const { fillHex, tier3, showIdentityDot } = resolveCardStyle(a.hasData ? a.avgFte : 0, deptCap, d.color);
             const filledTheme = useColorFill ? getFilledCardTheme(fillHex) : null;
             const cmtHtml = renderMobileCommentBlock(cmtObj, filledTheme);
-            const valStr = a.hasData ? formatValue(fteToDisplayValue(a.avgFte, selectedPk, ui.timeUnit)) : (isAdminRow ? 'Admin' : 'Note');
-            const noteOnlyLabel = isAdminRow ? 'Admin &middot; Non-FTE' : 'Note Only';
+            const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function' ? ppRenderInlineCellTasksHtml(d.id, row.id, selectedPk, cellTasks, filledTheme, ui.presentationMode, false) : '';
+            const valStr = a.hasData ? formatValue(fteToDisplayValue(a.avgFte, selectedPk, ui.timeUnit)) : (isAdminRow ? 'Admin' : (cellTasks.length ? '0 FTE' : 'Note'));
+            const noteOnlyLabel = isAdminRow ? 'Admin &middot; Non-FTE' : (cellTasks.length && !cmtObj.hasAny ? 'Tasks &middot; 0 FTE' : 'Note Only');
             const tierBadge = tier3
               ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-extrabold shrink-0" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};">${tier3.symbol}</span>`
               : '';
@@ -762,7 +773,7 @@
                     <button type="button" aria-label="More actions for ${escapeHtml(d.name)}" onclick="openMobileCardActionSheet('${d.id}', '${row.id}', '${selectedPk}')"
                       class="h-8 px-2.5 rounded-lg font-extrabold text-xs flex items-center justify-center gap-1" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};">Actions &#8943;</button>
                   </div>
-                  ${cmtHtml}
+                  ${cmtHtml}${tasksHtml}
                 </div>`;
             }
 
@@ -786,7 +797,7 @@
                   <button type="button" aria-label="More actions for ${escapeHtml(d.name)}" onclick="openMobileCardActionSheet('${d.id}', '${row.id}', '${selectedPk}')"
                     class="h-8 px-2.5 rounded-lg bg-slate-100 text-slate-700 font-extrabold text-xs flex items-center justify-center gap-1">Actions &#8943;</button>
                 </div>
-                ${cmtHtml}
+                ${cmtHtml}${tasksHtml}
               </div>`;
           }).join('');
 
@@ -900,6 +911,13 @@
           </div>`;
       }
 
+      const taskBarHost = document.getElementById('weeklyTaskSummaryHost');
+      if (taskBarHost) {
+        taskBarHost.innerHTML = typeof ppRenderWeeklyTaskSummaryBar === 'function'
+          ? ppRenderWeeklyTaskSummaryBar(db, periods, visibleDepts, visibleProjs)
+          : '';
+      }
+
       deck.innerHTML = `
         ${mobileFilterBannerHtml}
         <nav aria-label="Select roadmap period" class="flex items-center gap-2 overflow-x-auto snap-x snap-mandatory no-scrollbar py-0.5">
@@ -1002,6 +1020,9 @@
         const dstKey = getCommentKey(deptId, projId, targetPk);
         if (!db.comments[dstKey]) db.comments[dstKey] = srcCmt;
         if (!isCopy) delete db.comments[getCommentKey(deptId, projId, srcPeriodKey)];
+      }
+      if (typeof ppMoveOrCopyCellTasks === 'function') {
+        ppMoveOrCopyCellTasks(deptId, projId, srcPeriodKey, deptId, projId, targetPk, ui.timeUnit, isCopy, db);
       }
 
       const dCode = db.departments.find(d => d.id === deptId)?.code || deptId;
@@ -1231,6 +1252,7 @@
 
     function renderMatrix() {
       const db = getActiveDB();
+      if (typeof ppAutoRolloverAllocationTasks === 'function') ppAutoRolloverAllocationTasks(db);
       const wrapper = document.getElementById('matrixWrapper');
       if (!wrapper) return;
       const keepScroll = _lastMatrixAxis === ui.axis;
@@ -1256,6 +1278,13 @@
       const spotlightId = ui.spotlightProjId || '';
       const showCost = hasAnyDayRates(db);
 
+      const taskBarHost = document.getElementById('weeklyTaskSummaryHost');
+      if (taskBarHost) {
+        taskBarHost.innerHTML = typeof ppRenderWeeklyTaskSummaryBar === 'function'
+          ? ppRenderWeeklyTaskSummaryBar(db, periods, visibleDepts, visibleProjs)
+          : '';
+      }
+
       const matchesSearchForPair = (dept, proj, pk) => {
         if (!searchQ) return true;
         if (dept && (`${dept.name} ${dept.code} ${dept.manager || ''}`).toLowerCase().includes(searchQ)) return true;
@@ -1264,6 +1293,8 @@
           const cmt = getCellProjectComments(dept.id, proj.id, pk, ui.timeUnit, db);
           if (cmt.direct && cmt.direct.toLowerCase().includes(searchQ)) return true;
           if (cmt.weekEntries.some(we => we.text.toLowerCase().includes(searchQ))) return true;
+          const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(dept.id, proj.id, pk, ui.timeUnit, db) : [];
+          if (cellTasks.some(t => String(t.text || '').toLowerCase().includes(searchQ))) return true;
         }
         return false;
       };
@@ -1273,7 +1304,8 @@
           return periods.some(pk => visibleProjs.some(p => {
             const a = getAllocationForPeriod(row.id, p.id, pk, ui.timeUnit, db.allocations);
             const c = getCellProjectComments(row.id, p.id, pk, ui.timeUnit, db);
-            return a.hasData || c.hasAny;
+            const tks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(row.id, p.id, pk, ui.timeUnit, db) : [];
+            return a.hasData || c.hasAny || tks.length > 0;
           }));
         }
         const isAdminRowCheck = isNonFteProject(row);
@@ -1281,7 +1313,8 @@
           if (visibleDepts.some(d => {
             const a = getAllocationForPeriod(d.id, row.id, pk, ui.timeUnit, db.allocations);
             const c = getCellProjectComments(d.id, row.id, pk, ui.timeUnit, db);
-            return a.hasData || c.hasAny || (isAdminRowCheck && Boolean(c.monthNote));
+            const tks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(d.id, row.id, pk, ui.timeUnit, db) : [];
+            return a.hasData || c.hasAny || tks.length > 0 || (isAdminRowCheck && Boolean(c.monthNote));
           })) return true;
           return getMilestonesInPeriod(pk, ui.timeUnit, db.milestones).some(m => m.projectId === row.id);
         });
@@ -1289,10 +1322,17 @@
 
       const rawRows = ui.axis === 'department' ? visibleDepts : visibleProjs;
       let hiddenEmptyCount = 0;
+      const activeTaskFilter = ui.taskFilter || 'all';
       const rows = rawRows.filter(row => {
         if (ui.hideEmptyRows && !isRowActiveInPeriods(row)) {
           hiddenEmptyCount++;
           return false;
+        }
+        if (activeTaskFilter !== 'all' && typeof ppGetCellTasks === 'function' && typeof ppMatchesTaskFilter === 'function') {
+          const rowHasMatchingTask = ui.axis === 'department'
+            ? periods.some(pk => visibleProjs.some(p => ppMatchesTaskFilter(ppGetCellTasks(row.id, p.id, pk, ui.timeUnit, db), activeTaskFilter)))
+            : periods.some(pk => visibleDepts.some(d => ppMatchesTaskFilter(ppGetCellTasks(d.id, row.id, pk, ui.timeUnit, db), activeTaskFilter)));
+          if (!rowHasMatchingTask) return false;
         }
         if (ui.filterOverOnly) {
           if (ui.axis === 'department') {
@@ -1326,14 +1366,16 @@
             return periods.some(pk => visibleProjs.some(p => {
               const a = getAllocationForPeriod(row.id, p.id, pk, ui.timeUnit, db.allocations);
               const c = getCellProjectComments(row.id, p.id, pk, ui.timeUnit, db);
-              return (a.hasData || c.hasAny) && matchesSearchForPair(row, p, pk);
+              const tks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(row.id, p.id, pk, ui.timeUnit, db) : [];
+              return (a.hasData || c.hasAny || tks.length > 0) && matchesSearchForPair(row, p, pk);
             }));
           } else {
             if (matchesSearchForPair(null, row, null)) return true;
             return periods.some(pk => visibleDepts.some(d => {
               const a = getAllocationForPeriod(d.id, row.id, pk, ui.timeUnit, db.allocations);
               const c = getCellProjectComments(d.id, row.id, pk, ui.timeUnit, db);
-              return (a.hasData || c.hasAny) && matchesSearchForPair(d, row, pk);
+              const tks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(d.id, row.id, pk, ui.timeUnit, db) : [];
+              return (a.hasData || c.hasAny || tks.length > 0) && matchesSearchForPair(d, row, pk);
             }));
           }
         }
@@ -1787,7 +1829,9 @@
             const pills = visibleProjs.map(p => {
               const a = getAllocationForPeriod(row.id, p.id, pk, ui.timeUnit, db.allocations);
               const cmtObj = getCellProjectComments(row.id, p.id, pk, ui.timeUnit, db);
-              if (!a.hasData && !cmtObj.hasAny) return '';
+              const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(row.id, p.id, pk, ui.timeUnit, db) : [];
+              if (!a.hasData && !cmtObj.hasAny && !cellTasks.length) return '';
+              if (typeof ppMatchesTaskFilter === 'function' && !ppMatchesTaskFilter(cellTasks)) return '';
               if (searchQ && !matchesSearchForPair(row, p, pk)) return '';
 
               const spotlightCls = spotlightId ? (spotlightId === p.id ? 'spotlight-active' : 'spotlight-dimmed') : '';
@@ -1799,6 +1843,9 @@
                 : resolveCardStyle(a.hasData ? a.avgFte : 0, capFte, p.color);
               const filledTheme = useColorFill ? getFilledCardTheme(fillHex) : null;
               const cmtHtml = renderInlineCommentHtml(cmtObj, filledTheme);
+              const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+                ? ppRenderInlineCellTasksHtml(row.id, p.id, pk, cellTasks, filledTheme, isPresent, false)
+                : '';
               const fullTooltipNote = cmtObj.direct ? `\nNote: ${cmtObj.direct}` : '';
               const pipeBadgeFilled = p.tentative
                 ? `<span class="px-1 rounded text-[9px] font-extrabold uppercase shrink-0" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};" title="Tentative / Pipeline project">Pipe</span>`
@@ -1817,12 +1864,16 @@
                 : `<button type="button" onclick="event.stopPropagation(); toggleSpotlightProject('${p.id}')" title="${spotlightId === p.id ? 'Clear project spotlight' : 'Spotlight this project across all departments'}" aria-label="Spotlight ${escapeHtml(p.name)}"
                      class="${spotVisCls} ${spotlightId === p.id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-700'} ${spotSizeCls} rounded font-bold flex items-center justify-center transition shrink-0">&#9678;</button>`;
 
-              if (!a.hasData && cmtObj.hasAny) {
-                const noteClickFn = isAdminProj ? `openAllocationModal('${row.id}', '${p.id}', '${pk}')` : `openCellDetailModal('${row.id}', '${pk}')`;
-                const noteKindLbl = isAdminProj ? 'Admin' : 'Note';
-                const noteTipKind = isAdminProj ? 'Admin (Non-FTE) — Issues & Meetings' : 'Comment Only';
+              if (!a.hasData && (cmtObj.hasAny || cellTasks.length > 0)) {
+                const isTasksOnly = cellTasks.length > 0 && !cmtObj.hasAny;
+                const noteClickFn = (isAdminProj || isTasksOnly) ? `openAllocationModal('${row.id}', '${p.id}', '${pk}')` : `openCellDetailModal('${row.id}', '${pk}')`;
+                const noteKindLbl = isAdminProj ? 'Admin' : (isTasksOnly ? '0 FTE' : 'Note');
+                const noteTipKind = isAdminProj ? 'Admin (Non-FTE) — Issues & Meetings' : (isTasksOnly ? 'Carried-over / Weekly Tasks (0 FTE allocated)' : 'Comment Only');
                 if (isAdminProj) {
                   const adminCmtHtml = renderInlineCommentHtml(cmtObj, null);
+                  const adminTasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+                    ? ppRenderInlineCellTasksHtml(row.id, p.id, pk, cellTasks, null, isPresent, false)
+                    : '';
                   const adminSpotBtn = `<button type="button" onclick="event.stopPropagation(); toggleSpotlightProject('${p.id}')" title="${spotlightId === p.id ? 'Clear project spotlight' : 'Spotlight this project across all departments'}" aria-label="Spotlight ${escapeHtml(p.name)}"
                      class="${spotVisCls} ${spotlightId === p.id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600 hover:bg-indigo-100 hover:text-indigo-700'} ${spotSizeCls} rounded font-bold flex items-center justify-center transition shrink-0">&#9678;</button>`;
                   return `
@@ -1840,7 +1891,7 @@
                           <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700 shrink-0">&#9998; Admin</span>
                         </div>
                       </div>
-                      ${adminCmtHtml}
+                      ${adminCmtHtml}${adminTasksHtml}
                     </div>`;
                 }
                 if (useColorFill) {
@@ -1860,7 +1911,7 @@
                           <span class="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style="background-color:${filledTheme.chipBg};">${noteKindLbl}</span>
                         </div>
                       </div>
-                      ${cmtHtml}
+                      ${cmtHtml}${tasksHtml}
                     </div>`;
                 }
                 return `
@@ -1875,10 +1926,10 @@
                       </div>
                       <div class="flex items-center gap-1 shrink-0">
                         ${spotlightBtn}
-                        <span class="text-[10px] font-bold ${isAdminProj ? 'px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700' : 'text-indigo-600'} shrink-0">${noteKindLbl}</span>
+                        <span class="text-[10px] font-bold ${isAdminProj ? 'px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700' : (isTasksOnly ? 'px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800' : 'text-indigo-600')} shrink-0">${noteKindLbl}</span>
                       </div>
                     </div>
-                    ${cmtHtml}
+                    ${cmtHtml}${tasksHtml}
                   </div>`;
               }
 
@@ -1920,7 +1971,7 @@
                           class="desktop-hover-reveal opacity-0 group-hover/pill:opacity-100 px-1 rounded font-bold transition" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};">&rarr;</button>` : ''}
                       </div>
                     </div>
-                    ${cmtHtml}
+                    ${cmtHtml}${tasksHtml}
                   </div>`;
               }
 
@@ -1950,7 +2001,7 @@
                         class="desktop-hover-reveal opacity-0 group-hover/pill:opacity-100 px-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold transition">&rarr;</button>` : ''}
                     </div>
                   </div>
-                  ${cmtHtml}
+                  ${cmtHtml}${tasksHtml}
                 </div>`;
             }).join('');
 
@@ -2395,7 +2446,9 @@
             const pills = visibleDepts.map(d => {
               const a = getAllocationForPeriod(d.id, row.id, pk, ui.timeUnit, db.allocations);
               const cmtObj = getCellProjectComments(d.id, row.id, pk, ui.timeUnit, db);
-              if (!a.hasData && !cmtObj.hasAny) return '';
+              const cellTasks = typeof ppGetCellTasks === 'function' ? ppGetCellTasks(d.id, row.id, pk, ui.timeUnit, db) : [];
+              if (!a.hasData && !cmtObj.hasAny && !cellTasks.length) return '';
+              if (typeof ppMatchesTaskFilter === 'function' && !ppMatchesTaskFilter(cellTasks)) return '';
               if (searchQ && !matchesSearchForPair(d, row, pk)) return '';
 
               const deptCap = getDeptCapacityForPeriod(d.id, pk, ui.timeUnit, db).avgFte;
@@ -2404,29 +2457,36 @@
                 : resolveCardStyle(a.hasData ? a.avgFte : 0, deptCap, d.color);
               const filledTheme = useColorFill ? getFilledCardTheme(fillHex) : null;
               const cmtHtml = renderInlineCommentHtml(cmtObj, filledTheme);
+              const tasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+                ? ppRenderInlineCellTasksHtml(d.id, row.id, pk, cellTasks, filledTheme, isPresent, false)
+                : '';
               const fullTooltipNote = cmtObj.direct ? `\nNote: ${cmtObj.direct}` : '';
 
-              if (!a.hasData && cmtObj.hasAny) {
-                const noteClickFn = isAdminProjRow ? `openAllocationModal('${d.id}', '${row.id}', '${pk}')` : `openCellDetailModal('${row.id}', '${pk}')`;
-                const noteKindLbl = isAdminProjRow ? 'Admin' : 'Note';
+              if (!a.hasData && (cmtObj.hasAny || cellTasks.length > 0)) {
+                const isTasksOnly = cellTasks.length > 0 && !cmtObj.hasAny;
+                const noteClickFn = (isAdminProjRow || isTasksOnly) ? `openAllocationModal('${d.id}', '${row.id}', '${pk}')` : `openCellDetailModal('${row.id}', '${pk}')`;
+                const noteKindLbl = isAdminProjRow ? 'Admin' : (isTasksOnly ? '0 FTE' : 'Note');
                 if (isAdminProjRow) {
                   const adminCmtHtml = renderInlineCommentHtml(cmtObj, null);
+                  const adminTasksHtml = typeof ppRenderInlineCellTasksHtml === 'function'
+                    ? ppRenderInlineCellTasksHtml(d.id, row.id, pk, cellTasks, null, isPresent, false)
+                    : '';
                   return `
                     <div onclick="event.stopPropagation(); ${noteClickFn}"
                       title="[${escapeHtml(d.code)}] ${escapeHtml(d.name)} — Admin (Non-FTE)${escapeHtml(fullTooltipNote)}"
-                      class="matrix-card admin-hashed-card ${rowSpotCls} ${s.pillBox} rounded-lg cursor-pointer shadow-2xs"
+                      class="matrix-card admin-hashed-card group/pill ${rowSpotCls} ${s.pillBox} rounded-lg cursor-pointer shadow-2xs"
                       style="--admin-accent:${d.color}; --accent-w:${s.pillBorderW};">
                       <div class="flex items-center justify-between gap-1.5">
                         <span class="truncate font-bold text-slate-800">${escapeHtml(d.name)}</span>
                         <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700 shrink-0">&#9998; Admin</span>
                       </div>
-                      ${adminCmtHtml}
+                      ${adminCmtHtml}${adminTasksHtml}
                     </div>`;
                 }
                 if (useColorFill) {
                   return `
                     <div onclick="event.stopPropagation(); ${noteClickFn}"
-                      class="matrix-card ${rowSpotCls} ${s.pillBox} rounded-xl cursor-pointer shadow-2xs"
+                      class="matrix-card group/pill ${rowSpotCls} ${s.pillBox} rounded-xl cursor-pointer shadow-2xs"
                       style="background-color:${filledTheme.bg}; color:${filledTheme.text}; border: 1.5px dashed ${filledTheme.border};">
                       <div class="flex items-center justify-between gap-1.5">
                         <div class="flex items-center gap-1.5 min-w-0">
@@ -2435,18 +2495,18 @@
                         </div>
                         <span class="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0" style="background-color:${filledTheme.chipBg};">${noteKindLbl}</span>
                       </div>
-                      ${cmtHtml}
+                      ${cmtHtml}${tasksHtml}
                     </div>`;
                 }
                 return `
                   <div onclick="event.stopPropagation(); ${noteClickFn}"
-                    class="matrix-card accent-card ${rowSpotCls} ${s.pillBox} rounded-lg bg-white/90 border border-dashed border-slate-300 hover:border-indigo-400 cursor-pointer"
+                    class="matrix-card accent-card group/pill ${rowSpotCls} ${s.pillBox} rounded-lg bg-white/90 border border-dashed border-slate-300 hover:border-indigo-400 cursor-pointer"
                     style="--accent-color:${d.color}; --accent-w:${s.pillBorderW}; border-left: ${s.pillBorderW} solid ${d.color};">
                     <div class="flex items-center justify-between gap-1.5">
                       <span class="truncate font-semibold text-slate-700">${escapeHtml(d.name)}</span>
-                      <span class="text-[10px] font-bold ${isAdminProjRow ? 'px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700' : 'text-indigo-600'} shrink-0">${noteKindLbl}</span>
+                      <span class="text-[10px] font-bold ${isAdminProjRow ? 'px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700' : (isTasksOnly ? 'px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800' : 'text-indigo-600')} shrink-0">${noteKindLbl}</span>
                     </div>
-                    ${cmtHtml}
+                    ${cmtHtml}${tasksHtml}
                   </div>`;
               }
 
@@ -2497,7 +2557,7 @@
                           class="desktop-hover-reveal opacity-0 group-hover/pill:opacity-100 px-1 rounded font-bold transition" style="background-color:${filledTheme.chipBg}; color:${filledTheme.text};">&rarr;</button>` : ''}
                       </div>
                     </div>
-                    ${cmtHtml}
+                    ${cmtHtml}${tasksHtml}
                   </div>`;
               }
 
@@ -2525,7 +2585,7 @@
                         class="desktop-hover-reveal opacity-0 group-hover/pill:opacity-100 px-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold transition">&rarr;</button>` : ''}
                     </div>
                   </div>
-                  ${cmtHtml}
+                  ${cmtHtml}${tasksHtml}
                 </div>`;
             }).join('');
 
@@ -2935,6 +2995,9 @@
           if (!db.comments[dstKey]) db.comments[dstKey] = srcComment;
           else if (!db.comments[dstKey].includes(srcComment)) db.comments[dstKey] = `${db.comments[dstKey]}\n${srcComment}`;
           if (!isCopy) delete db.comments[getCommentKey(srcDept, srcProj, srcPeriod)];
+        }
+        if (typeof ppMoveOrCopyCellTasks === 'function') {
+          ppMoveOrCopyCellTasks(srcDept, srcProj, srcPeriod, dstDept, dstProj, targetPeriodKey, ui.timeUnit, isCopy, db);
         }
 
         const dName = db.departments.find(d => d.id === dstDept)?.code || dstDept;
