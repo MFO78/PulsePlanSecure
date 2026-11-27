@@ -11,7 +11,7 @@
   const OPTIONAL_GROUPS = {
     identity: ['acronym', 'description', 'heritage'],
     docs: ['mechDrawing', 'elecDrawing', 'refDoc'],
-    proc: ['manufacturer', 'partNumber', 'procurementStatus', 'leadTime', 'componentAlt'],
+    proc: ['manufacturer', 'partNumber', 'procurementStatus', 'leadTime', 'unitCost', 'componentAlt'],
     eng: ['qty', 'mass', 'powerConsumption', 'powerDissipation', 'mtbf', 'lru', 'spareAvailable', 'spareToDeliver'],
   };
   const OPTIONAL_FIELD_KEYS = [
@@ -133,6 +133,7 @@
       spareAvailable: normalizeYesNo(it.spareAvailable),
       spareToDeliver: normalizeYesNo(it.spareToDeliver),
       leadTime: parseOptionalNumber(it.leadTime),
+      unitCost: parseOptionalNumber(it.unitCost),
       componentAlt: String(it.componentAlt || '').trim().slice(0, 200),
     })) : [];
     const validIds = new Set(items.map(i => i.id));
@@ -253,7 +254,7 @@
     ['description', 'Description'], ['notes', 'Notes'],
     ['mechDrawing', 'Mech. Dwg'], ['elecDrawing', 'Elec. Dwg'], ['refDoc', 'Ref. Doc'],
     ['manufacturer', 'Manufacturer'], ['partNumber', 'Part No.'], ['procurementStatus', 'Proc. Status'],
-    ['leadTime', 'Lead (wks)'], ['componentAlt', 'Alternative'],
+    ['leadTime', 'Lead (wks)'], ['unitCost', 'Unit Cost'], ['componentAlt', 'Alternative'],
     ['qty', 'Qty'], ['mass', 'Mass (kg)'], ['powerConsumption', 'Pwr Cons (W)'], ['powerDissipation', 'Pwr Diss (W)'],
     ['mtbf', 'MTBF (h)'], ['lru', 'LRU'], ['spareAvailable', 'Spare Avail.'], ['spareToDeliver', 'Spare Deliv.'],
     ['parentId', 'Parent'],
@@ -267,7 +268,7 @@
       it.manufacturer || '', it.partNumber || '', it.procurementStatus || '',
       it.qty ?? null, it.mass ?? null, it.powerConsumption ?? null, it.powerDissipation ?? null, it.mtbf ?? null,
       it.lru || '', it.spareAvailable || '', it.spareToDeliver || '',
-      it.leadTime ?? null, it.componentAlt || '',
+      it.leadTime ?? null, it.unitCost ?? null, it.componentAlt || '',
     ]);
   }
 

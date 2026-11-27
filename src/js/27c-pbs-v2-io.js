@@ -9,7 +9,7 @@
     'Manufacturer', 'Part Number', 'Procurement/Manufacture Status',
     'Mass (kg)', 'Power Consumption (W)', 'Power Dissipation (W)', 'MTBF (h)',
     'LRU', 'SPARE Available', 'SPARE to be Delivered',
-    'Lead Time (wks)', 'Component Alternative', 'Quantity',
+    'Lead Time (wks)', 'Unit Cost', 'Component Alternative', 'Quantity',
   ];
 
   const POSITIONAL_KEYS = [
@@ -19,7 +19,7 @@
     'manufacturer', 'partNumber', 'procurementStatus',
     'mass', 'powerConsumption', 'powerDissipation', 'mtbf',
     'lru', 'spareAvailable', 'spareToDeliver',
-    'leadTime', 'componentAlt', 'qty',
+    'leadTime', 'unitCost', 'componentAlt', 'qty',
   ];
 
   const HEADER_ALIASES = {
@@ -48,6 +48,7 @@
     spareavailable: 'spareAvailable', spareavailableyesno: 'spareAvailable',
     sparetobedelivered: 'spareToDeliver', sparetodeliver: 'spareToDeliver', sparetobedeliveredyesno: 'spareToDeliver', sparetodeliveryesno: 'spareToDeliver',
     leadtimewks: 'leadTime', leadtimeweeks: 'leadTime', leadtimew: 'leadTime', leadtime: 'leadTime',
+    unitcost: 'unitCost', cost: 'unitCost', materialcost: 'unitCost', componentcost: 'unitCost', unitprice: 'unitCost', price: 'unitCost',
     componentalternative: 'componentAlt', alternative: 'componentAlt', altcomponent: 'componentAlt', secondsource: 'componentAlt',
     quantity: 'qty', qty: 'qty', count: 'qty', units: 'qty', unitcount: 'qty', nb: 'qty',
   };
@@ -105,7 +106,7 @@
         item.manufacturer || '', item.partNumber || '', item.procurementStatus || '',
         fmt(item.mass), fmt(item.powerConsumption), fmt(item.powerDissipation), fmt(item.mtbf),
         item.lru || '', item.spareAvailable || '', item.spareToDeliver || '',
-        fmt(item.leadTime), item.componentAlt || '', item.qty != null ? String(item.qty) : '',
+        fmt(item.leadTime), fmt(item.unitCost), item.componentAlt || '', item.qty != null ? String(item.qty) : '',
       ].map(csvCell).join(','));
     });
     return '\uFEFF' + lines.join('\r\n');
@@ -230,6 +231,7 @@
         spareAvailable: parseYn(get('spareAvailable'), 'SPARE Available'),
         spareToDeliver: parseYn(get('spareToDeliver'), 'SPARE to be Delivered'),
         leadTime: parseCsvNumber(get('leadTime'), /\s*(wk|wks|week|weeks)$/i, rowNum, 'Lead Time (wks)', warnings),
+        unitCost: parseCsvNumber(get('unitCost'), /^[€$£]\s*|\s*[€$£]$/gi, rowNum, 'Unit Cost', warnings),
         componentAlt: get('componentAlt').slice(0, 200),
       });
       if (!codeToId.has(code)) codeToId.set(code, id);

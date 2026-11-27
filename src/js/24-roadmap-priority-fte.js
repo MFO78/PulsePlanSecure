@@ -66,15 +66,18 @@
     });
   }
 
-  function findAllocationFteInputs() {
+  function findAllocationFteInputs(root) {
+    const scope = root || document;
     const candidates = [
-      document.getElementById('allocFte'),
-      document.getElementById('allocationFte'),
-      document.getElementById('fteInput'),
+      scope.querySelector ? scope.querySelector('#allocFte') : document.getElementById('allocFte'),
+      scope.querySelector ? scope.querySelector('#allocationFte') : document.getElementById('allocationFte'),
+      scope.querySelector ? scope.querySelector('#fteInput') : document.getElementById('fteInput'),
+      scope.querySelector ? scope.querySelector('input[name="fte"]') : null,
+      scope.querySelector ? scope.querySelector('input[data-field="fte"]') : null,
     ].filter(Boolean);
 
-    if (candidates.length === 0) {
-      const labels = Array.from(document.querySelectorAll('label'));
+    if (candidates.length === 0 && typeof scope.querySelectorAll === 'function') {
+      const labels = Array.from(scope.querySelectorAll('label'));
       for (let i = 0; i < labels.length; i++) {
         const txt = String(labels[i].textContent || '').toLowerCase();
         if (txt.includes('fte')) {
@@ -84,7 +87,7 @@
         }
       }
     }
-    return candidates;
+    return Array.from(new Set(candidates));
   }
 
   function isEmptyOrZero(val) {
@@ -94,16 +97,36 @@
     return !Number.isFinite(n) || n <= 0;
   }
 
+  function isNewActivityModal(modalRoot, openArgs) {
+    if (openArgs && openArgs.length >= 3) {
+      const [deptId, projId, periodKey] = openArgs;
+      const db = getDb();
+      if (deptId && projId && periodKey && db && db.allocations) {
+        const directKey = `${deptId}::${projId}::${periodKey}`;
+        const existing = db.allocations[directKey];
+        if (existing == null || Number(existing) <= 0) return true;
+      }
+    }
+    if (!modalRoot) return false;
+    const heading = modalRoot.querySelector ? modalRoot.querySelector('h1, h2, h3, [data-modal-title]') : null;
+    const titleTxt = String(heading ? heading.textContent : '').toLowerCase();
+    if (/\b(add|new)\b/.test(titleTxt) && /\b(activity|allocation|task|assignment)\b/.test(titleTxt)) return true;
+    return false;
+  }
+
   let lastDesiredFte = '1';
   let isNewAllocationSession = false;
 
-  function applyDefaultFteIfEmpty() {
-    const candidates = findAllocationFteInputs();
+  function applyDefaultFteIfNew(openArgs) {
+    const modalCard = document.getElementById('modalCard') || document.getElementById('modalOverlay');
+    const candidates = findAllocationFteInputs(modalCard || document);
     if (!candidates.length) return;
 
-    // Only treat as a NEW allocation if the native modal left the FTE input empty or 0
+    const modalRoot = candidates[0].closest ? (candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || modalCard || document) : (modalCard || document);
     const existingVal = String(candidates[0].value ?? '').trim();
-    if (!isEmptyOrZero(existingVal)) {
+    const isNew = isEmptyOrZero(existingVal) || isNewActivityModal(modalRoot, openArgs);
+
+    if (!isNew) {
       isNewAllocationSession = false;
       lastDesiredFte = existingVal;
       return;
@@ -118,13 +141,13 @@
           if (String(inp.value || '').trim() !== '') lastDesiredFte = String(inp.value).trim();
         });
       }
-      if (isEmptyOrZero(inp.value)) {
+      if (isEmptyOrZero(inp.value) || inp.value !== '1') {
         inp.value = '1';
         inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
       }
     });
 
-    const modalRoot = candidates[0].closest('form') || candidates[0].closest('[role="dialog"]') || candidates[0].closest('.fixed') || document;
     if (modalRoot && typeof modalRoot.querySelectorAll === 'function') {
       modalRoot.querySelectorAll('select').forEach(sel => {
         if (sel.__ppFteGuard) return;
@@ -133,7 +156,7 @@
           if (!isNewAllocationSession) return;
           setTimeout(() => {
             if (!isNewAllocationSession) return;
-            findAllocationFteInputs().forEach(inp => {
+            findAllocationFteInputs(modalRoot).forEach(inp => {
               if (isEmptyOrZero(inp.value)) {
                 inp.value = lastDesiredFte || '1';
                 inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -145,16 +168,17 @@
     }
   }
 
-  if (typeof openAllocationModal === 'function') {
-    const nativeOpenAlloc = openAllocationModal;
-    openAllocationModal = function (...args) {
-      const res = nativeOpenAlloc.apply(this, args);
-      // Wait for native modal population, then ONLY set 1 FTE if empty/0 (never overwrite existing task FTE)
-      applyDefaultFteIfEmpty();
-      setTimeout(applyDefaultFteIfEmpty, 0);
-      return res;
-    };
-  }
+  ['openAllocationModal', 'openCellModal', 'openAddActivityModal'].forEach(fnName => {
+    if (typeof globalThis[fnName] === 'function') {
+      const nativeFn = globalThis[fnName];
+      globalThis[fnName] = function (...args) {
+        const res = nativeFn.apply(this, args);
+        applyDefaultFteIfNew(args);
+        setTimeout(() => applyDefaultFteIfNew(args), 0);
+        return res;
+      };
+    }
+  });
 
   if (typeof renderRoadmap === 'function') {
     const nativeRenderRoadmap = renderRoadmap;

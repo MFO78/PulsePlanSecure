@@ -1,5 +1,6 @@
 /* ============================================================================
- * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS, CAPACITY RESET FIX,
+ * 30. HEALTH & EVOLUTION BURN/BUDGET ANALYSIS (LABOUR + PBS MATERIALS +
+ *     EXTERNAL CONSULTANTS), PBS UNIT COST UI ENHANCER, CAPACITY RESET FIX,
  *     LIFECYCLE HOOK BUS & ACCESSIBILITY / DARK-MODE ENHANCEMENTS
  * ============================================================================ */
 (function ppHealthBurnAndFixesModule() {
@@ -36,6 +37,7 @@
       milestones: [],
       snapshots: [],
       changeLog: [],
+      externalCosts: [],
       settings: {},
     };
   }
@@ -68,6 +70,103 @@
     if (!isNaN(direct) && direct > 0) return direct;
     const def = Number(db && db.settings && db.settings.defaultDayRate);
     return !isNaN(def) && def > 0 ? def : 0;
+  }
+
+  function loadPbsCacheSafe() {
+    try {
+      if (globalThis.__ppPbsV2 && globalThis.__ppPbsV2.data && typeof globalThis.__ppPbsV2.data.loadCache === 'function') {
+        return globalThis.__ppPbsV2.data.loadCache() || {};
+      }
+      const raw = typeof safeGetStorage === 'function'
+        ? safeGetStorage('pulseplan_pbs_cache_v1')
+        : (typeof localStorage !== 'undefined' ? localStorage.getItem('pulseplan_pbs_cache_v1') : null);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_e) {
+      return {};
+    }
+  }
+
+  function computePbsMaterialCost(projectIds, pbsCache) {
+    const cache = pbsCache || loadPbsCacheSafe();
+    const idSet = new Set(projectIds || []);
+    let total = 0;
+    let itemCount = 0;
+    idSet.forEach(pid => {
+      const doc = cache[pid];
+      const items = doc && Array.isArray(doc.items) ? doc.items : [];
+      items.forEach(it => {
+        const uc = Number(it && it.unitCost);
+        if (Number.isFinite(uc) && uc > 0) {
+          const q = (Number.isFinite(Number(it.qty)) && Number(it.qty) >= 1) ? Number(it.qty) : 1;
+          total += uc * q;
+          itemCount++;
+        }
+      });
+    });
+    return { total, itemCount };
+  }
+
+  /* ---------- PBS Procurement Unit Cost UI Enhancer ---------- */
+  function enhancePbsProcurementUnitCostForm() {
+    if (typeof document === 'undefined' || !document.querySelector) return;
+    const form = document.getElementById('ppPbsItemForm');
+    if (!form || form.querySelector('#ppPbsFUnitCost')) return;
+    const procSection = form.querySelector('details[data-pbs-section="proc"]');
+    if (!procSection) return;
+
+    const pbsCore = globalThis.__ppPbsV2 && globalThis.__ppPbsV2.core;
+    const activeDoc = pbsCore && pbsCore.state ? pbsCore.state.activeDoc : null;
+    const codeInput = form.querySelector('#ppPbsFCode');
+    const currentCode = codeInput ? String(codeInput.value || '').trim() : '';
+    const existingItem = activeDoc && Array.isArray(activeDoc.items)
+      ? activeDoc.items.find(it => String(it.code || '').trim() === currentCode)
+      : null;
+    const initialVal = existingItem && existingItem.unitCost != null ? String(existingItem.unitCost) : '';
+
+    const db = getDb();
+    const sym = (db && db.settings && db.settings.currencySymbol) || '€';
+
+    const wrap = document.createElement('label');
+    wrap.className = 'block';
+    wrap.innerHTML = `
+      <span class="block text-[11px] font-semibold text-slate-600 mb-1">Unit Cost (${esc(sym)}) <span class="text-slate-400 font-normal">&times; Qty</span></span>
+      <input id="ppPbsFUnitCost" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(initialVal)}" class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs" />
+    `;
+    const grid = procSection.querySelector('.grid') || procSection;
+    grid.appendChild(wrap);
+
+    if (!form.__ppUnitCostWired) {
+      form.__ppUnitCostWired = true;
+      form.addEventListener('submit', () => {
+        const ucEl = form.querySelector('#ppPbsFUnitCost');
+        const cEl = form.querySelector('#ppPbsFCode');
+        const rawUc = ucEl ? String(ucEl.value || '').trim() : '';
+        const targetCode = cEl ? String(cEl.value || '').trim() : '';
+        const parsedUc = rawUc === '' ? null : (Number.isFinite(Number(rawUc)) && Number(rawUc) >= 0 ? Math.round(Number(rawUc) * 10000) / 10000 : null);
+        setTimeout(() => {
+          const core = globalThis.__ppPbsV2 && globalThis.__ppPbsV2.core;
+          const doc = core && core.state ? core.state.activeDoc : null;
+          if (!doc || !Array.isArray(doc.items)) return;
+          const savedItem = doc.items.find(it => String(it.code || '').trim() === targetCode);
+          if (savedItem) {
+            savedItem.unitCost = parsedUc;
+            if (typeof core.scheduleSave === 'function') core.scheduleSave();
+            if (typeof ui !== 'undefined' && ui.activeTab === 'health') renderHealthBurnBudgetFrame();
+          }
+        }, 30);
+      }, true);
+    }
+  }
+
+  function wirePbsDialogObserver() {
+    if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || document.__ppPbsUnitCostObserver) return;
+    document.__ppPbsUnitCostObserver = new MutationObserver(() => {
+      if (document.getElementById('ppPbsItemForm')) enhancePbsProcurementUnitCostForm();
+    });
+    if (document.body) {
+      document.__ppPbsUnitCostObserver.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   function injectBurnAndA11yStyles() {
@@ -256,8 +355,8 @@
     }, true);
   }
 
-  /* ---------- 3. Burn & Budget Analysis Computation ---------- */
-  function computeBurnBudgetAnalysis(db, periods, timeUnit, filterProj, filterDept, includeTentative) {
+  /* ---------- 3. Burn & Budget Analysis Computation (Labour + PBS Materials + External Consultants) ---------- */
+  function computeBurnBudgetAnalysis(db, periods, timeUnit, filterProj, filterDept, includeTentative, pbsCacheOverride) {
     const allDepts = (db.departments || []).filter(d => filterDept === 'all' || d.id === filterDept);
     const activeProjs = (db.projects || []).filter(p => {
       if (!p || p.archived) return false;
@@ -268,9 +367,16 @@
       if (!includeTentative && p.tentative) return false;
       return true;
     });
+    const activeProjIds = new Set(activeProjs.map(p => p.id));
+
+    const pbsMaterials = computePbsMaterialCost(Array.from(activeProjIds), pbsCacheOverride);
+    const externalCosts = (Array.isArray(db.externalCosts) ? db.externalCosts : []).filter(c => c && activeProjIds.has(c.projectId));
+    const externalTotalCost = externalCosts.reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
 
     const hasRates = (typeof hasAnyDayRates === 'function' ? hasAnyDayRates(db) : false) ||
-      allDepts.some(d => getDeptRate(d, db) > 0);
+      allDepts.some(d => getDeptRate(d, db) > 0) ||
+      pbsMaterials.total > 0 ||
+      externalTotalCost > 0;
 
     const totalBudgetDays = activeProjs.reduce((acc, p) => acc + (Number(p.budgetDays) || 0), 0);
     const totalBudgetCost = activeProjs.reduce((acc, p) => acc + (Number(p.budgetCost) || 0), 0);
@@ -279,7 +385,7 @@
       if (typeof getProjectTotalPlannedDays === 'function') return acc + (Number(getProjectTotalPlannedDays(p.id, db)) || 0);
       return acc;
     }, 0);
-    const allPlanCost = hasRates ? activeProjs.reduce((acc, p) => {
+    const allPlanLabourCost = hasRates ? activeProjs.reduce((acc, p) => {
       if (typeof getProjectTotalPlannedCost === 'function') return acc + (Number(getProjectTotalPlannedCost(p.id, db)) || 0);
       return acc;
     }, 0) : 0;
@@ -296,6 +402,7 @@
 
     let windowDays = 0;
     let windowCost = 0;
+    let externalWindowCost = 0;
     let cumulativeDays = 0;
     let cumulativeCost = 0;
 
@@ -324,6 +431,12 @@
           }
         }
       });
+      const periodExt = externalCosts
+        .filter(c => String(c.period || '').trim() === pk)
+        .reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
+      pCost += periodExt;
+      externalWindowCost += periodExt;
+
       windowDays += pDays;
       windowCost += pCost;
       cumulativeDays += pDays;
@@ -336,6 +449,7 @@
         label,
         days: pDays,
         cost: pCost,
+        externalCost: periodExt,
         cumDays: cumulativeDays,
         cumCost: cumulativeCost,
       };
@@ -346,7 +460,8 @@
       .sort((a, b) => (hasRates ? (b.cost - a.cost) : (b.days - a.days)) || (b.days - a.days));
 
     const effectiveTotalDays = allPlanDays > 0 ? allPlanDays : windowDays;
-    const effectiveTotalCost = allPlanCost > 0 ? allPlanCost : windowCost;
+    const baseLabourCost = allPlanLabourCost > 0 ? allPlanLabourCost : (windowCost - externalWindowCost);
+    const effectiveTotalCost = baseLabourCost + pbsMaterials.total + externalTotalCost;
 
     return {
       activeProjs,
@@ -355,6 +470,11 @@
       totalBudgetCost,
       windowDays,
       windowCost,
+      pbsMaterialCost: pbsMaterials.total,
+      pbsMaterialItems: pbsMaterials.itemCount,
+      externalCosts,
+      externalTotalCost,
+      externalWindowCost,
       effectiveTotalDays,
       effectiveTotalCost,
       avgPeriodDays: byPeriod.length ? windowDays / byPeriod.length : 0,
@@ -371,6 +491,7 @@
     injectBurnAndA11yStyles();
 
     const db = getDb();
+    if (!Array.isArray(db.externalCosts)) db.externalCosts = [];
     const periods = typeof getVisiblePeriods === 'function' ? getVisiblePeriods() : [];
     const data = computeBurnBudgetAnalysis(
       db,
@@ -419,6 +540,7 @@
 
     const fmtPrimary = (v) => (useCost ? fmtMoney(v, db) : fmtDays(v));
     const maxPeriodVal = Math.max(0.01, ...data.byPeriod.map(r => (useCost ? r.cost : r.days)));
+    const breakdownTotalCost = data.byDepartment.reduce((a, r) => a + r.cost, 0) + data.pbsMaterialCost + data.externalTotalCost;
 
     const periodRowsHtml = data.byPeriod.length === 0
       ? `<tr><td colspan="5" class="px-3 py-4 text-center text-slate-400">No periods in current timeframe.</td></tr>`
@@ -444,29 +566,93 @@
             </tr>`;
         }).join('');
 
-    const deptRowsHtml = data.byDepartment.length === 0
-      ? `<tr><td colspan="${useCost ? 5 : 4}" class="px-3 py-4 text-center text-slate-400">No spending allocated in this timeframe.</td></tr>`
-      : data.byDepartment.map(r => {
-          const val = useCost ? r.cost : r.days;
-          const sharePct = windowPrimary > 0 ? Math.round((val / windowPrimary) * 1000) / 10 : 0;
+    const deptRowsHtml = [
+      ...data.byDepartment.map(r => {
+        const val = useCost ? r.cost : r.days;
+        const denom = useCost ? breakdownTotalCost : data.windowDays;
+        const sharePct = denom > 0 ? Math.round((val / denom) * 1000) / 10 : 0;
+        return `
+          <tr class="border-b border-slate-100 hover:bg-slate-50/70">
+            <th scope="row" class="px-3 py-2 text-left font-semibold text-slate-800 whitespace-nowrap">
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${esc(r.dept.color || '#6366f1')}" aria-hidden="true"></span>
+                <span>${esc(r.dept.name)}</span>
+              </span>
+            </th>
+            ${useCost ? `<td class="px-3 py-2 text-right tabular-nums text-slate-500">${fmtMoney(r.rate, db)}/d</td>` : ''}
+            <td class="px-3 py-2 text-right tabular-nums text-slate-700">${fmtDays(r.days)}</td>
+            ${useCost ? `<td class="px-3 py-2 text-right tabular-nums font-bold text-slate-900">${fmtMoney(r.cost, db)}</td>` : ''}
+            <td class="px-3 py-2">
+              <div class="flex items-center gap-2">
+                <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+                  <div class="h-full rounded-full" style="width:${Math.min(100, sharePct)}%;background:${esc(r.dept.color || '#6366f1')}"></div>
+                </div>
+                <span class="text-[11px] font-bold tabular-nums text-slate-700 w-11 text-right">${sharePct}%</span>
+              </div>
+            </td>
+          </tr>`;
+      }),
+      ...(useCost && data.pbsMaterialCost > 0 ? [(() => {
+        const sharePct = breakdownTotalCost > 0 ? Math.round((data.pbsMaterialCost / breakdownTotalCost) * 1000) / 10 : 0;
+        return `
+          <tr class="border-b border-slate-100 hover:bg-slate-50/70">
+            <th scope="row" class="px-3 py-2 text-left font-semibold text-slate-800 whitespace-nowrap">
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full shrink-0 bg-amber-500" aria-hidden="true"></span>
+                <span>PBS Materials (${data.pbsMaterialItems} item${data.pbsMaterialItems === 1 ? '' : 's'})</span>
+              </span>
+            </th>
+            <td class="px-3 py-2 text-right text-slate-400">&mdash;</td>
+            <td class="px-3 py-2 text-right text-slate-400">&mdash;</td>
+            <td class="px-3 py-2 text-right tabular-nums font-bold text-slate-900">${fmtMoney(data.pbsMaterialCost, db)}</td>
+            <td class="px-3 py-2">
+              <div class="flex items-center gap-2">
+                <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+                  <div class="h-full rounded-full bg-amber-500" style="width:${Math.min(100, sharePct)}%"></div>
+                </div>
+                <span class="text-[11px] font-bold tabular-nums text-slate-700 w-11 text-right">${sharePct}%</span>
+              </div>
+            </td>
+          </tr>`;
+      })()] : []),
+      ...(useCost && data.externalTotalCost > 0 ? [(() => {
+        const sharePct = breakdownTotalCost > 0 ? Math.round((data.externalTotalCost / breakdownTotalCost) * 1000) / 10 : 0;
+        return `
+          <tr class="border-b border-slate-100 hover:bg-slate-50/70">
+            <th scope="row" class="px-3 py-2 text-left font-semibold text-slate-800 whitespace-nowrap">
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full shrink-0 bg-teal-500" aria-hidden="true"></span>
+                <span>External Consultants (${data.externalCosts.length})</span>
+              </span>
+            </th>
+            <td class="px-3 py-2 text-right text-slate-400">&mdash;</td>
+            <td class="px-3 py-2 text-right text-slate-400">&mdash;</td>
+            <td class="px-3 py-2 text-right tabular-nums font-bold text-slate-900">${fmtMoney(data.externalTotalCost, db)}</td>
+            <td class="px-3 py-2">
+              <div class="flex items-center gap-2">
+                <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+                  <div class="h-full rounded-full bg-teal-500" style="width:${Math.min(100, sharePct)}%"></div>
+                </div>
+                <span class="text-[11px] font-bold tabular-nums text-slate-700 w-11 text-right">${sharePct}%</span>
+              </div>
+            </td>
+          </tr>`;
+      })()] : []),
+    ].join('') || `<tr><td colspan="${useCost ? 5 : 4}" class="px-3 py-4 text-center text-slate-400">No spending allocated in this timeframe.</td></tr>`;
+
+    const projMap = new Map((db.projects || []).map(p => [p.id, p]));
+    const extRowsHtml = data.externalCosts.length === 0
+      ? `<tr><td colspan="5" class="px-3 py-3 text-center text-slate-400">No external / consultant costs recorded for this scope.</td></tr>`
+      : data.externalCosts.map(c => {
+          const p = projMap.get(c.projectId);
           return `
             <tr class="border-b border-slate-100 hover:bg-slate-50/70">
-              <th scope="row" class="px-3 py-2 text-left font-semibold text-slate-800 whitespace-nowrap">
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${esc(r.dept.color || '#6366f1')}" aria-hidden="true"></span>
-                  <span>${esc(r.dept.name)}</span>
-                </span>
-              </th>
-              ${useCost ? `<td class="px-3 py-2 text-right tabular-nums text-slate-500">${fmtMoney(r.rate, db)}/d</td>` : ''}
-              <td class="px-3 py-2 text-right tabular-nums text-slate-700">${fmtDays(r.days)}</td>
-              ${useCost ? `<td class="px-3 py-2 text-right tabular-nums font-bold text-slate-900">${fmtMoney(r.cost, db)}</td>` : ''}
-              <td class="px-3 py-2">
-                <div class="flex items-center gap-2">
-                  <div class="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
-                    <div class="h-full rounded-full" style="width:${Math.min(100, sharePct)}%;background:${esc(r.dept.color || '#6366f1')}"></div>
-                  </div>
-                  <span class="text-[11px] font-bold tabular-nums text-slate-700 w-11 text-right">${sharePct}%</span>
-                </div>
+              <td class="px-3 py-1.5 font-semibold text-slate-800">${esc(p ? (p.code || p.name) : c.projectId)}</td>
+              <td class="px-3 py-1.5 text-slate-700">${esc(c.label)}</td>
+              <td class="px-3 py-1.5 text-slate-500 tabular-nums">${esc(c.period || 'Project-wide')}</td>
+              <td class="px-3 py-1.5 text-right font-bold tabular-nums text-slate-900">${fmtMoney(c.amount, db)}</td>
+              <td class="px-3 py-1.5 text-right">
+                <button type="button" data-pp-del-ext="${esc(c.id)}" class="text-rose-600 hover:text-rose-800 text-[11px] font-semibold cursor-pointer" aria-label="Remove consultant cost ${esc(c.label)}">Remove</button>
               </td>
             </tr>`;
         }).join('');
@@ -503,12 +689,12 @@
         <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">${hasBudget ? (overBudget ? 'Over Budget' : 'Remaining Budget') : 'Total Planned'}</div>
           <div class="text-lg font-extrabold mt-0.5 tabular-nums ${overBudget ? 'text-rose-600' : (hasBudget ? 'text-emerald-600' : 'text-slate-900')}">${hasBudget ? fmtPrimary(Math.abs(variance)) : fmtPrimary(totalPrimary)}</div>
-          <div class="text-[11px] text-slate-500 mt-0.5">Total plan: ${fmtPrimary(totalPrimary)}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">Total plan: ${fmtPrimary(totalPrimary)}${(data.pbsMaterialCost > 0 || data.externalTotalCost > 0) ? ` (incl. PBS &amp; Ext.)` : ''}</div>
         </div>
         <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Avg Burn / ${ui.timeUnit === 'week' ? 'Week' : 'Month'}</div>
           <div class="text-lg font-extrabold text-slate-900 mt-0.5 tabular-nums">${fmtPrimary(avgPrimary)}</div>
-          <div class="text-[11px] text-slate-500 mt-0.5">${data.byDepartment.length} active department${data.byDepartment.length === 1 ? '' : 's'}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">PBS: ${fmtMoney(data.pbsMaterialCost, db)} &middot; Ext: ${fmtMoney(data.externalTotalCost, db)}</div>
         </div>
       </div>
 
@@ -542,13 +728,13 @@
         </div>
 
         <div class="rounded-xl border border-slate-200 overflow-hidden">
-          <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700">Spending Split by Department</div>
+          <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-700">Spending Split by Department &amp; Non-Labour</div>
           <div class="overflow-x-auto">
             <table class="w-full border-collapse text-xs">
-              <caption class="sr-only">Planned burn and spending share by department</caption>
+              <caption class="sr-only">Planned burn and spending share by department, PBS materials, and external consultants</caption>
               <thead>
                 <tr class="bg-slate-50/60 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
-                  <th scope="col" class="px-3 py-2 text-left">Department</th>
+                  <th scope="col" class="px-3 py-2 text-left">Category</th>
                   ${useCost ? '<th scope="col" class="px-3 py-2 text-right">Rate</th>' : ''}
                   <th scope="col" class="px-3 py-2 text-right">Days</th>
                   ${useCost ? '<th scope="col" class="px-3 py-2 text-right">Spend</th>' : ''}
@@ -561,12 +747,60 @@
                   <th scope="row" class="px-3 py-2 text-left">Total</th>
                   ${useCost ? '<td class="px-3 py-2"></td>' : ''}
                   <td class="px-3 py-2 text-right tabular-nums">${fmtDays(data.windowDays)}</td>
-                  ${useCost ? `<td class="px-3 py-2 text-right tabular-nums">${fmtMoney(data.windowCost, db)}</td>` : ''}
+                  ${useCost ? `<td class="px-3 py-2 text-right tabular-nums">${fmtMoney(breakdownTotalCost, db)}</td>` : ''}
                   <td class="px-3 py-2 text-right tabular-nums">100%</td>
                 </tr>
               </tfoot>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl border border-slate-200 overflow-hidden">
+        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-bold text-slate-700">External / Consultant Costs</span>
+          <span class="text-[11px] font-semibold text-slate-500">Total: ${fmtMoney(data.externalTotalCost, db)}</span>
+        </div>
+        <form id="ppExtCostForm" class="p-3 bg-slate-50/40 border-b border-slate-200 grid grid-cols-1 sm:grid-cols-5 gap-2 items-end">
+          <label class="block text-[11px] font-semibold text-slate-600">
+            <span>Project</span>
+            <select id="ppExtCostProj" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs">
+              ${sortedProjs.map(p => `<option value="${esc(p.id)}" ${ui.filterProj === p.id ? 'selected' : ''}>${esc(fmtProj(p))}</option>`).join('')}
+            </select>
+          </label>
+          <label class="block text-[11px] font-semibold text-slate-600 sm:col-span-2">
+            <span>Consultant / SOW Description</span>
+            <input id="ppExtCostLabel" type="text" required maxlength="120" placeholder="e.g. EMC Lab Testing SOW" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs" />
+          </label>
+          <label class="block text-[11px] font-semibold text-slate-600">
+            <span>Amount (${esc((db.settings && db.settings.currencySymbol) || '€')})</span>
+            <input id="ppExtCostAmount" type="number" required min="0.01" step="0.01" placeholder="5000" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs" />
+          </label>
+          <div class="flex gap-1.5 items-end">
+            <label class="block flex-1 text-[11px] font-semibold text-slate-600">
+              <span>Period (opt.)</span>
+              <select id="ppExtCostPeriod" class="mt-0.5 w-full px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs">
+                <option value="">Project-wide</option>
+                ${periods.map(pk => `<option value="${esc(pk)}">${esc(pk)}</option>`).join('')}
+              </select>
+            </label>
+            <button type="submit" class="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer">Add</button>
+          </div>
+        </form>
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse text-xs">
+            <caption class="sr-only">External and consultant costs for in-scope projects</caption>
+            <thead>
+              <tr class="bg-slate-50/60 border-b border-slate-200 text-[10px] uppercase tracking-wider text-slate-500">
+                <th scope="col" class="px-3 py-1.5 text-left">Project</th>
+                <th scope="col" class="px-3 py-1.5 text-left">Description</th>
+                <th scope="col" class="px-3 py-1.5 text-left">Period</th>
+                <th scope="col" class="px-3 py-1.5 text-right">Amount</th>
+                <th scope="col" class="px-3 py-1.5 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>${extRowsHtml}</tbody>
+          </table>
         </div>
       </div>
     `;
@@ -575,12 +809,47 @@
       ui.filterProj = ev.target.value || 'all';
       if (typeof renderAll === 'function') renderAll();
     });
+
+    frame.querySelector('#ppExtCostForm')?.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const projId = frame.querySelector('#ppExtCostProj')?.value || '';
+      const label = String(frame.querySelector('#ppExtCostLabel')?.value || '').trim().slice(0, 120);
+      const amount = Number(frame.querySelector('#ppExtCostAmount')?.value);
+      const period = String(frame.querySelector('#ppExtCostPeriod')?.value || '').trim();
+      if (!projId || !label || !Number.isFinite(amount) || amount <= 0) return;
+      if (!Array.isArray(db.externalCosts)) db.externalCosts = [];
+      db.externalCosts.push({
+        id: typeof uid === 'function' ? uid('ext') : `ext_${Date.now().toString(36)}`,
+        projectId: projId,
+        label,
+        amount: Math.round(amount * 100) / 100,
+        period,
+      });
+      if (typeof recordChange === 'function') recordChange('Finance', `Added external cost: ${label} (${fmtMoney(amount, db)})`);
+      else if (typeof touchDBAndSave === 'function') touchDBAndSave();
+      renderHealthBurnBudgetFrame();
+    });
+
+    frame.querySelectorAll('[data-pp-del-ext]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-pp-del-ext');
+        if (!Array.isArray(db.externalCosts)) return;
+        const idx = db.externalCosts.findIndex(c => c.id === id);
+        if (idx >= 0) {
+          const [removed] = db.externalCosts.splice(idx, 1);
+          if (typeof recordChange === 'function') recordChange('Finance', `Removed external cost: ${removed.label}`);
+          else if (typeof touchDBAndSave === 'function') touchDBAndSave();
+          renderHealthBurnBudgetFrame();
+        }
+      });
+    });
   }
 
   ppHooks.on('afterRenderHealth', renderHealthBurnBudgetFrame);
   ppHooks.on('afterRenderAll', () => {
     enhanceA11yLandmarksAndTabs();
     wireCustomModalFocusTrap();
+    wirePbsDialogObserver();
     if (typeof ui !== 'undefined' && ui.activeTab === 'health') {
       renderHealthBurnBudgetFrame();
     }
@@ -610,6 +879,7 @@
     const bootA11y = () => {
       enhanceA11yLandmarksAndTabs();
       wireCustomModalFocusTrap();
+      wirePbsDialogObserver();
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', bootA11y);
@@ -620,6 +890,7 @@
 
   globalThis.__ppHealthBurnTestApi = {
     pruneNominalCapacityOverrides,
+    computePbsMaterialCost,
     computeBurnBudgetAnalysis,
     ppHooks,
   };
