@@ -1,4 +1,4 @@
-/* Isolated Roadmap enhancements: Default 1 FTE on NEW empty allocations + Priority colour-coded project codes. */
+/* Isolated Roadmap enhancements: Default 1 FTE on NEW allocations, prevent FTE clearing on field change + Priority colour-coded project codes. */
 (function ppRoadmapPriorityFteModule() {
   if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
 
@@ -90,11 +90,16 @@
     return Array.from(new Set(candidates));
   }
 
+  function isNullishOrBlank(val) {
+    if (val === null || val === undefined) return true;
+    const s = String(val).trim().toLowerCase();
+    if (s === '' || s === 'null' || s === 'undefined' || s === 'nan') return true;
+    return !Number.isFinite(Number(s));
+  }
+
   function isEmptyOrZero(val) {
-    const s = String(val ?? '').trim();
-    if (s === '') return true;
-    const n = Number(s);
-    return !Number.isFinite(n) || n <= 0;
+    if (isNullishOrBlank(val)) return true;
+    return Number(String(val).trim()) <= 0;
   }
 
   function isNewActivityModal(modalRoot, openArgs) {
@@ -115,9 +120,46 @@
   }
 
   let lastDesiredFte = '1';
-  let isNewAllocationSession = false;
+
+  function restoreFteIfCleared(modalRoot) {
+    const inputs = findAllocationFteInputs(modalRoot || document);
+    inputs.forEach(inp => {
+      if (isNullishOrBlank(inp.value)) {
+        inp.value = lastDesiredFte || '1';
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  }
+
+  function wireDelegatedFteGuard() {
+    if (document.__ppDelegatedFteGuardWired || typeof document.addEventListener !== 'function') return;
+    document.__ppDelegatedFteGuardWired = true;
+
+    const handleFieldMutation = (ev) => {
+      const modalCard = document.getElementById('modalCard') || document.getElementById('modalOverlay');
+      if (!modalCard || !ev.target || !modalCard.contains(ev.target)) return;
+      const fteInputs = findAllocationFteInputs(modalCard);
+      if (!fteInputs.length) return;
+
+      // If the user is directly editing the FTE input, record valid values and do not override them.
+      if (fteInputs.includes(ev.target)) {
+        const raw = String(ev.target.value ?? '').trim();
+        if (!isNullishOrBlank(raw) && Number(raw) > 0) lastDesiredFte = raw;
+        return;
+      }
+
+      // Another field (select, date, period, unit toggle, etc.) changed: guard against FTE being wiped to null/blank.
+      setTimeout(() => restoreFteIfCleared(modalCard), 0);
+      setTimeout(() => restoreFteIfCleared(modalCard), 50);
+    };
+
+    document.addEventListener('change', handleFieldMutation, true);
+    document.addEventListener('input', handleFieldMutation, true);
+  }
 
   function applyDefaultFteIfNew(openArgs) {
+    wireDelegatedFteGuard();
     const modalCard = document.getElementById('modalCard') || document.getElementById('modalOverlay');
     const candidates = findAllocationFteInputs(modalCard || document);
     if (!candidates.length) return;
@@ -127,45 +169,18 @@
     const isNew = isEmptyOrZero(existingVal) || isNewActivityModal(modalRoot, openArgs);
 
     if (!isNew) {
-      isNewAllocationSession = false;
-      lastDesiredFte = existingVal;
+      if (!isNullishOrBlank(existingVal) && Number(existingVal) > 0) lastDesiredFte = existingVal;
       return;
     }
 
-    isNewAllocationSession = true;
     lastDesiredFte = '1';
     candidates.forEach(inp => {
-      if (!inp.__ppFteTracked) {
-        inp.__ppFteTracked = true;
-        inp.addEventListener('input', () => {
-          if (String(inp.value || '').trim() !== '') lastDesiredFte = String(inp.value).trim();
-        });
-      }
       if (isEmptyOrZero(inp.value) || inp.value !== '1') {
         inp.value = '1';
         inp.dispatchEvent(new Event('input', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       }
     });
-
-    if (modalRoot && typeof modalRoot.querySelectorAll === 'function') {
-      modalRoot.querySelectorAll('select').forEach(sel => {
-        if (sel.__ppFteGuard) return;
-        sel.__ppFteGuard = true;
-        sel.addEventListener('change', () => {
-          if (!isNewAllocationSession) return;
-          setTimeout(() => {
-            if (!isNewAllocationSession) return;
-            findAllocationFteInputs(modalRoot).forEach(inp => {
-              if (isEmptyOrZero(inp.value)) {
-                inp.value = lastDesiredFte || '1';
-                inp.dispatchEvent(new Event('input', { bubbles: true }));
-              }
-            });
-          }, 0);
-        });
-      });
-    }
   }
 
   ['openAllocationModal', 'openCellModal', 'openAddActivityModal'].forEach(fnName => {
@@ -197,4 +212,6 @@
       return res;
     };
   }
+
+  wireDelegatedFteGuard();
 })();
