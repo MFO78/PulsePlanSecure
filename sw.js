@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pulseplan-v8.4.3-secure-icons';
+const CACHE_NAME = 'pulseplan-v9.0.0-secure-icons';
 const ASSETS = [
   './',
   './manifest.webmanifest',

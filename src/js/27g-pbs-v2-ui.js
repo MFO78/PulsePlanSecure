@@ -3,11 +3,14 @@
 (function ppPbsV2UiPart() {
   const P = (globalThis.__ppPbsV2 = globalThis.__ppPbsV2 || {});
   const COL_PREFS_KEY = 'pulseplan_pbs_colprefs_v1';
+  const EXPAND_PREF_KEY = 'pulseplan_pbs_expanded_v1';
+  const PDF_FIELDS_PREF_KEY = 'pulseplan_pbs_pdf_fields_v1';
   const MAX_UNDO = 40;
   const emptyFilter = () => ({ search: '', deptId: '', maturity: '', milestoneId: '', heritage: '', procStatus: '', flag: '' });
   const ui = {
     dialog: null, wired: false, filter: emptyFilter(),
     colGroups: { docs: false, proc: false, swp: false }, userLockedCols: false,
+    expanded: false, pdfPanelOpen: false, pdfSelectedFields: null, pdfApplyFilters: true,
     collapsedIds: new Set(), edit: null, editSeq: 0, draft: null, pasteOpen: false,
     undoStack: [], redoStack: [], notices: [], badgeRefresh: null,
   };
@@ -69,6 +72,94 @@
     } catch (_e) {}
   }
 
+  function loadExpandPref() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(EXPAND_PREF_KEY) : localStorage.getItem(EXPAND_PREF_KEY);
+      return raw === '1' || raw === 'true';
+    } catch (_e) { return false; }
+  }
+
+  function saveExpandPref(expanded) {
+    try {
+      const raw = expanded ? '1' : '0';
+      if (typeof safeSetStorage === 'function') safeSetStorage(EXPAND_PREF_KEY, raw);
+      else localStorage.setItem(EXPAND_PREF_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function applyExpandedClass() {
+    if (ui.dialog) ui.dialog.classList.toggle('pp-pbs-expanded', Boolean(ui.expanded));
+  }
+
+  function toggleExpandWindow() {
+    ui.expanded = !ui.expanded;
+    saveExpandPref(ui.expanded);
+    applyExpandedClass();
+    render('#ppPbsExpandWinBtn');
+  }
+
+  function getAllReportCols() {
+    return (R() && Array.isArray(R().REPORT_COLS)) ? R().REPORT_COLS : [];
+  }
+
+  function getPopulatedFieldKeys(d) {
+    const items = (d && Array.isArray(d.items)) ? d.items : [];
+    const pop = new Set();
+    getAllReportCols().forEach(c => {
+      if (typeof c.has === 'function' && items.some(it => c.has(it))) pop.add(c.key);
+    });
+    return pop;
+  }
+
+  function computePdfPresetFields(preset, d) {
+    const cols = getAllReportCols();
+    const coreKeys = cols.filter(c => c.always).map(c => c.key);
+    if (preset === 'minimal') return new Set(['code', 'name']);
+    if (preset === 'core') return new Set(coreKeys);
+    if (preset === 'all') return new Set(cols.map(c => c.key));
+    if (preset === 'docs' || preset === 'proc' || preset === 'swp') {
+      return new Set([...coreKeys, ...cols.filter(c => c.group === preset).map(c => c.key)]);
+    }
+    if (preset === 'currentView') {
+      const visOpt = V().resolveVisibleOptionalCols ? V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key) : [];
+      return new Set([...coreKeys, ...visOpt]);
+    }
+    // Default / 'populated': all core fields + any optional field containing data
+    const items = (d && Array.isArray(d.items)) ? d.items : [];
+    const out = new Set(coreKeys);
+    cols.forEach(c => {
+      if (!c.always && typeof c.has === 'function' && items.some(it => c.has(it))) out.add(c.key);
+    });
+    return out;
+  }
+
+  function loadPdfFieldPrefs() {
+    try {
+      const raw = typeof safeGetStorage === 'function' ? safeGetStorage(PDF_FIELDS_PREF_KEY) : localStorage.getItem(PDF_FIELDS_PREF_KEY);
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || !arr.length) return null;
+      const valid = new Set(getAllReportCols().map(c => c.key));
+      const clean = arr.filter(k => valid.has(k));
+      return clean.length ? new Set(clean) : null;
+    } catch (_e) { return null; }
+  }
+
+  function savePdfFieldPrefs(selSet) {
+    try {
+      const raw = JSON.stringify(Array.from(selSet || []));
+      if (typeof safeSetStorage === 'function') safeSetStorage(PDF_FIELDS_PREF_KEY, raw);
+      else localStorage.setItem(PDF_FIELDS_PREF_KEY, raw);
+    } catch (_e) {}
+  }
+
+  function ensurePdfSelectedFields() {
+    if (!ui.pdfSelectedFields) {
+      ui.pdfSelectedFields = loadPdfFieldPrefs() || computePdfPresetFields('populated', doc());
+    }
+    return ui.pdfSelectedFields;
+  }
+
   function pushUndo(label) {
     const d = doc();
     if (!d || !Array.isArray(d.items)) return;
@@ -83,7 +174,7 @@
     const entry = ui.undoStack.pop();
     ui.redoStack.push({ label: entry.label, itemsJson: JSON.stringify(d.items) });
     try { d.items = JSON.parse(entry.itemsJson); } catch (_e) { return; }
-    ui.edit = null; ui.pasteOpen = false; ui.notices = [];
+    ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.notices = [];
     commit(`Undo: ${entry.label}`);
     C().toast(`Undid: ${entry.label}`, 'info');
   }
@@ -94,7 +185,7 @@
     const entry = ui.redoStack.pop();
     ui.undoStack.push({ label: entry.label, itemsJson: JSON.stringify(d.items) });
     try { d.items = JSON.parse(entry.itemsJson); } catch (_e) { return; }
-    ui.edit = null; ui.pasteOpen = false; ui.notices = [];
+    ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.notices = [];
     commit(`Redo: ${entry.label}`);
     C().toast(`Redid: ${entry.label}`, 'info');
   }
@@ -134,11 +225,15 @@
     const filteredRollups = isFiltered ? T().computeFilteredRollups(d, matchedIds) : null;
     const lastUndo = ui.undoStack.length ? ui.undoStack[ui.undoStack.length - 1] : null;
     const lastRedo = ui.redoStack.length ? ui.redoStack[ui.redoStack.length - 1] : null;
+    const pdfExport = ui.pdfPanelOpen
+      ? { open: true, selectedFields: ensurePdfSelectedFields(), populatedFields: getPopulatedFieldKeys(d), applyFilters: Boolean(ui.pdfApplyFilters) }
+      : { open: false };
     return {
       doc: d, db, project: core.getProject(S.activeProjectId),
       summary, rollups, filteredRollups, isFiltered, matchedCount: matchedIds ? matchedIds.size : d.items.length,
       rows, collapsedIds: ui.collapsedIds, colGroups: ui.colGroups,
       filter: ui.filter, edit, pasteOpen: ui.pasteOpen,
+      isExpanded: ui.expanded, pdfExport,
       canUndo: Boolean(lastUndo), canRedo: Boolean(lastRedo),
       undoLabel: lastUndo ? `Undo: ${lastUndo.label} (Ctrl+Z)` : 'Nothing to undo',
       redoLabel: lastRedo ? `Redo: ${lastRedo.label} (Ctrl+Y)` : 'Nothing to redo',
@@ -161,7 +256,7 @@
     if (el.id) sel = `#${CSS.escape(el.id)}`;
     else if (el.hasAttribute('data-pbs-move')) sel = `${attr('data-pbs-move', el.getAttribute('data-pbs-move'))}${attr('data-pbs-id', el.getAttribute('data-pbs-id'))}`;
     else {
-      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
+      const name = ['data-pbs-toggle', 'data-pbs-col-group', 'data-pbs-flag-pill', 'data-pbs-pdf-field', 'data-pbs-pdf-preset', 'data-pbs-pdf-group-toggle', 'data-pbs-edit', 'data-pbs-del', 'data-pbs-add-child', 'data-pbs-row'].find(a => el.hasAttribute(a));
       if (name) sel = attr(name, el.getAttribute(name));
     }
     const row = el.closest('[data-pbs-row]');
@@ -246,6 +341,7 @@
   /* ---------- Tree actions ---------- */
   function openForm(itemId, parentId) {
     ui.pasteOpen = false;
+    ui.pdfPanelOpen = false;
     ui.edit = { itemId: itemId || null, parentId: parentId || null, seq: ++ui.editSeq, openSections: null };
     if (parentId) ui.collapsedIds.delete(parentId);
     render('#ppPbsFName');
@@ -412,6 +508,7 @@
 
   function openPastePanel() {
     ui.edit = null;
+    ui.pdfPanelOpen = false;
     ui.pasteOpen = true;
     render('#ppPbsPasteInput');
   }
@@ -434,6 +531,45 @@
     syncPopulatedColGroups(false);
     commit(`Pasted ${items.length} PBS items`);
     C().toast(`Imported ${items.length} pasted item${items.length === 1 ? '' : 's'}.`, 'success');
+  }
+
+  function openPdfPanel() {
+    ui.edit = null;
+    ui.pasteOpen = false;
+    ui.pdfPanelOpen = true;
+    ensurePdfSelectedFields();
+    ui.pdfApplyFilters = hasActiveFilter();
+    const b = q('.pp-pbs-body');
+    if (b) b.scrollTop = 0;
+    render('#ppPbsPdfRunBtn');
+  }
+  function closePdfPanel() {
+    ui.pdfPanelOpen = false;
+    render('#ppPbsExportPdfBtn');
+  }
+  function applyPdfPreset(preset) {
+    ui.pdfSelectedFields = computePdfPresetFields(preset, doc());
+    savePdfFieldPrefs(ui.pdfSelectedFields);
+    render();
+  }
+  function togglePdfGroup(groupKey) {
+    const sel = ensurePdfSelectedFields();
+    const gCols = getAllReportCols().filter(c => (c.group || 'core') === groupKey);
+    if (!gCols.length) return;
+    const allSelected = gCols.every(c => sel.has(c.key));
+    gCols.forEach(c => {
+      if (allSelected) sel.delete(c.key);
+      else sel.add(c.key);
+    });
+    savePdfFieldPrefs(sel);
+    render();
+  }
+  function togglePdfField(fieldKey, checked) {
+    const sel = ensurePdfSelectedFields();
+    if (checked) sel.add(fieldKey);
+    else sel.delete(fieldKey);
+    savePdfFieldPrefs(sel);
+    render();
   }
 
   function toggleItem(id) {
@@ -513,7 +649,7 @@
     pushUndo(`Load ${file.name}`);
     loaded.meta.revision = Math.max(Number(loaded.meta.revision) || 1, Number(d.meta.revision) || 1);
     C().replaceDoc(loaded, wasEncrypted);
-    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false;
+    ui.collapsedIds.clear(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false;
     syncPopulatedColGroups(true);
     commit(`Loaded PBS from JSON file (${loaded.items.length} items)`);
   }
@@ -558,14 +694,20 @@
     C().toast('PDF library unavailable. Opened a print view: choose "Save as PDF".', 'info');
   }
 
-  function buildPdfOptions(currentViewOnly) {
+  function buildPdfOptions(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
     const date = todayIso();
-    if (!currentViewOnly) return { todayIso: date };
     const d = doc();
     const db = C().getDb();
-    const visibleOptKeys = V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key);
-    const opts = { visibleOptKeys, todayIso: date };
-    if (hasActiveFilter()) {
+    let opts = { todayIso: date };
+    const useFilters = selectedFieldKeys ? Boolean(applyActiveFilters) : Boolean(currentViewOnly);
+    if (selectedFieldKeys) {
+      opts.selectedFieldKeys = Array.from(selectedFieldKeys);
+    } else if (currentViewOnly) {
+      opts.visibleOptKeys = V().resolveVisibleOptionalCols(d, ui.colGroups).map(c => c.key);
+    } else {
+      return opts;
+    }
+    if (useFilters && hasActiveFilter()) {
       const summary = T().computeMaturitySummary(d, db.milestones || [], date);
       const rollups = T().computeSwpRollups(d);
       const rows = T().getFilteredTreeRows(d, ui.filter, new Set(), { summary, rollups });
@@ -575,19 +717,32 @@
     return opts;
   }
 
-  function exportPdf(currentViewOnly) {
+  function exportPdf(currentViewOnly, selectedFieldKeys, applyActiveFilters) {
     const p = project();
     const date = todayIso();
-    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly)));
+    const model = R().buildReportModel(doc(), p, C().getDb(), C().getUserName(), date, buildPdfOptions(Boolean(currentViewOnly), selectedFieldKeys, applyActiveFilters));
     const JsPdf = window.jspdf && window.jspdf.jsPDF;
     if (JsPdf) {
       try {
         R().renderPdf(JsPdf, model).save(R().pdfFilename(p, C().state.activeProjectId, date));
-        C().toast(currentViewOnly ? 'PBS current-view PDF exported.' : 'PBS PDF report exported.', 'success');
+        const msg = selectedFieldKeys
+          ? `PBS PDF exported (${model.cols.length} field${model.cols.length === 1 ? '' : 's'}).`
+          : (currentViewOnly ? 'PBS current-view PDF exported.' : 'PBS PDF report exported.');
+        C().toast(msg, 'success');
         return;
       } catch (_e) { /* fall back to print view */ }
     }
     openPrintFallback(model);
+  }
+
+  function exportPdfCustom() {
+    const sel = ensurePdfSelectedFields();
+    if (!sel.size) {
+      C().toast('Select at least one field to include in the PDF.', 'warning');
+      return;
+    }
+    exportPdf(false, sel, Boolean(ui.pdfApplyFilters));
+    closePdfPanel();
   }
 
   async function cloneFrom(srcId) {
@@ -666,6 +821,7 @@
 
   /* ---------- Event delegation ---------- */
   const BUTTONS = {
+    ppPbsExpandWinBtn: () => toggleExpandWindow(),
     ppPbsCloseBtn: () => closeDialog(),
     ppPbsAddRootBtn: () => openForm(null, null),
     ppPbsUndoBtn: () => undo(),
@@ -686,7 +842,9 @@
     ppPbsPasteCancel: () => closePastePanel(),
     ppPbsPasteSubmit: safe(submitPaste),
     ppPbsExportSvgBtn: safe(exportSvg),
-    ppPbsExportPdfBtn: safe(() => exportPdf(false)),
+    ppPbsExportPdfBtn: () => (ui.pdfPanelOpen ? closePdfPanel() : openPdfPanel()),
+    ppPbsPdfCancelBtn: () => closePdfPanel(),
+    ppPbsPdfRunBtn: safe(exportPdfCustom),
     ppPbsExportPdfViewBtn: safe(() => exportPdf(true)),
     ppPbsClearFiltersBtn: () => { ui.filter = emptyFilter(); render('#ppPbsFilterSearch'); },
     ppPbsFormCancel: () => closeForm(ui.edit ? ui.edit.itemId : null),
@@ -704,6 +862,8 @@
       render();
       return;
     }
+    if (d.pbsPdfPreset) return applyPdfPreset(d.pbsPdfPreset);
+    if (d.pbsPdfGroupToggle) return togglePdfGroup(d.pbsPdfGroupToggle);
     if (d.pbsColGroup) return toggleColGroup(d.pbsColGroup);
     if (d.pbsToggle) return toggleItem(d.pbsToggle);
     if (d.pbsMove) return moveItem(d.pbsId, d.pbsMove);
@@ -725,7 +885,12 @@
   function onChange(e) {
     const t = e.target;
     const files = t.files;
-    if (t.id === 'ppPbsJsonFileInput' || t.id === 'ppPbsCsvFileInput') {
+    if (t.hasAttribute && t.hasAttribute('data-pbs-pdf-field')) {
+      togglePdfField(t.getAttribute('data-pbs-pdf-field'), Boolean(t.checked));
+    } else if (t.id === 'ppPbsPdfApplyFilters') {
+      ui.pdfApplyFilters = Boolean(t.checked);
+      render();
+    } else if (t.id === 'ppPbsJsonFileInput' || t.id === 'ppPbsCsvFileInput') {
       const file = files && files[0];
       const isJson = t.id === 'ppPbsJsonFileInput';
       t.value = '';
@@ -795,6 +960,7 @@
     el.addEventListener('cancel', (e) => {
       if (ui.edit) { e.preventDefault(); closeForm(ui.edit.itemId); }
       else if (ui.pasteOpen) { e.preventDefault(); closePastePanel(); }
+      else if (ui.pdfPanelOpen) { e.preventDefault(); closePdfPanel(); }
     });
     el.addEventListener('close', () => { safe(onClosed)(); });
   }
@@ -807,7 +973,7 @@
       || (typeof ppIsSigningOut === 'function' && ppIsSigningOut());
     if (lockedOrSigningOut) {
       if (S.saveTimer) { clearTimeout(S.saveTimer); S.saveTimer = null; }
-      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.undoStack = []; ui.redoStack = [];
+      ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
       return;
     }
     for (let i = 0; i < 20 && S.isSaving; i++) await new Promise(r => setTimeout(r, 100));
@@ -816,7 +982,7 @@
       S.saveQueued = false;
       await core.writeToFolder(false);
     }
-    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.undoStack = []; ui.redoStack = [];
+    ui.edit = null; ui.draft = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.undoStack = []; ui.redoStack = [];
     if (typeof ui.badgeRefresh === 'function') ui.badgeRefresh();
   }
 
@@ -829,7 +995,9 @@
     ensureDialog();
     V().injectStyles();
     ui.filter = emptyFilter();
-    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false;
+    ui.collapsedIds = new Set(); ui.edit = null; ui.pasteOpen = false; ui.pdfPanelOpen = false; ui.pdfSelectedFields = null;
+    ui.expanded = loadExpandPref();
+    applyExpandedClass();
     ui.undoStack = []; ui.redoStack = []; ui.notices = [];
     syncPopulatedColGroups(true);
     const hooks = core.state.hooks;

@@ -4,7 +4,7 @@
      * ============================================================================ */
 
     const PP_BUILD_INFO = {
-      version: 'v8.4-secure',
+      version: 'v9.0-secure',
       sha: '__PP_BUILD_SHA__',
       builtAt: '__PP_BUILD_DATE__',
     };

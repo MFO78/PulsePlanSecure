@@ -16,9 +16,11 @@
     : { identity: 0, docs: 0, proc: 0, eng: 0, total: 0 });
 
   const CSS = `
-    #ppPbsDialog { width: min(1220px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; }
+    #ppPbsDialog { width: min(1220px, 96vw); max-height: 92vh; border: 1px solid var(--border-subtle, #e2e8f0); border-radius: 1rem; padding: 0; background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-shadow: 0 25px 50px -12px rgba(15, 23, 42, .32); overflow: hidden; transition: width .16s ease, height .16s ease, max-height .16s ease; }
     #ppPbsDialog::backdrop { background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); }
+    #ppPbsDialog.pp-pbs-expanded { width: 99vw; max-width: 99vw; height: 97vh; max-height: 97vh; border-radius: .65rem; }
     .pp-pbs-wrap { display: flex; flex-direction: column; max-height: 92vh; }
+    #ppPbsDialog.pp-pbs-expanded .pp-pbs-wrap { height: 97vh; max-height: 97vh; }
     .pp-pbs-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .9rem 1.15rem; border-top: 4px solid var(--pbs-proj-color, #4f46e5); border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-toolbar, .pp-pbs-filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .55rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-card, #ffffff); font-size: 11.5px; }
     .pp-pbs-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 1.15rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); background: var(--surface-subtle, #f8fafc); font-size: 11px; }
@@ -34,7 +36,7 @@
     .pp-pbs-btn { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; padding: .34rem .62rem; border-radius: .55rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #334155); font-size: 11.5px; font-weight: 700; cursor: pointer; }
     .pp-pbs-btn:hover:not(:disabled) { background: var(--surface-subtle, #f1f5f9); }
     .pp-pbs-btn:disabled { opacity: .42; cursor: not-allowed; }
-    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-chip:focus-visible, .pp-pbs-pill-btn:focus-visible, .pp-pbs-textarea:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
+    .pp-pbs-btn:focus-visible, .pp-pbs-toggle:focus-visible, .pp-pbs-input:focus-visible, .pp-pbs-select:focus-visible, .pp-pbs-chip:focus-visible, .pp-pbs-pill-btn:focus-visible, .pp-pbs-textarea:focus-visible, .pp-pbs-pdf-group-toggle:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
     .pp-pbs-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #ffffff; }
     .pp-pbs-btn-primary:hover:not(:disabled) { background: #4338ca; }
     .pp-pbs-btn-emerald { background: #059669; border-color: #059669; color: #ffffff; }
@@ -92,9 +94,23 @@
     .pp-pbs-rollup { font-style: italic; color: var(--text-muted, #64748b); font-size: 11px; }
     .pp-pbs-mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
     .pp-pbs-desc-cell { min-width: 150px; max-width: 240px; line-height: 1.3; }
-    .pp-pbs-form, .pp-pbs-paste { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
+    .pp-pbs-form, .pp-pbs-paste, .pp-pbs-pdf-panel { margin-bottom: .85rem; padding: .85rem; border-radius: .85rem; border: 1px solid #c7d2fe; background: var(--surface-subtle, #f8fafc); }
     .pp-pbs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end; gap: .55rem; }
-    .pp-pbs-paste { display: flex; flex-direction: column; gap: .5rem; }
+    .pp-pbs-paste, .pp-pbs-pdf-panel { display: flex; flex-direction: column; gap: .6rem; }
+    .pp-pbs-pdf-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+    .pp-pbs-pdf-presets { display: flex; flex-wrap: wrap; align-items: center; gap: .32rem; }
+    .pp-pbs-pdf-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: .55rem; }
+    .pp-pbs-pdf-group { border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); padding: .5rem .6rem; display: flex; flex-direction: column; gap: .35rem; }
+    .pp-pbs-pdf-group-head { display: flex; align-items: center; justify-content: space-between; gap: .35rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border-subtle, #e2e8f0); font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted, #475569); }
+    .pp-pbs-pdf-group-toggle { font-size: 10px; font-weight: 700; color: #4338ca; background: transparent; border: 0; padding: .1rem .25rem; border-radius: .3rem; cursor: pointer; }
+    .pp-pbs-pdf-group-toggle:hover { background: #eef2ff; }
+    .pp-pbs-pdf-fields { display: flex; flex-direction: column; gap: .22rem; }
+    .pp-pbs-pdf-field { display: flex; align-items: center; gap: .4rem; font-size: 11.5px; font-weight: 600; color: var(--text-primary, #1e293b); cursor: pointer; padding: .12rem .2rem; border-radius: .35rem; user-select: none; }
+    .pp-pbs-pdf-field:hover { background: var(--surface-subtle, #f1f5f9); }
+    .pp-pbs-pdf-field input[type="checkbox"], .pp-pbs-pdf-opt input[type="checkbox"] { width: 14px; height: 14px; accent-color: #4f46e5; cursor: pointer; flex-shrink: 0; }
+    .pp-pbs-pdf-dot { width: 6px; height: 6px; border-radius: 9999px; background: #10b981; margin-left: auto; flex-shrink: 0; }
+    .pp-pbs-pdf-opt { display: inline-flex; align-items: center; gap: .38rem; font-size: 11px; font-weight: 700; color: var(--text-primary, #334155); cursor: pointer; }
+    .pp-pbs-pdf-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; padding-top: .25rem; border-top: 1px solid var(--border-subtle, #e2e8f0); }
     .pp-pbs-textarea { width: 100%; min-height: 110px; font-family: ui-monospace, monospace; font-size: 11.5px; padding: .5rem .6rem; border-radius: .5rem; border: 1px solid var(--border-subtle, #cbd5e1); background: var(--surface-card, #ffffff); color: var(--text-primary, #0f172a); box-sizing: border-box; resize: vertical; }
     .pp-pbs-field { display: flex; flex-direction: column; gap: .2rem; font-size: 11px; font-weight: 700; }
     .pp-pbs-section { grid-column: 1 / -1; border: 1px solid var(--border-subtle, #cbd5e1); border-radius: .65rem; background: var(--surface-card, #ffffff); overflow: hidden; }
@@ -115,8 +131,15 @@
     .pp-pbs-proj-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .22rem .5rem; border-radius: .5rem; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-size: 11px; font-weight: 700; cursor: pointer; margin-right: .3rem; }
     .pp-pbs-proj-btn:hover { background: #e0e7ff; }
     html.dark #ppPbsDialog, body.dark #ppPbsDialog { background: #0f172a; color: #e2e8f0; border-color: #334155; }
-    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste { background: #1e293b; border-bottom-color: #334155; }
-    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste { border-color: #334155; }
+    html.dark .pp-pbs-head, body.dark .pp-pbs-head, html.dark .pp-pbs-summary, body.dark .pp-pbs-summary, html.dark .pp-pbs-colbar, body.dark .pp-pbs-colbar, html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { background: #1e293b; border-bottom-color: #334155; }
+    html.dark .pp-pbs-form, body.dark .pp-pbs-form, html.dark .pp-pbs-paste, body.dark .pp-pbs-paste, html.dark .pp-pbs-pdf-panel, body.dark .pp-pbs-pdf-panel { border-color: #334155; }
+    html.dark .pp-pbs-pdf-group, body.dark .pp-pbs-pdf-group { background: #0f172a; border-color: #334155; }
+    html.dark .pp-pbs-pdf-group-head, body.dark .pp-pbs-pdf-group-head { border-bottom-color: #334155; color: #94a3b8; }
+    html.dark .pp-pbs-pdf-group-toggle, body.dark .pp-pbs-pdf-group-toggle { color: #a5b4fc; }
+    html.dark .pp-pbs-pdf-group-toggle:hover, body.dark .pp-pbs-pdf-group-toggle:hover { background: rgba(99, 102, 241, .2); }
+    html.dark .pp-pbs-pdf-field, body.dark .pp-pbs-pdf-field, html.dark .pp-pbs-pdf-opt, body.dark .pp-pbs-pdf-opt { color: #e2e8f0; }
+    html.dark .pp-pbs-pdf-field:hover, body.dark .pp-pbs-pdf-field:hover { background: #1e293b; }
+    html.dark .pp-pbs-pdf-foot, body.dark .pp-pbs-pdf-foot { border-top-color: #334155; }
     html.dark .pp-pbs-textarea, body.dark .pp-pbs-textarea { background: #0f172a; color: #e2e8f0; border-color: #475569; }
     html.dark .pp-pbs-link, body.dark .pp-pbs-link { color: #93c5fd; }
     html.dark .pp-pbs-cell-warn, body.dark .pp-pbs-cell-warn { color: #fbbf24 !important; }
@@ -159,8 +182,9 @@
       html.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-actions, body.dark .pp-pbs-table.pp-pbs-sticky tfoot td.pp-pbs-foot-actions { background: #1e293b; box-shadow: -4px 0 8px -4px rgba(0, 0, 0, .5); }
     }
     @media (max-width: 767px) {
-      #ppPbsDialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
-      .pp-pbs-wrap { height: 100dvh; max-height: 100dvh; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      #ppPbsDialog, #ppPbsDialog.pp-pbs-expanded { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: 0; }
+      .pp-pbs-wrap, #ppPbsDialog.pp-pbs-expanded .pp-pbs-wrap { height: 100dvh; max-height: 100dvh; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+      .pp-pbs-expand-win-btn { display: none; }
       .pp-pbs-head { padding: .65rem .8rem; gap: .4rem; }
       .pp-pbs-tip, .pp-pbs-colhint { display: none; }
       .pp-pbs-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding: .45rem .8rem; gap: .35rem; }
@@ -182,7 +206,8 @@
       .pp-pbs-toolbar .pp-pbs-select { width: auto; max-width: 210px; font-size: 13px; }
       .pp-pbs-toggle { width: 2rem; height: 2rem; flex: 0 0 2rem; font-size: 12px; }
       .pp-pbs-toggle-spacer { display: none; }
-      .pp-pbs-form, .pp-pbs-sec-grid { grid-template-columns: 1fr; }
+      .pp-pbs-form, .pp-pbs-sec-grid, .pp-pbs-pdf-groups { grid-template-columns: 1fr; }
+      .pp-pbs-pdf-field { min-height: 30px; font-size: 12.5px; }
       .pp-pbs-form { padding: .75rem; }
       .pp-pbs-form .pp-pbs-field { grid-column: auto !important; }
       .pp-pbs-table, .pp-pbs-table tbody, .pp-pbs-table tfoot { display: block; width: 100%; }
@@ -564,6 +589,75 @@
       </div></div>`;
   }
 
+  const PDF_GROUPS = [
+    { key: 'core', label: 'Core & Identity' },
+    { key: 'docs', label: 'Docs & Drawings' },
+    { key: 'proc', label: 'Procurement' },
+    { key: 'swp', label: 'SWaP & Spares' },
+  ];
+
+  function renderPdfPanel(ctx) {
+    const cfg = ctx.pdfExport;
+    if (!cfg || !cfg.open) return '';
+    const allCols = (P.report && Array.isArray(P.report.REPORT_COLS)) ? P.report.REPORT_COLS : [];
+    const selSet = cfg.selectedFields instanceof Set ? cfg.selectedFields : new Set(cfg.selectedFields || []);
+    const popSet = cfg.populatedFields instanceof Set ? cfg.populatedFields : new Set(cfg.populatedFields || []);
+    const selectedCols = allCols.filter(c => selSet.has(c.key));
+    const selCount = selectedCols.length;
+    const hasOpt = selectedCols.some(c => !c.always);
+    const neededW = selectedCols.reduce((sum, c) => sum + (hasOpt ? c.w : (c.baseW || c.w)), 0);
+    const pageLabel = neededW > 1142 ? 'Wide Landscape' : (neededW > 770 ? 'A3 Landscape' : 'A4 Landscape');
+
+    const presets = [
+      { key: 'populated', label: 'All Populated' },
+      { key: 'currentView', label: 'Current View' },
+      { key: 'core', label: 'Core Only' },
+      { key: 'docs', label: 'Core + Docs' },
+      { key: 'proc', label: 'Core + Proc.' },
+      { key: 'swp', label: 'Core + SWaP' },
+      { key: 'all', label: 'Select All' },
+      { key: 'minimal', label: 'Minimal' },
+    ];
+
+    const groupsHtml = PDF_GROUPS.map(g => {
+      const gCols = allCols.filter(c => (c.group || 'core') === g.key);
+      if (!gCols.length) return '';
+      const allSelected = gCols.every(c => selSet.has(c.key));
+      const fieldsHtml = gCols.map(c => {
+        const checked = selSet.has(c.key);
+        const hasData = popSet.has(c.key);
+        return `<label class="pp-pbs-pdf-field" title="${hasData ? 'Field contains data in this PBS' : 'Currently empty in this PBS'}"><input type="checkbox" data-pbs-pdf-field="${esc(c.key)}"${checked ? ' checked' : ''} /><span>${esc(c.label)}</span>${hasData ? '<span class="pp-pbs-pdf-dot" aria-hidden="true"></span>' : ''}</label>`;
+      }).join('');
+      return `<div class="pp-pbs-pdf-group"><div class="pp-pbs-pdf-group-head"><span>${esc(g.label)}</span><button type="button" class="pp-pbs-pdf-group-toggle" data-pbs-pdf-group-toggle="${esc(g.key)}">${allSelected ? 'None' : 'All'}</button></div><div class="pp-pbs-pdf-fields">${fieldsHtml}</div></div>`;
+    }).join('');
+
+    const filterOptHtml = ctx.isFiltered
+      ? `<label class="pp-pbs-pdf-opt"><input type="checkbox" id="ppPbsPdfApplyFilters"${cfg.applyFilters ? ' checked' : ''} /><span>Apply active row filters (${ctx.matchedCount != null ? ctx.matchedCount : ctx.rows.length}/${ctx.doc.items.length} items)</span></label>`
+      : '';
+
+    return `<div id="ppPbsPdfPanel" class="pp-pbs-pdf-panel" role="region" aria-label="Configure PBS PDF export fields">
+      <div class="pp-pbs-pdf-head">
+        <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+          <strong style="font-size:12px">Export PBS PDF &mdash; Select Fields</strong>
+          <span class="pp-pbs-pill pp-pbs-pill-swp" id="ppPbsPdfCountBadge">${selCount} / ${allCols.length} fields</span>
+          ${selCount > 0 ? `<span class="pp-pbs-pill pp-pbs-status-idle">${esc(pageLabel)}</span>` : '<span class="pp-pbs-pill pp-pbs-status-warn">Pick at least 1 field</span>'}
+        </div>
+        ${filterOptHtml}
+      </div>
+      <div class="pp-pbs-pdf-presets" role="group" aria-label="PDF field presets">
+        <span class="pp-pbs-colbar-label">Presets:</span>
+        ${presets.map(p => `<button type="button" class="pp-pbs-chip" data-pbs-pdf-preset="${p.key}">${esc(p.label)}</button>`).join('')}
+      </div>
+      <div class="pp-pbs-pdf-groups">${groupsHtml}</div>
+      <div class="pp-pbs-pdf-foot">
+        <span style="display:inline-flex;align-items:center;gap:.35rem;font-size:10.5px;color:var(--text-muted,#64748b)"><span class="pp-pbs-pdf-dot" style="margin-left:0"></span> Field has data in this PBS &middot; Selection is remembered</span>
+        <div style="display:flex;align-items:center;gap:.45rem">
+          <button type="button" class="pp-pbs-btn" id="ppPbsPdfCancelBtn">Cancel</button>
+          <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsPdfRunBtn"${selCount === 0 ? ' disabled' : ''}>Export PDF (${selCount} field${selCount === 1 ? '' : 's'})</button>
+        </div>
+      </div></div>`;
+  }
+
   /* ctx.conflict: { diff: { addedRemote, modifiedBoth, onlyLocal } | null } or null */
   function renderConflictPanel(ctx) {
     if (!ctx.conflict) return '';
@@ -605,6 +699,7 @@
     const renumBtn = (ctx.doc.items || []).length >= 2
       ? '<button type="button" class="pp-pbs-btn" id="ppPbsRenumberBtn" title="Re-sequence hierarchical codes (1, 1.1, 1.2...) to match current tree order">Renumber</button>'
       : '';
+    const pdfOpen = Boolean(ctx.pdfExport && ctx.pdfExport.open);
     return `<div class="pp-pbs-toolbar" role="toolbar" aria-label="PBS actions">
       <button type="button" class="pp-pbs-btn pp-pbs-btn-primary" id="ppPbsAddRootBtn">+ Add Root Item</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsUndoBtn"${ctx.canUndo ? '' : ' disabled'} title="${esc(ctx.undoLabel || 'Undo (Ctrl+Z)')}">\u21b6 Undo</button>
@@ -619,7 +714,7 @@
       <button type="button" class="pp-pbs-btn" id="ppPbsImportCsvBtn">Import CSV</button>
       <button type="button" class="pp-pbs-btn" id="ppPbsPasteBtn">Paste Table</button>
       <button type="button" class="pp-pbs-btn pp-pbs-btn-emerald" id="ppPbsExportSvgBtn">SVG Diagram</button>
-      <button type="button" class="pp-pbs-btn" id="ppPbsExportPdfBtn" title="Export full PDF with all populated columns">PDF Report</button>
+      <button type="button" class="pp-pbs-btn${pdfOpen ? ' pp-pbs-btn-primary' : ''}" id="ppPbsExportPdfBtn" aria-expanded="${pdfOpen ? 'true' : 'false'}" aria-controls="ppPbsPdfPanel" title="Select fields and export PBS PDF report">PDF Report ${pdfOpen ? '\u25b4' : '\u25be'}</button>
       ${clone}
       <input type="file" id="ppPbsJsonFileInput" accept=".json,application/json" style="display:none" tabindex="-1" />
       <input type="file" id="ppPbsCsvFileInput" accept=".csv,.tsv,.txt,text/csv" style="display:none" tabindex="-1" />
@@ -733,7 +828,7 @@
   }
 
   /* ctx: { doc, db, project, summary, rollups, filteredRollups, isFiltered, matchedCount, rows, collapsedIds, colGroups, filter, edit, pasteOpen,
-   *        canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
+   *        isExpanded, pdfExport, canUndo, canRedo, undoLabel, redoLabel, conflict, notices, owners, manufacturers, procStatuses, projectMilestones,
    *        cloneSources:[{id,code,name,count}], canDirSync, dirName, hasRemembered, status:{text,tone} } */
   function buildDialogHtml(ctx) {
     const p = ctx.project;
@@ -742,15 +837,17 @@
     const projStyle = p && p.color ? ` style="--pbs-proj-color:${esc(p.color)}"` : '';
     const optHeads = optCols.map(c => `<th scope="col" class="pp-pbs-th-opt"${c.right ? ' style="text-align:right"' : (c.center ? ' style="text-align:center"' : '')}>${esc(c.label)}</th>`).join('');
     const stickyCls = optCols.length ? ' pp-pbs-sticky' : '';
+    const isExp = Boolean(ctx.isExpanded);
 
     return `<div class="pp-pbs-wrap"${projStyle}>
       <header class="pp-pbs-head"><div>
         <h2 id="ppPbsDialogTitle" style="margin:0;font-size:15px;font-weight:800">PBS \u2014 ${p ? `[${esc(p.code)}] ${esc(p.name)}` : 'Project'}</h2>
         <div style="font-size:11px;color:var(--text-muted,#64748b)">Rev ${esc(ctx.doc.meta.revision)} &middot; ${n} item${n === 1 ? '' : 's'}<span class="pp-pbs-tip"> &middot; Tip: double-click or Enter to edit, Alt+Arrows to move/indent, Ctrl+Z to undo</span></div></div>
         <div style="display:flex;align-items:center;gap:.45rem"><span id="ppPbsSyncStatus" class="pp-pbs-pill pp-pbs-status-${esc(ctx.status.tone)}" role="status" aria-live="polite">${esc(ctx.status.text)}</span>
+        <button type="button" class="pp-pbs-btn pp-pbs-expand-win-btn" id="ppPbsExpandWinBtn" aria-pressed="${isExp ? 'true' : 'false'}" title="${isExp ? 'Restore default PBS window size' : 'Expand PBS window to full screen'}">${isExp ? '\u2921 Restore' : '\u2922 Expand'}</button>
         <button type="button" class="pp-pbs-btn" id="ppPbsCloseBtn" aria-label="Close PBS dialog">Close</button></div></header>
       ${renderToolbar(ctx)}${renderSummary(ctx)}${renderFilters(ctx)}${renderColBar(ctx, optCols)}
-      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
+      <div class="pp-pbs-body">${renderConflictPanel(ctx)}${renderNotice(ctx)}${renderPdfPanel(ctx)}${renderPastePanel(ctx)}${renderEditForm(ctx)}
         <div class="pp-pbs-table-wrap"><table class="pp-pbs-table${stickyCls}"><caption class="pp-pbs-sr">Product breakdown structure items</caption>
           <thead><tr>
             <th scope="col" class="pp-pbs-th-code">Code</th>
@@ -769,7 +866,7 @@
 
   P.view = {
     esc, CSS, OPTIONAL_COL_GROUPS, renderTextOrLink, getPopulatedGroupFlags, resolveVisibleOptionalCols,
-    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderConflictPanel,
+    injectStyles, renderRows, renderTotalFoot, renderEditForm, renderPastePanel, renderPdfPanel, renderConflictPanel,
     renderToolbar, renderSummary, renderColBar, renderFilters, renderNotice, buildDialogHtml,
   };
 })();

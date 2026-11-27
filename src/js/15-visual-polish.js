@@ -9,18 +9,30 @@
     if (typeof MANUAL_SECTIONS !== 'undefined' && Array.isArray(MANUAL_SECTIONS)) {
       MANUAL_SECTIONS.push({
         id: 'whatsnew',
-        title: "What's New in PulsePlanSecure v8.4-secure",
+        title: "What's New in PulsePlanSecure v9.0-secure",
         badge: "What's New",
-        keywords: 'changelog release notes whats new v8.4 secure sri encryption critical path leveling ics calendar badge',
+        keywords: 'changelog release notes whats new v9 v9.0 secure rbac users admin delegated login dropdown password change sign out lock wipe connection lost finance vault auto open sync pbs expand fullscreen pdf field selector delete confirmation bullets mobile sri encryption critical path leveling ics calendar ms project xml directory',
         bodyHtml: `
-          <div class="space-y-2.5">
+          <div class="space-y-3">
             <div class="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1.5">
-              <div class="font-bold text-indigo-950">v8.4-secure Highlights</div>
-              <ul class="space-y-1 text-slate-700 leading-relaxed">
+              <div class="font-bold text-indigo-950">v9.0-secure Highlights</div>
+              <ul class="space-y-1.5 text-slate-700 leading-relaxed">
+                <li>&bull; <strong>Multi-User Access Control, Dropdown Sign-In &amp; Delegated Admin Rights:</strong> Provision team accounts with per-tab visibility (<em>Roadmap</em>, <em>Team Health</em>, <em>Setup &amp; Data</em>, <em>Sync &amp; Snapshots</em>), optional <strong>Finance Access</strong>, and delegated <strong>Administrator</strong> privileges. Pick users from a dropdown on the login screen, let team members set personal passwords, and let the Main Administrator rotate the master password or edit, reset, and disable accounts with immediate live revocation and automatic sync to disk.</li>
+                <li>&bull; <strong>Full-Hide Sign-Out &amp; Connection-Loss Data Protection:</strong> Signing out clears all workspace data from memory and browser storage behind a full-screen lock gate while remembering your linked file for one-click reconnect. If a linked database connection is lost, local data is cleared automatically until the password is re-entered.</li>
+                <li>&bull; <strong>Unified-Key Separate Finance Vault with Auto-Open &amp; Live Sync:</strong> Keep sensitive day rates and project budgets in an independent AES-256-GCM encrypted Finance Vault encrypted with the same session key (no second password needed). The main database stores the Finance Vault path so it reopens automatically, stays synced in real time, and re-encrypts automatically on master password rotation.</li>
+                <li>&bull; <strong>Product Breakdown Structure (PBS) — Fullscreen Expand, Custom PDF Field Selector &amp; Hardened Sync:</strong> Open <strong>PBS</strong> on any project row in <strong>Setup &amp; Data &rarr; Projects</strong>, toggle <strong>Expand / Restore</strong> for near-full-screen editing on desktop, and open <strong>PDF Report</strong> to pick the exact Core and Optional fields (with quick presets such as <em>All Populated</em>, <em>Current View</em>, <em>Core Only</em>, <em>Docs</em>, <em>Procurement</em>, and <em>SWaP &amp; Spares</em>) to include in your exported PDF. Separate <code class="px-1 rounded bg-white font-mono">pbs_&lt;CODE&gt;.json</code> files reuse the session passphrase, migrate automatically when project codes are renamed, re-encrypt on password rotation, and support folder auto-sync with conflict merge.</li>
+                <li>&bull; <strong>Universal Delete Confirmations:</strong> Every delete and destructive reset action across Roadmap, Team Health, Setup &amp; Data, Sync &amp; Snapshots, Finance Vault, Users, and PBS now requires explicit confirmation before removing data.</li>
+                <li>&bull; <strong>Roadmap Auto-Bullet Notes, Accurate Encryption Badges &amp; Mobile Polish:</strong> Type <code class="px-1 rounded bg-white font-mono">- </code> in Roadmap notes for automatic WhatsApp-style bullet lists with clean formatted rendering, rely on accurate <em>Encrypted</em> vs <em>Live</em> header badges, and enjoy a modernized Sync Hub and tighter responsive layouts for mobile screens and permission cards.</li>
+              </ul>
+            </div>
+            <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+              <div class="font-bold text-slate-900">Earlier Foundation Highlights (v8.4-secure)</div>
+              <ul class="space-y-1 text-slate-600 leading-relaxed">
                 <li>&bull; <strong>Transparent AES-256-GCM JSON Encryption:</strong> Linked shared <code class="px-1 rounded bg-white font-mono">.json</code> files, folder backups, and <strong>Share / Save JSON</strong> exports encrypt automatically with PBKDF2-SHA-256 (250k iterations) and configurable inactivity auto-lock.</li>
                 <li>&bull; <strong>Supply-Chain &amp; HTML5 Hardening:</strong> Verified SHA-384 Subresource Integrity hashes on CDN scripts, deduplicated single-shell PWA cache, preserved <code class="px-1 rounded bg-white font-mono">&lt;nav&gt;</code> landmark, and automated CI/CD verification.</li>
-                <li>&bull; <strong>Planning Intelligence:</strong> Added Milestone Dependencies with an interactive Critical Path SVG diagram, Resource Leveling / Auto-Balance suggestions, and an Executive Diff Summary before committing from What-If.</li>
-                <li>&bull; <strong>iCalendar (.ics) Export &amp; Header Shield:</strong> Export milestones directly to Outlook / Google Calendar / Apple Calendar, and monitor encryption status at a glance from the top header shield badge.</li>
+                <li>&bull; <strong>Planning Intelligence &amp; iCalendar (.ics) Export:</strong> Milestone Dependencies with an interactive Critical Path SVG diagram, Resource Leveling / Auto-Balance suggestions, Executive Diff Summary before What-If commits, and <code class="px-1 rounded bg-white font-mono">.ics</code> calendar exports.</li>
+                <li>&bull; <strong>MS Project XML Milestone Import &amp; Monitor:</strong> Link or import Microsoft Project <code class="px-1 rounded bg-white font-mono">.xml</code> files per project in <strong>Setup &amp; Data &rarr; Projects</strong> with milestone selection and optional auto-apply updates in Chrome/Edge.</li>
+                <li>&bull; <strong>Owners &amp; Technical Leads Directory + Bulk Actions:</strong> Manage Project Owners and Technical Leads in <strong>Setup &amp; Data</strong> with dropdown pickers and multi-select checkboxes for bulk delete and archive.</li>
               </ul>
             </div>
           </div>`,

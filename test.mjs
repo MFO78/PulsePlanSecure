@@ -3233,6 +3233,125 @@ test('Users Management & RBAC fixes: liveDB targeting, Edit & Disable/Enable, cu
   assert.equal(out.arbitraryAdminPwBlocked, true, 'Cannot overwrite master key with arbitrary Admin password when team users already exist');
 });
 
+test('PBS fullscreen expand button, PDF custom field selector, v9.0-secure version bump & updated What\'s New manual', () => {
+  const swText = fs.readFileSync('sw.js', 'utf8');
+  assert.ok(swText.includes('pulseplan-v9.0.0-secure-icons'), 'Service worker CACHE_NAME bumped to v9.0.0');
+
+  const out = vm.runInContext(`(() => {
+    const P = globalThis.__ppPbsV2;
+    if (!P || !P.report || !P.view || !P.tree) throw new Error('Missing PBS v2 modules');
+
+    const db = createSampleDemoDB();
+    const proj = db.projects[0];
+    const deptId = db.departments[0].id;
+    const msId = (db.milestones[0] && db.milestones[0].id) || '';
+    const doc = {
+      schemaVersion: 1,
+      meta: { revision: 3, projectId: proj.id, projectCode: proj.code },
+      items: [
+        { id: 'i1', parentId: null, code: '1', name: 'Avionics Bus', maturity: 'CDR', deptId, owner: 'Alice', milestoneId: msId, partNumber: 'AVB-100', mass: 2.5, powerConsumption: 18, notes: 'Main bus' },
+        { id: 'i2', parentId: 'i1', code: '1.1', name: 'Flight Computer', maturity: 'Qualified', deptId, owner: 'Bob', milestoneId: msId, partNumber: 'OBC-200', mass: 0.75, mechDrawing: 'DWG-M-42', notes: '' },
+      ],
+    };
+
+    const reportCols = P.report.REPORT_COLS;
+    const customModel = P.report.buildReportModel(doc, proj, db, 'Alice', '2026-11-26', {
+      selectedFieldKeys: ['name', 'partNumber', 'mass'],
+    });
+    const fallbackModel = P.report.buildReportModel(doc, proj, db, 'Alice', '2026-11-26', {
+      selectedFieldKeys: [],
+    });
+
+    // Verify renderPdf runs cleanly even when code, dept, and maturity columns are unchecked
+    let autoTableCalled = false;
+    function MockJsPdf() {
+      this.internal = { pageSize: { getWidth: () => 842 } };
+      this.setFillColor = () => {};
+      this.rect = () => {};
+      this.setTextColor = () => {};
+      this.setFont = () => {};
+      this.setFontSize = () => {};
+      this.text = () => {};
+      this.autoTable = (cfg) => {
+        autoTableCalled = true;
+        // Exercise didParseCell & didDrawCell for both data rows and totalRow
+        cfg.body.forEach((rowCells, rIdx) => {
+          rowCells.forEach((_cell, cIdx) => {
+            const cellData = { section: 'body', row: { index: rIdx }, column: { index: cIdx }, cell: { x: 10, y: 10, height: 14, styles: {} } };
+            cfg.didParseCell(cellData);
+            cfg.didDrawCell(cellData);
+          });
+        });
+      };
+    }
+    P.report.renderPdf(MockJsPdf, customModel);
+    const customPrintHtml = P.report.buildPrintHtml(customModel);
+
+    // Verify PBS view renders Expand/Restore button and PDF Field Selector panel
+    const summary = P.tree.computeMaturitySummary(doc, db.milestones || [], '2026-11-26');
+    const rollups = P.tree.computeSwpRollups(doc);
+    const rows = P.tree.getFilteredTreeRows(doc, {}, new Set(), { summary, rollups });
+    const baseCtx = {
+      doc, db, project: proj, summary, rollups, filteredRollups: null, isFiltered: false, matchedCount: 2,
+      rows, collapsedIds: new Set(), colGroups: { docs: false, proc: false, swp: false },
+      filter: {}, edit: null, pasteOpen: false, isExpanded: false,
+      pdfExport: { open: true, selectedFields: new Set(['code', 'name', 'mass']), populatedFields: new Set(['code', 'name', 'mass', 'partNumber']), applyFilters: false },
+      canUndo: false, canRedo: false, undoLabel: '', redoLabel: '', conflict: null, notices: [],
+      owners: [], manufacturers: [], procStatuses: [], projectMilestones: [], cloneSources: [],
+      canDirSync: false, dirName: '', hasRemembered: false, status: { text: 'Saved', tone: 'ok' },
+    };
+    const htmlCollapsed = P.view.buildDialogHtml(baseCtx);
+    const htmlExpanded = P.view.buildDialogHtml({ ...baseCtx, isExpanded: true });
+
+    const wn = MANUAL_SECTIONS.find(s => s && s.id === 'whatsnew');
+    const pbsMentions = wn ? (wn.bodyHtml.match(/Product Breakdown Structure \\(PBS\\)/g) || []).length : 0;
+    const mspMentions = wn ? (wn.bodyHtml.match(/MS Project XML Milestone Import/g) || []).length : 0;
+    const dirMentions = wn ? (wn.bodyHtml.match(/Owners &amp; Technical Leads Directory/g) || []).length : 0;
+
+    return {
+      colCount: Array.isArray(reportCols) ? reportCols.length : 0,
+      customHead: customModel.head,
+      customSubtitle: customModel.subtitle,
+      customTotalFirstCell: customModel.totalRow ? customModel.totalRow.cells[0] : null,
+      fallbackHead: fallbackModel.head,
+      autoTableCalled,
+      customPrintHtml,
+      htmlCollapsed,
+      htmlExpanded,
+      appVersion: PP_BUILD_INFO.version,
+      buildId: PULSEPLAN_BUILD_ID,
+      wnTitle: wn ? wn.title : '',
+      wnBody: wn ? wn.bodyHtml : '',
+      pbsMentions, mspMentions, dirMentions,
+    };
+  })()`, ctx);
+
+  assert.equal(out.colCount, 26, 'REPORT_COLS exports all 26 PBS PDF fields');
+  assert.deepEqual(Array.from(out.customHead), ['Deliverable / Subsystem', 'Part No.', 'Mass (kg)'], 'Custom selectedFieldKeys restricts PDF table to exact chosen core & optional fields');
+  assert.ok(out.customSubtitle.includes('Selected fields (3)'), 'Custom PDF subtitle notes selected field count');
+  assert.ok(out.customTotalFirstCell && out.customTotalFirstCell.startsWith('TOTAL'), 'Total row places TOTAL label cleanly even when Code column is unchecked');
+  assert.deepEqual(Array.from(out.fallbackHead), ['Code', 'Deliverable / Subsystem'], 'Empty selectedFieldKeys safely falls back to Code + Deliverable');
+  assert.equal(out.autoTableCalled, true, 'renderPdf executes autoTable hooks cleanly when core columns are omitted');
+  assert.ok(out.customPrintHtml.includes('<th>Part No.</th>') && !out.customPrintHtml.includes('<th>Owner</th>'), 'Print HTML fallback respects selectedFieldKeys');
+  assert.ok(out.htmlCollapsed.includes('id="ppPbsExpandWinBtn"') && out.htmlCollapsed.includes('Expand'), 'PBS dialog renders Expand window button');
+  assert.ok(out.htmlExpanded.includes('aria-pressed="true"') && out.htmlExpanded.includes('Restore'), 'PBS dialog switches button label to Restore when expanded');
+  assert.ok(out.htmlCollapsed.includes('id="ppPbsPdfPanel"') && out.htmlCollapsed.includes('data-pbs-pdf-field="mass"') && out.htmlCollapsed.includes('data-pbs-pdf-preset="populated"') && out.htmlCollapsed.includes('Export PDF (3 fields)'), 'PBS dialog renders PDF field selector panel with checkboxes, presets, and selected count');
+  assert.equal(out.appVersion, 'v9.0-secure', 'PP_BUILD_INFO.version updated to v9.0-secure');
+  assert.ok(out.buildId.includes('v9.0'), 'PULSEPLAN_BUILD_ID updated to v9.0');
+  assert.ok(out.wnTitle.includes('v9.0-secure'), 'Manual What\'s New title updated to v9.0-secure');
+  assert.ok(
+    out.wnBody.includes('Multi-User Access Control')
+    && out.wnBody.includes('Finance Vault')
+    && out.wnBody.includes('Fullscreen Expand, Custom PDF Field Selector')
+    && out.wnBody.includes('Universal Delete Confirmations')
+    && out.wnBody.includes('Connection-Loss Data Protection'),
+    'Manual What\'s New includes all recent v9 updates'
+  );
+  assert.equal(out.pbsMentions, 1, 'What\'s New does not duplicate PBS entry');
+  assert.equal(out.mspMentions, 1, 'What\'s New does not duplicate MSP entry');
+  assert.equal(out.dirMentions, 1, 'What\'s New does not duplicate Directory entry');
+});
+
 let passed = 0;
 let failed = 0;
 for (const t of tests) {

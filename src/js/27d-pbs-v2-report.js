@@ -153,39 +153,39 @@
 </svg>`;
   }
 
-  /* ---------- PDF / print report (single unified horizontal table with dynamic populated columns) ---------- */
+  /* ---------- PDF / print report (single unified horizontal table with dynamic populated or user-selected columns) ---------- */
   const REPORT_COLS = [
-    { key: 'code', label: 'Code', always: true, w: 44, baseW: 54, bold: true },
-    { key: 'acronym', label: 'Acronym', w: 46, has: it => Boolean(it.acronym) },
-    { key: 'name', label: 'Deliverable / Subsystem', always: true, w: 132, baseW: 195 },
-    { key: 'heritage', label: 'Status', w: 48, align: 'center', has: it => Boolean(it.heritage) },
-    { key: 'maturity', label: 'Maturity', always: true, w: 54, baseW: 66, bold: true },
-    { key: 'dept', label: 'Department', always: true, w: 80, baseW: 115 },
-    { key: 'owner', label: 'Owner', always: true, w: 62, baseW: 85 },
-    { key: 'milestone', label: 'Milestone', always: true, w: 84, baseW: 120 },
-    { key: 'description', label: 'Description', w: 112, has: it => Boolean(it.description) },
-    { key: 'mechDrawing', label: 'Mech. Dwg', w: 74, has: it => Boolean(it.mechDrawing) },
-    { key: 'elecDrawing', label: 'Elec. Dwg', w: 74, has: it => Boolean(it.elecDrawing) },
-    { key: 'refDoc', label: 'Ref. Doc', w: 76, has: it => Boolean(it.refDoc) },
-    { key: 'manufacturer', label: 'Manufacturer', w: 74, has: it => Boolean(it.manufacturer) },
-    { key: 'partNumber', label: 'Part No.', w: 80, has: it => Boolean(it.partNumber) },
-    { key: 'procurementStatus', label: 'Proc. Status', w: 66, has: it => Boolean(it.procurementStatus) },
-    { key: 'leadTime', label: 'Lead (wks)', w: 52, align: 'right', has: it => isNum(it.leadTime) },
-    { key: 'componentAlt', label: 'Alternative', w: 80, has: it => Boolean(it.componentAlt) },
-    { key: 'qty', label: 'Qty', w: 30, align: 'right', has: it => isNum(it.qty) && it.qty > 1 },
-    { key: 'mass', label: 'Mass (kg)', w: 54, align: 'right', has: it => isNum(it.mass) },
-    { key: 'powerConsumption', label: 'Pwr Cons (W)', w: 56, align: 'right', has: it => isNum(it.powerConsumption) },
-    { key: 'powerDissipation', label: 'Pwr Diss (W)', w: 56, align: 'right', has: it => isNum(it.powerDissipation) },
-    { key: 'mtbf', label: 'MTBF (h)', w: 52, align: 'right', has: it => isNum(it.mtbf) },
-    { key: 'lru', label: 'LRU', w: 40, align: 'center', has: it => Boolean(it.lru) },
-    { key: 'spareAvailable', label: 'Spare Avail.', w: 44, align: 'center', has: it => Boolean(it.spareAvailable) },
-    { key: 'spareToDeliver', label: 'Spare Deliv.', w: 48, align: 'center', has: it => Boolean(it.spareToDeliver) },
-    { key: 'notes', label: 'Notes', always: true, w: 90, auto: true },
+    { key: 'code', label: 'Code', group: 'core', always: true, w: 44, baseW: 54, bold: true, has: it => Boolean(it.code) },
+    { key: 'acronym', label: 'Acronym', group: 'core', w: 46, has: it => Boolean(it.acronym) },
+    { key: 'name', label: 'Deliverable / Subsystem', group: 'core', always: true, w: 132, baseW: 195, has: it => Boolean(it.name) },
+    { key: 'heritage', label: 'Status', group: 'swp', w: 48, align: 'center', has: it => Boolean(it.heritage) },
+    { key: 'maturity', label: 'Maturity', group: 'core', always: true, w: 54, baseW: 66, bold: true, has: it => Boolean(it.maturity) },
+    { key: 'dept', label: 'Department', group: 'core', always: true, w: 80, baseW: 115, has: it => Boolean(it.deptId) },
+    { key: 'owner', label: 'Owner', group: 'core', always: true, w: 62, baseW: 85, has: it => Boolean(it.owner) },
+    { key: 'milestone', label: 'Milestone', group: 'core', always: true, w: 84, baseW: 120, has: it => Boolean(it.milestoneId) },
+    { key: 'description', label: 'Description', group: 'docs', w: 112, has: it => Boolean(it.description) },
+    { key: 'mechDrawing', label: 'Mech. Dwg', group: 'docs', w: 74, has: it => Boolean(it.mechDrawing) },
+    { key: 'elecDrawing', label: 'Elec. Dwg', group: 'docs', w: 74, has: it => Boolean(it.elecDrawing) },
+    { key: 'refDoc', label: 'Ref. Doc', group: 'docs', w: 76, has: it => Boolean(it.refDoc) },
+    { key: 'manufacturer', label: 'Manufacturer', group: 'proc', w: 74, has: it => Boolean(it.manufacturer) },
+    { key: 'partNumber', label: 'Part No.', group: 'proc', w: 80, has: it => Boolean(it.partNumber) },
+    { key: 'procurementStatus', label: 'Proc. Status', group: 'proc', w: 66, has: it => Boolean(it.procurementStatus) },
+    { key: 'leadTime', label: 'Lead (wks)', group: 'proc', w: 52, align: 'right', has: it => isNum(it.leadTime) },
+    { key: 'componentAlt', label: 'Alternative', group: 'proc', w: 80, has: it => Boolean(it.componentAlt) },
+    { key: 'qty', label: 'Qty', group: 'swp', w: 30, align: 'right', has: it => isNum(it.qty) && it.qty > 1 },
+    { key: 'mass', label: 'Mass (kg)', group: 'swp', w: 54, align: 'right', has: it => isNum(it.mass) },
+    { key: 'powerConsumption', label: 'Pwr Cons (W)', group: 'swp', w: 56, align: 'right', has: it => isNum(it.powerConsumption) },
+    { key: 'powerDissipation', label: 'Pwr Diss (W)', group: 'swp', w: 56, align: 'right', has: it => isNum(it.powerDissipation) },
+    { key: 'mtbf', label: 'MTBF (h)', group: 'swp', w: 52, align: 'right', has: it => isNum(it.mtbf) },
+    { key: 'lru', label: 'LRU', group: 'swp', w: 40, align: 'center', has: it => Boolean(it.lru) },
+    { key: 'spareAvailable', label: 'Spare Avail.', group: 'swp', w: 44, align: 'center', has: it => Boolean(it.spareAvailable) },
+    { key: 'spareToDeliver', label: 'Spare Deliv.', group: 'swp', w: 48, align: 'center', has: it => Boolean(it.spareToDeliver) },
+    { key: 'notes', label: 'Notes', group: 'core', always: true, w: 90, auto: true, has: it => Boolean(it.notes) },
   ];
 
   const round4 = (n) => Math.round(n * 10000) / 10000;
 
-  /* options?: { visibleOptKeys?: Set|Array, rowIds?: Set|Array, matchedIds?: Set|Array, todayIso?: string } */
+  /* options?: { selectedFieldKeys?: Set|Array, visibleOptKeys?: Set|Array, rowIds?: Set|Array, matchedIds?: Set|Array, todayIso?: string } */
   function buildReportModel(doc, project, db, userName, dateStr, options) {
     const opts = options || {};
     const deptMap = new Map(((db && db.departments) || []).map(d => [d.id, d]));
@@ -204,12 +204,21 @@
       ? P.tree.computeFilteredRollups(doc, matchedIdSet)
       : fullRollups;
 
-    const visOptSet = opts.visibleOptKeys ? new Set(opts.visibleOptKeys) : null;
-    const activeCols = REPORT_COLS.filter(c => {
-      if (c.always) return true;
-      if (visOptSet && !visOptSet.has(c.key)) return false;
-      return flat.some(({ item }) => c.has(item));
-    });
+    const selFieldSet = opts.selectedFieldKeys
+      ? (opts.selectedFieldKeys instanceof Set ? opts.selectedFieldKeys : new Set(opts.selectedFieldKeys))
+      : null;
+    const visOptSet = !selFieldSet && opts.visibleOptKeys ? new Set(opts.visibleOptKeys) : null;
+    let activeCols;
+    if (selFieldSet) {
+      activeCols = REPORT_COLS.filter(c => selFieldSet.has(c.key));
+      if (!activeCols.length) activeCols = REPORT_COLS.filter(c => c.key === 'code' || c.key === 'name');
+    } else {
+      activeCols = REPORT_COLS.filter(c => {
+        if (c.always) return true;
+        if (visOptSet && !visOptSet.has(c.key)) return false;
+        return flat.some(({ item }) => c.has(item));
+      });
+    }
     const hasOpt = activeCols.some(c => !c.always);
     const colIdx = {};
     activeCols.forEach((c, i) => { colIdx[c.key] = i; });
@@ -332,12 +341,16 @@
       : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
     let totalRow = null;
     if (hasTotalCols && rows.length) {
+      const totalLabel = isFiltered ? 'FILTERED' : 'TOTAL';
+      const metricKeySet = new Set(['mass', 'powerConsumption', 'powerDissipation', 'lru', 'spareAvailable', 'spareToDeliver']);
+      const fallbackLabelIdx = colIdx.code === undefined ? activeCols.findIndex(c => !metricKeySet.has(c.key)) : -1;
       totalRow = {
         depth: 0, maturity: '', deptColor: null, isTotal: true, isContext: false,
         rollupCols: new Set(), warnCols: new Set(), errCols: new Set(),
-        cells: activeCols.map(col => {
-          if (col.key === 'code') return isFiltered ? 'FILTERED' : 'TOTAL';
-          if (col.key === 'name') return pdfSafe(itemCountLabel);
+        cells: activeCols.map((col, idx) => {
+          if (col.key === 'code') return totalLabel;
+          if (col.key === 'name') return idx === fallbackLabelIdx ? pdfSafe(`${totalLabel} (${itemCountLabel})`) : pdfSafe(itemCountLabel);
+          if (idx === fallbackLabelIdx) return totalLabel;
           if (col.key === 'mass') return totalRollups.totalMass !== null ? pdfSafe(fmtNum(totalRollups.totalMass)) : '-';
           if (col.key === 'powerConsumption') return totalRollups.totalPowerConsumption !== null ? pdfSafe(fmtNum(totalRollups.totalPowerConsumption)) : '-';
           if (col.key === 'powerDissipation') return totalRollups.totalPowerDissipation !== null ? pdfSafe(fmtNum(totalRollups.totalPowerDissipation)) : '-';
@@ -355,7 +368,7 @@
     let pageLabel = 'A4 Landscape';
     let fontSize = hasOpt ? 8 : 8.5;
     let cellPadding = hasOpt ? 4.5 : 6;
-    if (hasOpt && neededW > 770) {
+    if (neededW > 770) {
       if (neededW <= 1142) {
         pageFormat = 'a3';
         pageLabel = 'A3 Landscape';
@@ -375,7 +388,7 @@
     if (totalRollups && totalRollups.totalPowerConsumption !== null) swpSub.push(`Power: ${fmtNum(totalRollups.totalPowerConsumption)} W`);
     if (totalRollups && totalRollups.totalPowerDissipation !== null) swpSub.push(`Diss.: ${fmtNum(totalRollups.totalPowerDissipation)} W`);
     const scopeTag = isFiltered ? `Filtered (${matchedIdSet.size} of ${allFlat.length} items)` : `${rows.length} item${rows.length === 1 ? '' : 's'}`;
-    const viewTag = visOptSet ? 'Current columns' : '';
+    const viewTag = selFieldSet ? `Selected fields (${activeCols.length})` : (visOptSet ? 'Current columns' : '');
 
     return {
       title: pdfSafe(`Product Breakdown Structure - [${project ? project.code : ''}] ${project ? project.name : 'Project'}`),
@@ -422,7 +435,8 @@
     });
 
     const allRows = model.totalRow ? [...model.rows, model.totalRow] : model.rows;
-    const emptyBodyRow = cols.map((c, i) => (i === colIdx.name ? 'No PBS items recorded' : (c.key === 'notes' ? '' : '-')));
+    const emptyMsgCol = colIdx.name !== undefined ? colIdx.name : 0;
+    const emptyBodyRow = cols.map((c, i) => (i === emptyMsgCol ? 'No PBS items recorded' : (c.key === 'notes' ? '' : '-')));
     const meta = allRows.map(r => ({
       depth: r.depth, maturity: r.maturity, isTotal: Boolean(r.isTotal), isContext: Boolean(r.isContext),
       rollupCols: r.rollupCols || new Set(),
@@ -452,14 +466,14 @@
         if (m.isContext) data.cell.styles.textColor = [100, 116, 139];
         if (m.deptRgb) {
           data.cell.styles.fillColor = tint(m.deptRgb, 0.11);
-          if (data.column.index === colIdx.dept) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
+          if (colIdx.dept !== undefined && data.column.index === colIdx.dept) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
         }
-        if (data.column.index === colIdx.name) {
+        if (colIdx.name !== undefined && data.column.index === colIdx.name) {
           if (m.depth === 0) data.cell.styles.fontStyle = 'bold';
           const pad = lay.cellPadding;
           data.cell.styles.cellPadding = { top: pad, right: pad, bottom: pad, left: pad + 2 + m.depth * (model.hasOpt ? 10 : 14) };
         }
-        if (data.column.index === colIdx.maturity) data.cell.styles.textColor = MAT_PDF_RGB[m.maturity] || [100, 116, 139];
+        if (colIdx.maturity !== undefined && data.column.index === colIdx.maturity) data.cell.styles.textColor = MAT_PDF_RGB[m.maturity] || [100, 116, 139];
         if (m.rollupCols && m.rollupCols.has(data.column.index)) {
           data.cell.styles.fontStyle = 'italic';
           data.cell.styles.textColor = [100, 116, 139];
@@ -497,9 +511,10 @@
       const tds = r.cells.map((cell, idx) => {
         const col = cols[idx] || {};
         const styles = [];
-        if (idx === 0) styles.push(`font-family:monospace;font-weight:700${r.isTotal ? '' : `;border-left:4px solid ${htmlEsc(accent)}`}`);
-        if (!r.isTotal && idx === colIdx.name) styles.push(`padding-left:${8 + r.depth * (dense ? 12 : 16)}px;font-weight:${r.depth === 0 ? 700 : 500}`);
-        if (!r.isTotal && idx === colIdx.dept && r.deptColor) styles.push(`color:${htmlEsc(r.deptColor)};font-weight:600`);
+        if (idx === 0 && !r.isTotal) styles.push(`border-left:4px solid ${htmlEsc(accent)}`);
+        if (col.key === 'code') styles.push('font-family:monospace;font-weight:700');
+        if (!r.isTotal && colIdx.name !== undefined && idx === colIdx.name) styles.push(`padding-left:${8 + r.depth * (dense ? 12 : 16)}px;font-weight:${r.depth === 0 ? 700 : 500}`);
+        if (!r.isTotal && colIdx.dept !== undefined && idx === colIdx.dept && r.deptColor) styles.push(`color:${htmlEsc(r.deptColor)};font-weight:600`);
         if (col.align) styles.push(`text-align:${col.align}`);
         if (r.isTotal) styles.push('white-space:nowrap');
         if (r.rollupCols && r.rollupCols.has(idx)) styles.push('font-style:italic;color:#64748b');
@@ -517,5 +532,5 @@
       + `<tbody>${body || `<tr><td colspan="${cols.length}">No PBS items recorded.</td></tr>`}</tbody></table></body></html>`;
   }
 
-  P.report = { svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };
+  P.report = { REPORT_COLS, svgFilename, pdfFilename, pdfSafe, buildSvg, buildReportModel, renderPdf, buildPrintHtml };
 })();
