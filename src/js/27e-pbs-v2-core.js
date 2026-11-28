@@ -36,11 +36,102 @@
     if (typeof liveDB !== 'undefined' && liveDB) return liveDB;
     return getDb();
   }
+  const isDemoMode = () => Boolean(typeof ui !== 'undefined' && ui && ui.demoMode);
   const getUserName = () => ((typeof ui !== 'undefined' && ui && ui.userName) ? ui.userName : 'Project Mgr');
   const toast = (msg, type) => { if (typeof showToast === 'function') showToast(msg, type || 'info'); };
   const getProject = (id) => (getDb().projects || []).find(p => p.id === id) || null;
-  const getCache = () => (S.cache || (S.cache = D().loadCache()));
-  const persistCache = () => D().saveCache(getCache());
+
+  function buildDemoPbsCache() {
+    const now = new Date().toISOString();
+    const mkDoc = (projectId, code, name, items) => {
+      const raw = {
+        schema: 'pulseplan-pbs-v2',
+        projectId,
+        projectCode: code,
+        projectName: name,
+        meta: { updatedAt: now, updatedBy: 'Demo', revision: 1 },
+        items: items.map((it, idx) => ({
+          id: it.id,
+          parentId: it.parentId || null,
+          pbsCode: it.pbsCode,
+          name: it.name,
+          category: it.category || 'Hardware',
+          owner: it.owner || '',
+          status: it.status || 'In Progress',
+          maturity: it.maturity || 'CDR',
+          qty: it.qty != null ? it.qty : 1,
+          makeBuy: it.makeBuy || 'Buy',
+          massKg: it.massKg != null ? it.massKg : null,
+          powerW: it.powerW != null ? it.powerW : null,
+          powerDissipationW: it.powerDissipationW != null ? it.powerDissipationW : null,
+          unitCost: it.unitCost != null ? it.unitCost : null,
+          supplier: it.supplier || '',
+          partNumber: it.partNumber || '',
+          leadTimeWeeks: it.leadTimeWeeks != null ? it.leadTimeWeeks : null,
+          sparesQty: it.sparesQty != null ? it.sparesQty : 0,
+          procStatus: it.procStatus || 'Ordered',
+          notes: it.notes || '',
+          order: idx,
+        })),
+      };
+      return D().normalizePbsDoc(raw, { id: projectId, code, name }, 'Demo');
+    };
+
+    const novaItems = [
+      { id: 'n_root', parentId: null, pbsCode: '1', name: 'Nova Core Platform System', category: 'System', owner: 'E. Rostova', status: 'In Progress', maturity: 'CDR', makeBuy: 'Make' },
+      // 1.1 Optical & Sensor Payload (high cost & mass Pareto drivers)
+      { id: 'n_opt', parentId: 'n_root', pbsCode: '1.1', name: 'Optical & Sensor Payload', category: 'Subsystem', owner: 'S. Chen', status: 'In Progress', maturity: 'CDR', makeBuy: 'Make' },
+      { id: 'n_opt_lwir', parentId: 'n_opt', pbsCode: '1.1.1', name: 'Cooled LWIR Thermal Imaging Core', category: 'Optics', owner: 'S. Chen', qty: 1, massKg: 4.8, unitCost: 48500, powerW: 34, powerDissipationW: 28, supplier: 'Photonics Labs AG', partNumber: 'PL-LWIR-640', leadTimeWeeks: 18, sparesQty: 1, procStatus: 'Ordered', notes: 'Long-lead cryocooler assembly; critical path' },
+      { id: 'n_opt_lidar', parentId: 'n_opt', pbsCode: '1.1.2', name: 'Solid-State 3D LiDAR Scanner', category: 'Optics', owner: 'S. Chen', qty: 1, massKg: 3.2, unitCost: 26400, powerW: 24, powerDissipationW: 19, supplier: 'VeloBeam GmbH', partNumber: 'VB-L3D-200', leadTimeWeeks: 14, sparesQty: 1, procStatus: 'Ordered', notes: 'Eye-safe 1550nm emitter' },
+      { id: 'n_opt_gimbal', parentId: 'n_opt', pbsCode: '1.1.3', name: '2-Axis Stabilized Carbon Gimbal', category: 'Mechanical', owner: 'M. Rossi', qty: 1, massKg: 6.4, unitCost: 19800, powerW: 18, powerDissipationW: 11, supplier: 'AeroMotion Sarl', partNumber: 'AM-G2-CF', leadTimeWeeks: 12, sparesQty: 0, procStatus: 'In Review', notes: 'Includes direct-drive brushless actuators' },
+      { id: 'n_opt_imu', parentId: 'n_opt', pbsCode: '1.1.4', name: 'Tactical Fiber-Optic IMU', category: 'Avionics', owner: 'E. Rostova', qty: 1, massKg: 1.1, unitCost: 15200, powerW: 6, powerDissipationW: 5, supplier: 'InertialNav Corp', partNumber: 'IN-FOG-90', leadTimeWeeks: 10, sparesQty: 1, procStatus: 'Received', notes: 'Calibrated at -40C to +70C' },
+      { id: 'n_opt_window', parentId: 'n_opt', pbsCode: '1.1.5', name: 'Germanium AR Optical Window', category: 'Optics', owner: 'S. Chen', qty: 2, massKg: 0.45, unitCost: 2100, powerW: 0, powerDissipationW: 0, supplier: 'OptiCoat BV', partNumber: 'OC-GE-120', leadTimeWeeks: 8, sparesQty: 2, procStatus: 'Received' },
+      // 1.2 Avionics & Compute Core (high power & dissipation Pareto drivers)
+      { id: 'n_av', parentId: 'n_root', pbsCode: '1.2', name: 'Avionics & Edge Compute Core', category: 'Subsystem', owner: 'P. Nair', status: 'In Progress', maturity: 'CDR', makeBuy: 'Make' },
+      { id: 'n_av_gpu', parentId: 'n_av', pbsCode: '1.2.1', name: 'Rugged AI Inference Compute Blade', category: 'Electronics', owner: 'P. Nair', qty: 2, massKg: 1.8, unitCost: 9400, powerW: 65, powerDissipationW: 62, supplier: 'EdgeSilicon Inc', partNumber: 'ES-VPX-AI8', leadTimeWeeks: 11, sparesQty: 1, procStatus: 'Ordered', notes: 'Conduction-cooled 3U VPX; primary thermal load' },
+      { id: 'n_av_fpga', parentId: 'n_av', pbsCode: '1.2.2', name: 'Sensor Fusion FPGA Carrier Board', category: 'Electronics', owner: 'E. Rostova', qty: 1, massKg: 0.9, unitCost: 7800, powerW: 28, powerDissipationW: 25, makeBuy: 'Make', supplier: 'EuroPCB Fab', partNumber: 'NVA-FPGA-04', leadTimeWeeks: 7, sparesQty: 2, procStatus: 'In Production', notes: 'Rev C layout frozen after EMC pre-test' },
+      { id: 'n_av_switch', parentId: 'n_av', pbsCode: '1.2.3', name: '10GbE TSN Managed Ethernet Switch', category: 'Electronics', owner: 'E. Rostova', qty: 1, massKg: 1.2, unitCost: 5600, powerW: 22, powerDissipationW: 20, supplier: 'NetRugged Ltd', partNumber: 'NR-TSN-12P', leadTimeWeeks: 9, sparesQty: 0, procStatus: 'Received' },
+      { id: 'n_av_ssd', parentId: 'n_av', pbsCode: '1.2.4', name: 'FIPS-140 Encrypted NVMe Storage Pack', category: 'Electronics', owner: 'L. Vance', qty: 2, massKg: 0.35, unitCost: 1950, powerW: 8, powerDissipationW: 7, supplier: 'VaultFlash', partNumber: 'VF-NVME-8T', leadTimeWeeks: 4, sparesQty: 2, procStatus: 'Received' },
+      // 1.3 Power & Thermal Subsystem (major mass & dissipation)
+      { id: 'n_pwr', parentId: 'n_root', pbsCode: '1.3', name: 'Power & Thermal Management', category: 'Subsystem', owner: 'L. Vance', status: 'At Risk', maturity: 'PDR', makeBuy: 'Make' },
+      { id: 'n_pwr_batt', parentId: 'n_pwr', pbsCode: '1.3.1', name: 'High-Density Li-Ion Battery Pack (48V)', category: 'Power', owner: 'L. Vance', qty: 2, massKg: 8.5, unitCost: 6800, powerW: 5, powerDissipationW: 12, supplier: 'CellPower Nordic', partNumber: 'CP-48V-60AH', leadTimeWeeks: 16, sparesQty: 1, procStatus: 'Ordered', notes: 'UN38.3 certified; largest mass contributor' },
+      { id: 'n_pwr_pdu', parentId: 'n_pwr', pbsCode: '1.3.2', name: 'Smart Solid-State Power Distribution Unit', category: 'Power', owner: 'L. Vance', qty: 1, massKg: 2.4, unitCost: 4900, powerW: 14, powerDissipationW: 18, makeBuy: 'Make', supplier: 'PowerGrid Micro', partNumber: 'NVA-PDU-28', leadTimeWeeks: 8, sparesQty: 1, procStatus: 'In Review' },
+      { id: 'n_pwr_chiller', parentId: 'n_pwr', pbsCode: '1.3.3', name: 'Closed-Loop Liquid Cold-Plate & Pump', category: 'Thermal', owner: 'E. Rostova', qty: 1, massKg: 5.2, unitCost: 7200, powerW: 42, powerDissipationW: 15, supplier: 'ThermFlow AG', partNumber: 'TF-CP-350W', leadTimeWeeks: 10, sparesQty: 0, procStatus: 'Ordered' },
+      { id: 'n_pwr_rad', parentId: 'n_pwr', pbsCode: '1.3.4', name: 'Finned Heat Exchanger & Dual Blowers', category: 'Thermal', owner: 'L. Vance', qty: 1, massKg: 3.1, unitCost: 2450, powerW: 26, powerDissipationW: 9, supplier: 'ThermFlow AG', partNumber: 'TF-HX-240', leadTimeWeeks: 6, sparesQty: 1, procStatus: 'Received' },
+      // 1.4 Mechanical Chassis & Harness
+      { id: 'n_mech', parentId: 'n_root', pbsCode: '1.4', name: 'Mechanical Chassis & Harness', category: 'Subsystem', owner: 'M. Bellini', status: 'Completed', maturity: 'CDR', makeBuy: 'Make' },
+      { id: 'n_mech_chassis', parentId: 'n_mech', pbsCode: '1.4.1', name: 'CNC Milled 6061-T6 Sealed Main Chassis', category: 'Mechanical', owner: 'M. Bellini', qty: 1, massKg: 11.4, unitCost: 8900, powerW: 0, powerDissipationW: 0, makeBuy: 'Make', supplier: 'AluCraft CNC', partNumber: 'NVA-CH-001', leadTimeWeeks: 6, sparesQty: 0, procStatus: 'Received', notes: 'IP67 gasketed; anodized matte black' },
+      { id: 'n_mech_mounts', parentId: 'n_mech', pbsCode: '1.4.2', name: 'Wire-Rope Vibration Isolation Mounts', category: 'Mechanical', owner: 'M. Bellini', qty: 4, massKg: 0.6, unitCost: 420, powerW: 0, powerDissipationW: 0, supplier: 'VibroStop', partNumber: 'VS-WR-15', leadTimeWeeks: 3, sparesQty: 4, procStatus: 'Received' },
+      { id: 'n_mech_harness', parentId: 'n_mech', pbsCode: '1.4.3', name: 'MIL-DTL-38999 Shielded Wiring Harness', category: 'Electrical', owner: 'L. Vance', qty: 1, massKg: 2.9, unitCost: 5400, powerW: 0, powerDissipationW: 2, supplier: 'CableWorks EU', partNumber: 'CW-NVA-HRN', leadTimeWeeks: 8, sparesQty: 1, procStatus: 'In Production' },
+      { id: 'n_mech_fast', parentId: 'n_mech', pbsCode: '1.4.4', name: 'Titanium Fastener & Gasket Kit', category: 'Mechanical', owner: 'M. Bellini', qty: 1, massKg: 0.4, unitCost: 680, powerW: 0, powerDissipationW: 0, supplier: 'FastenPro', partNumber: 'FP-TI-KIT', leadTimeWeeks: 2, sparesQty: 2, procStatus: 'Received' },
+    ];
+
+    const atlasItems = [
+      { id: 'a_root', parentId: null, pbsCode: '1', name: 'Atlas Mobile v3 Field Kit', category: 'System', owner: 'M. Rossi', status: 'In Progress', maturity: 'CDR', makeBuy: 'Make' },
+      { id: 'a_gw', parentId: 'a_root', pbsCode: '1.1', name: 'Rugged Edge Gateway Unit', category: 'Subsystem', owner: 'A. Novak', status: 'In Progress', maturity: 'CDR', makeBuy: 'Make' },
+      { id: 'a_gw_soc', parentId: 'a_gw', pbsCode: '1.1.1', name: 'ARM64 Cellular/5G Gateway Board', category: 'Electronics', owner: 'A. Novak', qty: 1, massKg: 0.45, unitCost: 1450, powerW: 12, powerDissipationW: 10, supplier: 'FieldComms', partNumber: 'FC-5G-ARM', leadTimeWeeks: 8, sparesQty: 2, procStatus: 'Ordered' },
+      { id: 'a_gw_case', parentId: 'a_gw', pbsCode: '1.1.2', name: 'IP67 Die-Cast Aluminum Enclosure', category: 'Mechanical', owner: 'M. Bellini', qty: 1, massKg: 1.65, unitCost: 620, powerW: 0, powerDissipationW: 0, supplier: 'AluCraft CNC', partNumber: 'ATL-ENC-03', leadTimeWeeks: 5, sparesQty: 1, procStatus: 'Received' },
+      { id: 'a_gw_ant', parentId: 'a_gw', pbsCode: '1.1.3', name: 'MIMO 5G + GNSS Dome Antenna', category: 'RF', owner: 'A. Novak', qty: 1, massKg: 0.55, unitCost: 390, powerW: 1.5, powerDissipationW: 1, supplier: 'Antennix', partNumber: 'AX-MIMO-5G', leadTimeWeeks: 4, sparesQty: 2, procStatus: 'Received' },
+      { id: 'a_tab', parentId: 'a_root', pbsCode: '1.2', name: 'Operator Rugged Tablet & Dock', category: 'Subsystem', owner: 'M. Bellini', status: 'Completed', maturity: 'CDR', makeBuy: 'Buy' },
+      { id: 'a_tab_unit', parentId: 'a_tab', pbsCode: '1.2.1', name: 'Sunlight-Readable 10" Field Tablet', category: 'Electronics', owner: 'M. Bellini', qty: 2, massKg: 1.15, unitCost: 2350, powerW: 18, powerDissipationW: 14, supplier: 'RuggedTab Co', partNumber: 'RT-10-PRO', leadTimeWeeks: 6, sparesQty: 1, procStatus: 'Received' },
+      { id: 'a_tab_dock', parentId: 'a_tab', pbsCode: '1.2.2', name: 'Vehicle Charging & Ethernet Cradle', category: 'Mechanical', owner: 'M. Rossi', qty: 2, massKg: 0.9, unitCost: 480, powerW: 4, powerDissipationW: 3, supplier: 'RuggedTab Co', partNumber: 'RT-DOCK-V2', leadTimeWeeks: 4, sparesQty: 1, procStatus: 'Received' },
+      { id: 'a_case', parentId: 'a_root', pbsCode: '1.3', name: 'Pelican-Style Foam Transport Case', category: 'Mechanical', owner: 'L. Vance', qty: 1, massKg: 4.8, unitCost: 540, powerW: 0, powerDissipationW: 0, supplier: 'CaseGuard', partNumber: 'CG-1560-FOAM', leadTimeWeeks: 2, sparesQty: 0, procStatus: 'Received' },
+    ];
+
+    return {
+      p_nova: mkDoc('p_nova', 'NVA', 'Project Nova (Core Platform)', novaItems),
+      p_atlas: mkDoc('p_atlas', 'ATL', 'Atlas Mobile v3', atlasItems),
+    };
+  }
+
+  const getCache = () => {
+    if (isDemoMode()) return (S.demoCache || (S.demoCache = buildDemoPbsCache()));
+    return (S.cache || (S.cache = D().loadCache()));
+  };
+  const persistCache = () => {
+    if (isDemoMode()) return;
+    D().saveCache(getCache());
+  };
   const fileNameFor = (projectId = S.activeProjectId) => D().getPbsFilename(getProject(projectId), projectId);
 
   function withPbsTimeout(promise, ms = IO_TIMEOUT_MS, label = 'PBS folder operation timed out') {
@@ -229,12 +320,20 @@
     S.conflictRemoteText = null; S.conflictRemoteDoc = null; S.conflictRemoteModified = 0;
     const cached = getCache()[projectId];
     S.activeDoc = (cached && D().normalizePbsDoc(cached, project, getUserName())) || D().createEmptyPbs(project, getUserName(), projectId);
-    setSyncStatus(S.dirHandle ? `Synced (${fileNameFor()})` : 'Saved locally in browser', S.dirHandle ? 'ok' : 'idle');
+    if (isDemoMode()) {
+      setSyncStatus('Demo PBS (in-memory)', 'idle');
+    } else {
+      setSyncStatus(S.dirHandle ? `Synced (${fileNameFor()})` : 'Saved locally in browser', S.dirHandle ? 'ok' : 'idle');
+    }
     return S.activeDoc;
   }
 
   /* Restores a previously linked folder (optionally prompting inside a user gesture) and loads the active project's file from it. */
   async function initFolder(opts = {}) {
+    if (isDemoMode()) {
+      S.hooks.onBadges();
+      return;
+    }
     const allowPrompt = Boolean(opts && opts.allowPrompt);
     if (!S.dirHandle && supportsDirSync()) {
       if (!S.rememberedDirHandle) {

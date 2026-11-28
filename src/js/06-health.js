@@ -334,7 +334,7 @@
       const prevTasksCard = document.getElementById('ppHealthTasksCard');
       if (prevTasksCard) prevTasksCard.remove();
       const kpisEl = document.getElementById('healthKpis');
-      if (kpisEl && typeof ppRenderHealthTasksWidget === 'function') {
+      if (kpisEl && typeof kpisEl.insertAdjacentHTML === 'function' && typeof ppRenderHealthTasksWidget === 'function') {
         const visibleTaskProjs = (db.projects || []).filter(p => p && !p.archived && (ui.filterProj === 'all' || p.id === ui.filterProj) && (ui.includeTentative || !p.tentative));
         const tasksCardHtml = ppRenderHealthTasksWidget(db, periods, visibleDepts, visibleTaskProjs);
         if (tasksCardHtml) kpisEl.insertAdjacentHTML('afterend', tasksCardHtml);

@@ -237,15 +237,54 @@
 
       const m0Weeks = getWeeksInMonth(m0);
       const m1Weeks = getWeeksInMonth(m1);
-      db.comments[`d_eng::p_nova::${m0}`] = 'API v2 auth migration complete.\nFocusing on load-testing before Beta cut.';
-      db.comments[`d_eng::p_cloud::${m1}`] = 'Overallocated by +1.0 FTE — reviewing contractor buffer with Ops.';
-      db.comments[`d_ops::p_cloud::${m1}`] = 'Awaiting EU legal sign-off on Frankfurt cluster failover.';
+      const curWk = getCurrentWeekKey();
+      const prevWk1 = addWeeksToWeekKey(curWk, -1);
+      const prevWk2 = addWeeksToWeekKey(curWk, -2);
+      const prevWk3 = addWeeksToWeekKey(curWk, -3);
+      const nextWk1 = addWeeksToWeekKey(curWk, 1);
+
+      db.comments[`d_eng::p_nova::${m0}`] = '• API v2 auth migration complete\n• Load-testing avionics telemetry bus before Beta cut\n• Thermal chamber slot confirmed with Ops';
+      db.comments[`d_eng::p_atlas::${m0}`] = '• Offline sync queue stress-tested on iOS & Android\n• Preparing field-kit firmware release candidate';
+      db.comments[`d_eng::p_cloud::${m1}`] = '• Overallocated by +1.0 FTE — reviewing contractor buffer with Ops\n• Frankfurt failover dry-run scheduled';
+      db.comments[`d_ops::p_cloud::${m1}`] = '• Awaiting EU legal sign-off on Frankfurt cluster failover\n• Backup diesel generator test passed';
+      db.comments[`d_des::p_nova::${m0}`] = '• Updated operator console dark-mode telemetry cards\n• Reviewing PBS Pareto visual hierarchy';
       if (m0Weeks[0]) {
-        db.comments[`d_des::p_atlas::${m0Weeks[0]}`] = 'Finalize iOS navigation prototypes.\nDesign review scheduled Thu 14:00.';
+        db.comments[`d_des::p_atlas::${m0Weeks[0]}`] = '• Finalize iOS navigation prototypes\n• Design review scheduled Thu 14:00';
       }
       if (m1Weeks[0]) {
-        db.comments[`d_dat::p_pulse::${m1Weeks[0]}`] = 'Benchmarking prompt latency across top 5 enterprise datasets.';
+        db.comments[`d_dat::p_pulse::${m1Weeks[0]}`] = '• Benchmarking prompt latency across top 5 enterprise datasets\n• Evaluating quantized edge model footprint';
       }
+      db.comments[`d_eng::p_nova::${curWk}`] = '• Weekly sync focus: close thermal & power budget actions before Beta freeze';
+      db.comments[`d_ops::p_cloud::${curWk}`] = '• Weekly sync focus: unblock EU compliance & failover checklist';
+
+      // Rich weekly allocation tasks showcasing Completed, Open, Rolled (↻1 / ↻2 / ↻3), Missed Traces, 0-FTE carry-over, Dropped & Future
+      db.allocationTasks = [
+        { id: 'tsk_demo_1', deptId: 'd_eng', projectId: 'p_nova', originWeek: curWk, currentWeek: curWk, text: 'Run 48h thermal soak test on compute module', done: true, doneWeek: curWk, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_2', deptId: 'd_eng', projectId: 'p_nova', originWeek: prevWk1, currentWeek: curWk, text: 'Freeze optical sensor interface ICD rev C', done: false, rollCount: 1, dropped: false },
+        { id: 'tsk_demo_3', deptId: 'd_eng', projectId: 'p_nova', originWeek: prevWk2, currentWeek: curWk, text: 'Close EMC pre-compliance shielding findings', done: false, rollCount: 2, dropped: false },
+        { id: 'tsk_demo_4', deptId: 'd_eng', projectId: 'p_nova', originWeek: nextWk1, currentWeek: nextWk1, text: 'Tag Nova Beta v0.9 release candidate', done: false, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_5', deptId: 'd_eng', projectId: 'p_atlas', originWeek: curWk, currentWeek: curWk, text: 'Verify BLE pairing recovery after sleep cycle', done: true, doneWeek: curWk, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_6', deptId: 'd_eng', projectId: 'p_atlas', originWeek: prevWk1, currentWeek: curWk, text: 'Deliver ruggedized gateway enclosure CAD pack', done: false, rollCount: 1, dropped: false },
+        { id: 'tsk_demo_7', deptId: 'd_des', projectId: 'p_atlas', originWeek: curWk, currentWeek: curWk, text: 'Sign off high-contrast field tablet UI kit', done: true, doneWeek: curWk, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_8', deptId: 'd_des', projectId: 'p_nova', originWeek: prevWk1, currentWeek: prevWk1, text: 'Publish Nova dashboard component tokens', done: true, doneWeek: prevWk1, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_9', deptId: 'd_des', projectId: 'p_nova', originWeek: curWk, currentWeek: curWk, text: 'Audit accessibility contrast in dark mode', done: false, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_10', deptId: 'd_dat', projectId: 'p_pulse', originWeek: curWk, currentWeek: curWk, text: 'Benchmark P95 latency on 100k-row dataset', done: false, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_11', deptId: 'd_dat', projectId: 'p_pulse', originWeek: prevWk2, currentWeek: curWk, text: 'Sign off GDPR PII redaction test report', done: false, rollCount: 2, dropped: false },
+        { id: 'tsk_demo_12', deptId: 'd_ops', projectId: 'p_cloud', originWeek: prevWk3, currentWeek: curWk, text: 'Obtain EU legal sign-off on Frankfurt failover', done: false, rollCount: 3, dropped: false },
+        { id: 'tsk_demo_13', deptId: 'd_ops', projectId: 'p_cloud', originWeek: curWk, currentWeek: curWk, text: 'Validate automated DB snapshot restore drill', done: true, doneWeek: curWk, rollCount: 0, dropped: false },
+        { id: 'tsk_demo_14', deptId: 'd_ops', projectId: 'p_nova', originWeek: prevWk1, currentWeek: prevWk1, text: 'Legacy VPN tunnel migration (superseded)', done: false, rollCount: 0, dropped: true },
+        // 0-FTE carried-over task (d_dat has 0 FTE on p_nova in m0, so this surfaces a 0-FTE carry-over card!)
+        { id: 'tsk_demo_15', deptId: 'd_dat', projectId: 'p_nova', originWeek: prevWk1, currentWeek: curWk, text: 'Hand off telemetry schema validation script', done: false, rollCount: 1, dropped: false },
+      ];
+
+      // Realistic external / vendor / hardware costs for Finance & Burn-vs-Budget views
+      db.externalCosts = [
+        { id: 'ec_demo_1', projectId: 'p_nova', periodKey: m0, category: 'Hardware', vendor: 'Photonics Labs AG', description: 'LWIR Optical Core & LiDAR prototype batch', amount: 42500 },
+        { id: 'ec_demo_2', projectId: 'p_nova', periodKey: m1, category: 'Testing', vendor: 'EuroCert EMC', description: 'Environmental & EMC chamber qualification', amount: 18500 },
+        { id: 'ec_demo_3', projectId: 'p_cloud', periodKey: m1, category: 'Cloud Infra', vendor: 'EU Sovereign Cloud', description: 'Frankfurt HA cluster & failover reservation', amount: 24000 },
+        { id: 'ec_demo_4', projectId: 'p_atlas', periodKey: m0, category: 'Tooling', vendor: 'AluCraft CNC', description: 'IP67 milled aluminum field enclosure tooling', amount: 14200 },
+        { id: 'ec_demo_5', projectId: 'p_pulse', periodKey: m1, category: 'Compute', vendor: 'GPU Cloud Pool', description: 'Dedicated H100 evaluation cluster reservation', amount: 19800 },
+      ];
 
       db.milestones = [
         { id: 'ms_1', title: 'Nova Beta Cut', projectId: 'p_nova', deptId: 'd_eng', baselineDate: `${m1}-18`, date: `${m1}-18`, status: 'In Progress', notes: 'Core API freeze' },
