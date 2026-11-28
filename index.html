@@ -30034,10 +30034,20 @@ border-color: #334155;
           data.cell.styles.fillColor = tint(m.deptRgb, 0.11);
           if (colIdx.dept !== undefined && data.column.index === colIdx.dept) { data.cell.styles.textColor = m.deptRgb; data.cell.styles.fontStyle = 'bold'; }
         }
-        if (colIdx.name !== undefined && data.column.index === colIdx.name) {
-          if (m.depth === 0) data.cell.styles.fontStyle = 'bold';
+        if (colIdx.code !== undefined && data.column.index === colIdx.code) {
           const pad = lay.cellPadding;
-          data.cell.styles.cellPadding = { top: pad, right: pad, bottom: pad, left: pad + 2 + m.depth * (model.hasOpt ? 10 : 14) };
+          const codeIndent = Math.min(20, m.depth * (model.hasOpt ? 3.5 : 5));
+          data.cell.styles.cellPadding = { top: pad, right: pad, bottom: pad, left: pad + 4 + codeIndent };
+          if (m.depth <= 1) data.cell.styles.fontStyle = 'bold';
+        }
+        if (colIdx.name !== undefined && data.column.index === colIdx.name) {
+          if (m.depth <= 1) data.cell.styles.fontStyle = 'bold';
+          const pad = lay.cellPadding;
+          const step = model.hasOpt ? 11 : 15;
+          const extraForBranch = m.depth > 0 ? 4 : 0;
+          const maxIndent = Math.max(36, Math.round((columnStyles[colIdx.name]?.cellWidth || 120) * 0.45));
+          const leftIndent = Math.min(maxIndent, m.depth * step + extraForBranch);
+          data.cell.styles.cellPadding = { top: pad, right: pad, bottom: pad, left: pad + 2 + leftIndent };
         }
         if (colIdx.maturity !== undefined && data.column.index === colIdx.maturity) data.cell.styles.textColor = MAT_PDF_RGB[m.maturity] || [100, 116, 139];
         if (m.rollupCols && m.rollupCols.has(data.column.index)) {
@@ -30054,9 +30064,40 @@ border-color: #334155;
         }
       },
       didDrawCell(data) {
-        if (data.section !== 'body' || data.column.index !== 0) return;
+        if (data.section !== 'body') return;
         const m = meta[data.row.index];
-        if (m && !m.isTotal && m.deptRgb) { pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]); pdf.rect(data.cell.x, data.cell.y, 4, data.cell.height, 'F'); }
+        if (!m || m.isTotal) return;
+        if (data.column.index === 0 && m.deptRgb) {
+          pdf.setFillColor(m.deptRgb[0], m.deptRgb[1], m.deptRgb[2]);
+          pdf.rect(data.cell.x, data.cell.y, 4, data.cell.height, 'F');
+        }
+        // Draw crisp vector tree connectors & subtle ancestor guide lines in the Name column
+        if (colIdx.name !== undefined && data.column.index === colIdx.name && m.depth > 0 && typeof pdf.line === 'function') {
+          const pad = lay.cellPadding;
+          const step = model.hasOpt ? 11 : 15;
+          const baseX = data.cell.x + pad + 2;
+          const midY = data.cell.y + Math.min(data.cell.height / 2, pad + lay.fontSize * 0.65);
+          const maxIndent = Math.max(36, Math.round((data.cell.width || 120) * 0.45));
+          const branchX = baseX + Math.min(maxIndent - 4, (m.depth - 1) * step + Math.round(step * 0.45));
+          const elbowEndX = Math.min(data.cell.x + data.cell.width - pad, branchX + Math.min(step * 0.55 + 2, 9));
+
+          // Subtle ancestor vertical guide lines for deeper nesting (depth >= 2)
+          if (m.depth >= 2) {
+            if (typeof pdf.setDrawColor === 'function') pdf.setDrawColor(226, 232, 240);
+            if (typeof pdf.setLineWidth === 'function') pdf.setLineWidth(0.45);
+            for (let lvl = 0; lvl < m.depth - 1; lvl++) {
+              const gx = baseX + lvl * step + Math.round(step * 0.45);
+              if (gx < branchX - 2) {
+                pdf.line(gx, data.cell.y, gx, data.cell.y + data.cell.height);
+              }
+            }
+          }
+          // L-shaped connector for the item's own level
+          if (typeof pdf.setDrawColor === 'function') pdf.setDrawColor(148, 163, 184);
+          if (typeof pdf.setLineWidth === 'function') pdf.setLineWidth(0.7);
+          pdf.line(branchX, data.cell.y, branchX, midY);
+          pdf.line(branchX, midY, elbowEndX, midY);
+        }
       },
       margin: { left: marginX, right: marginX, bottom: 32 },
     });
@@ -30083,16 +30124,26 @@ border-color: #334155;
       const tds = r.cells.map((cell, idx) => {
         const col = cols[idx] || {};
         const styles = [];
+        let contentHtml = htmlEsc(cell);
         if (idx === 0 && !r.isTotal) styles.push(`border-left:4px solid ${htmlEsc(accent)}`);
-        if (col.key === 'code') styles.push('font-family:monospace;font-weight:700');
-        if (!r.isTotal && colIdx.name !== undefined && idx === colIdx.name) styles.push(`padding-left:${8 + r.depth * (dense ? 12 : 16)}px;font-weight:${r.depth === 0 ? 700 : 500}`);
+        if (col.key === 'code') {
+          styles.push('font-family:monospace;font-weight:700');
+          if (!r.isTotal && r.depth > 0) styles.push(`padding-left:${8 + Math.min(24, r.depth * (dense ? 5 : 7))}px`);
+        }
+        if (!r.isTotal && colIdx.name !== undefined && idx === colIdx.name) {
+          const stepPx = dense ? 14 : 18;
+          styles.push(`padding-left:${8 + r.depth * stepPx}px;font-weight:${r.depth <= 1 ? 700 : 500}`);
+          if (r.depth > 0) {
+            contentHtml = `<span style="color:#94a3b8;font-family:monospace;margin-right:4px">&#9492;&#9472;</span>${contentHtml}`;
+          }
+        }
         if (!r.isTotal && colIdx.dept !== undefined && idx === colIdx.dept && r.deptColor) styles.push(`color:${htmlEsc(r.deptColor)};font-weight:600`);
         if (col.align) styles.push(`text-align:${col.align}`);
         if (r.isTotal) styles.push('white-space:nowrap');
         if (r.rollupCols && r.rollupCols.has(idx)) styles.push('font-style:italic;color:#64748b');
         if (r.warnCols && r.warnCols.has(idx)) styles.push('color:#b45309;font-weight:700');
         if (r.errCols && r.errCols.has(idx)) styles.push('color:#be123c;font-weight:700');
-        return `<td${styles.length ? ` style="${styles.join(';')}"` : ''}>${htmlEsc(cell)}</td>`;
+        return `<td${styles.length ? ` style="${styles.join(';')}"` : ''}>${contentHtml}</td>`;
       }).join('');
       return `<tr${rowStyle}>${tds}</tr>`;
     }).join('');
